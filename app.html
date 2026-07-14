@@ -1157,4 +1157,32 @@ function showSettingsModal(callback){
     <div class="modal-body">
       <p style="margin-bottom:12px;color:var(--muted)">Enter an AI API key to enable BOM extraction. <strong>Gemini</strong> (recommended) is free at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>. Anthropic key also works.</p>
       <div class="form-field">
-        <label>API Key</l
+        <label>API Key</label>
+        <input class="form-input" id="inline-anth" type="password" placeholder="AIzaSy… (Gemini) or sk-ant-… (Anthropic)">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-blue" id="btn-save-inline-anth">Save & Continue</button>
+    </div>
+  </div>`);
+
+  document.getElementById('btn-save-inline-anth').addEventListener('click',async()=>{
+    const key=document.getElementById('inline-anth').value.trim();
+    if(!key){ toast('Please enter a key','error'); return; }
+    try {
+      const isGemini=key.startsWith('AIza');
+      const upd=isGemini?{gemini_key:key}:{anthropic_key:key};
+      await updateDoc(doc(db,'companies',companyId),upd);
+      if(isGemini) geminiKey=key; else anthKey=key;
+      closeModal(); toast('Key saved','success');
+      if(callback) setTimeout(callback,300);
+    } catch(e){ toast(e.message,'error'); }
+  });
+}
+
+// ── Make closeModal global so inline onclick works ────────────────────────────
+window.closeModal = closeModal;
+</script>
+</body>
+</html>
