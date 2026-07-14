@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SpecPrice</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" async></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -211,7 +211,7 @@
 </head>
 <body>
 
-<div id="splash"><h1>⚡ SpecPrice</h1><div class="ring"></div></div>
+<div id="splash"><h1>⚡ SpecPrice</h1><div class="ring" id="splash-ring"></div><p id="splash-msg" style="color:#90A4AE;font-size:12px;margin-top:12px;text-align:center;max-width:320px;line-height:1.5">Connecting…</p></div>
 
 <div id="shell" style="display:none">
   <aside>
@@ -274,10 +274,35 @@ if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
+// Show error on splash
+function splashErr(msg) {
+  const el = document.getElementById('splash-msg');
+  if (el) { el.textContent = msg; el.style.color = '#E53E3E'; }
+  const ring = document.getElementById('splash-ring');
+  if (ring) ring.style.display = 'none';
+}
+function splashMsg(msg) {
+  const el = document.getElementById('splash-msg');
+  if (el) el.textContent = msg;
+}
+
+// Catch uncaught errors and show on splash
+window.addEventListener('unhandledrejection', e => splashErr('Error: ' + String(e.reason)));
+window.addEventListener('error', e => splashErr('Error: ' + e.message));
+
+// Timeout if Firebase never responds (likely: domain not authorized)
+const _authTimeout = setTimeout(() => {
+  splashErr('Could not connect.\n\nIf this is your first time: go to Firebase Console → Authentication → Settings → Authorized Domains → Add "dimitryu.github.io"');
+}, 8000);
+
 onAuthStateChanged(auth, async user => {
+  clearTimeout(_authTimeout);
   if (!user) { location.href = 'index.html'; return; }
+  splashMsg('Loading company data…');
   document.getElementById('user-email-sb').textContent = user.email;
-  await initCompany(user);
+  try {
+    await initCompany(user);
+  } catch(e) { splashErr('Company load error: ' + e.message); return; }
   document.getElementById('splash').style.display = 'none';
   document.getElementById('shell').style.display = 'flex';
   route('part-stock');
@@ -509,4 +534,553 @@ async function deleteRFQ(id, name){
   } catch(e){ toast('Error: '+e.message,'error'); }
 }
 
-// ═════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// RFQ DETAIL  (show drawings = BOM rows)
+// ══════════════════════════════════════════════════════════════════════════════
+async function renderRFQDetail(projectId, projectName){
+  setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading BOM…</div>`);
+  setActions(`
+    <button class="btn btn-blue" id="btn-add-drawing">＋ Add Drawing</button>
+    <button class="btn btn-ghost" id="btn-back-rfq">← Back</button>`);
+
+  document.getElementById('btn-back-rfq').addEventListener('click', renderRFQList);
+  document.getElementById('btn-add-drawing').addEventListener('click',
+    () => openAddDrawingModal(projectId, projectName));
+
+  document.getElementById('page-title').textContent = `📋 ${projectName}`;
+
+  let drawings=[];
+  try {
+    const snap=await getDocs(collection(db,'companies',companyId,'projects',projectId,'drawings'));
+    drawings=snap.docs.map(d=>({_id:d.id,...d.data()}));
+    // Sort by item number
+    drawings.sort((a,b)=>{ const na=parseInt(a.item)||0, nb=parseInt(b.item)||0; return na-nb; });
+  } catch(e){
+    setContent(`<p style="color:red;padding:20px">Error loading BOM: ${e.message}</p>`);
+    return;
+  }
+
+  const BOM_COLS=[
+    {k:'item',          l:'Item',      w:'45px'},
+    {k:'drawing_number',l:'Drawing #', w:'100px'},
+    {k:'part_number',   l:'Part #',    w:'130px'},
+    {k:'drawing_name',  l:'Dwg Name',  w:'120px'},
+    {k:'atlantium_pn',  l:'Cust PN',   w:'100px'},
+    {k:'description',   l:'Description',w:'210px',wrap:true},
+    {k:'qty',           l:'QTY',        w:'55px'},
+    {k:'unit',          l:'Units',      w:'55px'},
+    {k:'manufacturer',  l:'Manufacturer',w:'110px'},
+  ];
+  const rows=drawings.map(d=>`<tr>
+    ${BOM_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${esc(d[c.k]||'')}</td>`).join('')}
+    <td><button class="btn btn-red btn-sm del-row" data-id="${d._id}" title="Delete row">✕</button></td>
+  </tr>`).join('');
+
+  setContent(`
+    <div class="table-wrap"><table>
+      <thead><tr>${BOM_COLS.map(c=>`<th style="min-width:${c.w}">${c.l}</th>`).join('')}<th style="width:40px"></th></tr></thead>
+      <tbody id="bom-tbody">${rows||'<tr class="empty-row"><td colspan="10">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
+    </table></div>
+    <div style="margin-top:8px;font-size:11px;color:var(--muted)">${drawings.length} parts</div>`);
+
+  document.querySelectorAll('.del-row').forEach(btn=>btn.addEventListener('click',async()=>{
+    if(!confirm('Delete this BOM row?')) return;
+    try {
+      await deleteDoc(doc(db,'companies',companyId,'projects',projectId,'drawings',btn.dataset.id));
+      toast('Row deleted','success');
+      renderRFQDetail(projectId, projectName);
+    } catch(e){ toast(e.message,'error'); }
+  }));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ADD DRAWING MODAL — PDF / Image → AI → BOM
+// ══════════════════════════════════════════════════════════════════════════════
+function openAddDrawingModal(projectId, projectName){
+  if(!anthKey){ showSettingsModal(()=>openAddDrawingModal(projectId,projectName)); return; }
+
+  showModal(`<div class="modal">
+    <div class="modal-head"><h3>Add Drawing to ${esc(projectName)}</h3><button class="close-modal" id="modal-close">✕</button></div>
+    <div class="modal-body" id="modal-body-inner">
+      <div class="drop-zone" id="drop-zone" tabindex="0">
+        <span class="icon-big">📄</span>
+        <strong>Drop PDF or Image here</strong>
+        <p>or click to browse (PDF, PNG, JPG, JPEG, WEBP, BMP)</p>
+        <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp"
+               style="display:none">
+      </div>
+    </div>
+    <div class="modal-foot" id="modal-foot">
+      <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+    </div>
+  </div>`);
+
+  document.getElementById('modal-close').addEventListener('click', closeModal);
+  document.getElementById('modal-cancel').addEventListener('click', closeModal);
+
+  const dz = document.getElementById('drop-zone');
+  const fi = document.getElementById('file-input');
+  dz.addEventListener('click', ()=>fi.click());
+  dz.addEventListener('dragover', e=>{e.preventDefault();dz.classList.add('dragover');});
+  dz.addEventListener('dragleave', ()=>dz.classList.remove('dragover'));
+  dz.addEventListener('drop', e=>{e.preventDefault();dz.classList.remove('dragover');handleFile(e.dataTransfer.files[0],projectId,projectName);});
+  fi.addEventListener('change', ()=>{ if(fi.files[0]) handleFile(fi.files[0],projectId,projectName); });
+}
+
+async function handleFile(file, projectId, projectName){
+  if(!file) return;
+  const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+  const isImg = file.type.startsWith('image/');
+  if(!isPDF && !isImg){ toast('Please upload a PDF or image file','error'); return; }
+
+  const body = document.getElementById('modal-body-inner');
+  const foot = document.getElementById('modal-foot');
+  body.innerHTML = `
+    <div class="ai-status"><div class="ring"></div><span id="ai-msg">${isPDF?'Extracting PDF text…':'Reading image…'}</span></div>
+    <div class="progress-bar"><div class="progress-fill" id="prog"></div></div>`;
+  foot.innerHTML = '';
+
+  const setMsg = (m,pct) => {
+    const el=document.getElementById('ai-msg'); if(el)el.textContent=m;
+    const pb=document.getElementById('prog'); if(pb)pb.style.width=pct+'%';
+  };
+
+  try {
+    let extractedRows = [];
+
+    if(isPDF){
+      setMsg('Extracting text from PDF…', 20);
+      const text = await extractPDFText(file);
+      setMsg('Sending to AI for BOM analysis…', 50);
+      extractedRows = await aiExtractBOM(text, false, null, file.name);
+    } else {
+      setMsg('Encoding image…', 20);
+      const {b64, mimeType} = await encodeImage(file);
+      setMsg('Sending to AI (vision)…', 50);
+      extractedRows = await aiExtractBOM('', true, {b64, mimeType}, file.name);
+    }
+
+    setMsg('Done — review the table below', 100);
+    document.querySelector('.ai-status .ring').classList.add('done');
+
+    if(!extractedRows.length){
+      body.innerHTML += `<p style="color:var(--muted);margin-top:12px">No BOM rows detected. Try a clearer file.</p>`;
+      foot.innerHTML = `<button class="btn btn-ghost" id="modal-cancel">Close</button>`;
+      document.getElementById('modal-cancel').addEventListener('click',closeModal);
+      return;
+    }
+
+    showBOMPreview(extractedRows, projectId, projectName, body, foot);
+  } catch(e){
+    body.innerHTML += `<p style="color:red;margin-top:12px">Error: ${e.message}</p>`;
+    foot.innerHTML = `<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+  }
+}
+
+function showBOMPreview(rows, projectId, projectName, body, foot){
+  const PCOLS=['item','drawing_number','part_number','drawing_name','atlantium_pn','description','qty','unit','manufacturer'];
+  const PLABELS=['Item','Drawing #','Part #','Dwg Name','Cust PN','Description','QTY','Units','Manufacturer'];
+
+  const tBody = rows.map((r,i)=>`<tr data-i="${i}">
+    ${PCOLS.map(k=>`<td contenteditable="true" data-k="${k}" data-i="${i}">${esc(r[k]||'')}</td>`).join('')}
+    <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
+  </tr>`).join('');
+
+  body.innerHTML = `
+    <div class="ai-status" style="margin-bottom:10px">
+      <div class="ring done"></div>
+      <span>${rows.length} rows extracted — you can edit cells before saving</span>
+    </div>
+    <div class="table-wrap" style="max-height:360px;overflow:auto"><table>
+      <thead><tr>${PLABELS.map(l=>`<th>${l}</th>`).join('')}<th></th></tr></thead>
+      <tbody id="preview-tbody">${tBody}</tbody>
+    </table></div>`;
+
+  foot.innerHTML = `
+    <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+    <button class="btn btn-green" id="btn-save-bom">💾 Save to RFQ (${rows.length} rows)</button>`;
+
+  document.getElementById('modal-cancel').addEventListener('click',closeModal);
+  document.getElementById('btn-save-bom').addEventListener('click',async()=>{
+    // Collect edited values from contenteditable cells
+    const updatedRows=[];
+    document.querySelectorAll('#preview-tbody tr').forEach(tr=>{
+      const row={};
+      tr.querySelectorAll('td[contenteditable]').forEach(td=>{row[td.dataset.k]=td.textContent.trim();});
+      if(Object.values(row).some(v=>v)) updatedRows.push(row);
+    });
+    if(!updatedRows.length){ toast('No rows to save','error'); return; }
+    await saveBOMToRFQ(updatedRows, projectId, projectName);
+  });
+}
+
+async function saveBOMToRFQ(rows, projectId, projectName){
+  const btn=document.getElementById('btn-save-bom');
+  if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
+  try {
+    const col=collection(db,'companies',companyId,'projects',projectId,'drawings');
+    await Promise.all(rows.map(r=>addDoc(col,{...r, createdAt:serverTimestamp()})));
+    // Update project updatedAt
+    await updateDoc(doc(db,'companies',companyId,'projects',projectId),{updatedAt:serverTimestamp()});
+    toast(`Saved ${rows.length} BOM rows`,'success');
+    closeModal();
+    renderRFQDetail(projectId, projectName);
+  } catch(e){ toast('Save error: '+e.message,'error'); if(btn){btn.disabled=false;btn.textContent='Save to RFQ';} }
+}
+
+// ── PDF text extraction ────────────────────────────────────────────────────────
+async function extractPDFText(file){
+  if(!window.pdfjsLib) throw new Error('PDF.js not loaded');
+  const ab = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data:ab}).promise;
+  const parts=[];
+  for(let i=1;i<=pdf.numPages;i++){
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    // Reconstruct rows by grouping items with similar Y position
+    const items = content.items.map(it=>({x:it.transform[4],y:it.transform[5],str:it.str}));
+    items.sort((a,b)=>b.y-a.y||a.x-b.x);
+    let lastY=null, line='';
+    for(const it of items){
+      if(lastY!==null && Math.abs(it.y-lastY)>4){ parts.push(line); line=''; }
+      line+=(line?' ':'')+it.str;
+      lastY=it.y;
+    }
+    if(line) parts.push(line);
+    parts.push(`--- Page ${i} ---`);
+  }
+  return parts.join('\n');
+}
+
+// ── Image encoding ─────────────────────────────────────────────────────────────
+function encodeImage(file){
+  return new Promise((res,rej)=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const url=e.target.result; // data:image/png;base64,...
+      const b64=url.split(',')[1];
+      const mimeType=url.split(';')[0].slice(5);
+      res({b64, mimeType});
+    };
+    reader.onerror=rej;
+    reader.readAsDataURL(file);
+  });
+}
+
+// ── Anthropic API BOM extraction ──────────────────────────────────────────────
+async function aiExtractBOM(text, isImage, imgData, filename){
+  const PROMPT=`You are a BOM (Bill of Materials) extraction expert.
+Extract ALL parts from this ${isImage?'image':'document'} ("${filename}") and return them as a JSON array.
+
+Each part object must have EXACTLY these fields (use "" if not found):
+- "item": row/item number (e.g. "1", "2", "A1")
+- "drawing_number": drawing number this BOM belongs to
+- "part_number": manufacturer or supplier part number
+- "drawing_name": drawing title or assembly name
+- "atlantium_pn": customer internal part number
+- "description": full part description
+- "qty": quantity as a number string (e.g. "1", "10", "2.5")
+- "unit": unit of measure (pcs, m, cm, mm, set, kg, etc.)
+- "manufacturer": manufacturer or vendor name
+
+CRITICAL: Return ONLY a valid JSON array. No markdown, no explanation, no extra text.
+Example: [{"item":"1","drawing_number":"DWG-001","part_number":"ABC123","drawing_name":"Main Assembly","atlantium_pn":"","description":"Resistor 10K Ohm","qty":"5","unit":"pcs","manufacturer":"Vishay"}]
+
+If no BOM is found, return: []`;
+
+  const messages = isImage ? [{
+    role:'user',
+    content:[
+      {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
+      {type:'text',text:PROMPT}
+    ]
+  }] : [{
+    role:'user',
+    content: PROMPT + '\n\nDOCUMENT TEXT:\n' + text.slice(0,30000)
+  }];
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{
+      'x-api-key': anthKey,
+      'anthropic-version':'2023-06-01',
+      'anthropic-dangerous-allow-browser':'true',
+      'content-type':'application/json',
+    },
+    body:JSON.stringify({
+      model:'claude-haiku-4-5-20251001',
+      max_tokens:4096,
+      messages
+    })
+  });
+  if(!resp.ok){ const e=await resp.json(); throw new Error(e.error?.message||`API error ${resp.status}`); }
+  const data=await resp.json();
+  const raw=data.content[0].text.trim();
+  // Extract JSON array from response (even if wrapped in markdown)
+  const match=raw.match(/\[[\s\S]*\]/);
+  if(!match) return [];
+  try { return JSON.parse(match[0]); } catch { return []; }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SALES DESK
+// ══════════════════════════════════════════════════════════════════════════════
+async function renderSalesDesk(){
+  await loadParts();
+  setActions('');
+
+  const renderSD=()=>{
+    const partsTotal=sdItems.reduce((s,r)=>s+r.total,0);
+    const tbody=sdItems.map((r,i)=>`<tr>
+      <td>${esc(r.part_number)}</td>
+      <td class="wrap">${esc(r.description)}</td>
+      <td><input type="number" class="sd-qty" data-i="${i}" value="${r.qty}" min="0.001" step="any"
+           style="width:60px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px"></td>
+      <td>${esc(r.unit)}</td>
+      <td>${fmtPrice(r.price)}</td>
+      <td><strong>$${r.total.toFixed(2)}</strong></td>
+      <td><button class="btn btn-red btn-sm" data-i="${i}">✕</button></td>
+    </tr>`).join('');
+
+    document.getElementById('sd-tbody').innerHTML=tbody||
+      `<tr class="empty-row"><td colspan="7">No parts added yet</td></tr>`;
+    document.getElementById('sd-total').textContent='$'+partsTotal.toFixed(2);
+
+    document.querySelectorAll('.sd-qty').forEach(inp=>inp.addEventListener('change',()=>{
+      const i=+inp.dataset.i, qty=parseFloat(inp.value)||1;
+      sdItems[i].qty=qty; sdItems[i].total=sdItems[i].price*qty; renderSD();
+    }));
+    document.querySelectorAll('#sd-tbody .btn-red').forEach(btn=>btn.addEventListener('click',()=>{
+      sdItems.splice(+btn.dataset.i,1); renderSD();
+    }));
+  };
+
+  setContent(`
+    <div class="sd-split">
+      <div class="sd-panel">
+        <div class="sd-panel-title">BOM Items</div>
+        <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap">
+          <div class="suggest-wrap">
+            <input class="search-box" id="sd-search" placeholder="Search Part Stock…" style="min-width:0;flex:1">
+            <div class="suggest-list" id="sd-suggest" style="display:none"></div>
+          </div>
+          <button class="btn btn-blue" id="btn-sd-file">📎 From File (BOM)</button>
+          <button class="btn btn-ghost" id="btn-sd-clear">Clear All</button>
+        </div>
+        <div class="sd-scroll">
+          <table style="width:100%">
+            <thead><tr>
+              <th>Part #</th><th>Description</th><th>QTY</th>
+              <th>Units</th><th>Price</th><th>Total</th><th></th>
+            </tr></thead>
+            <tbody id="sd-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="sd-panel">
+          <div class="sd-panel-title">Summary</div>
+          <div style="padding:6px 0">
+            <div class="summary-row"><span>Parts</span><span id="sd-count">${sdItems.length}</span></div>
+          </div>
+          <div class="summary-total">
+            <span>TOTAL PARTS COST</span>
+            <span id="sd-total">$0.00</span>
+          </div>
+        </div>
+        <button class="btn btn-green" style="width:100%;padding:10px;justify-content:center" id="btn-sd-print">🖨 Print / Save PDF</button>
+      </div>
+    </div>`);
+
+  renderSD();
+
+  // Search Part Stock
+  const sdSearch=document.getElementById('sd-search');
+  const sdSuggest=document.getElementById('sd-suggest');
+  let suggestions=[];
+
+  sdSearch.addEventListener('input',()=>{
+    const q=sdSearch.value.toLowerCase().trim();
+    if(!q){ sdSuggest.style.display='none'; return; }
+    suggestions=allParts.filter(p=>
+      [p.part_number,p.description,p.manufacturer,p.drawing_number]
+        .some(v=>String(v||'').toLowerCase().includes(q))
+    ).slice(0,10);
+    if(!suggestions.length){ sdSuggest.style.display='none'; return; }
+    sdSuggest.style.display='block';
+    sdSuggest.innerHTML=suggestions.map((p,i)=>`
+      <div class="suggest-item" data-si="${i}">
+        <strong>${esc(p.part_number)}</strong>
+        <span style="color:var(--muted)"> — ${esc((p.description||'').slice(0,50))}</span>
+        ${p.price?`<span style="float:right;color:var(--green)">$${parseFloat(p.price).toFixed(4)}</span>`:''}
+      </div>`).join('');
+    sdSuggest.querySelectorAll('.suggest-item').forEach(el=>el.addEventListener('click',()=>{
+      const p=suggestions[+el.dataset.si];
+      const price=parseFloat(p.price)||parseFloat(p.priority_price)||0;
+      sdItems.push({part_number:p.part_number||'',description:p.description||'',
+        qty:1,unit:p.unit||p.units||'pcs',price,total:price});
+      sdSearch.value=''; sdSuggest.style.display='none';
+      renderSD();
+      // Update count
+      document.getElementById('sd-count').textContent=sdItems.length;
+    }));
+  });
+  document.addEventListener('click',e=>{if(!e.target.closest('.suggest-wrap'))sdSuggest.style.display='none';});
+
+  document.getElementById('btn-sd-clear').addEventListener('click',()=>{sdItems=[];renderSD();});
+  document.getElementById('btn-sd-print').addEventListener('click',()=>window.print());
+
+  // From File (BOM extraction for Sales Desk)
+  document.getElementById('btn-sd-file').addEventListener('click',()=>{
+    if(!anthKey){ showSettingsModal(()=>document.getElementById('btn-sd-file')?.click()); return; }
+    openSDFileModal();
+  });
+}
+
+function openSDFileModal(){
+  showModal(`<div class="modal">
+    <div class="modal-head"><h3>Import BOM from File</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" id="sd-modal-body">
+      <div class="drop-zone" id="sd-drop-zone" tabindex="0">
+        <span class="icon-big">📄</span>
+        <strong>Drop PDF or Image here</strong>
+        <p>Parts will be added to Sales Desk</p>
+        <input type="file" id="sd-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" style="display:none">
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+  </div>`);
+
+  const dz=document.getElementById('sd-drop-zone');
+  const fi=document.getElementById('sd-file-input');
+  dz.addEventListener('click',()=>fi.click());
+  dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover');});
+  dz.addEventListener('dragleave',()=>dz.classList.remove('dragover'));
+  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');handleSDFile(e.dataTransfer.files[0]);});
+  fi.addEventListener('change',()=>{ if(fi.files[0]) handleSDFile(fi.files[0]); });
+}
+
+async function handleSDFile(file){
+  const isPDF=file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf');
+  const isImg=file.type.startsWith('image/');
+  if(!isPDF&&!isImg){ toast('Please upload a PDF or image','error'); return; }
+
+  const body=document.getElementById('sd-modal-body');
+  const foot=document.querySelector('#modal-bg .modal-foot');
+  body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="sd-ai-msg">Processing…</span></div>
+    <div class="progress-bar"><div class="progress-fill" id="sd-prog"></div></div>`;
+  const setM=(m,p)=>{
+    const e=document.getElementById('sd-ai-msg');if(e)e.textContent=m;
+    const b=document.getElementById('sd-prog');if(b)b.style.width=p+'%';
+  };
+  foot.innerHTML='';
+
+  try {
+    let rows=[];
+    if(isPDF){
+      setM('Extracting PDF text…',25);
+      const text=await extractPDFText(file);
+      setM('AI analyzing BOM…',60);
+      rows=await aiExtractBOM(text,false,null,file.name);
+    } else {
+      setM('Encoding image…',25);
+      const img=await encodeImage(file);
+      setM('AI vision analyzing…',60);
+      rows=await aiExtractBOM('',true,img,file.name);
+    }
+    setM('Done',100);
+    if(!rows.length){ body.innerHTML+='<p style="margin-top:12px;color:var(--muted)">No parts detected.</p>';
+      foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`; return; }
+
+    // Add to sdItems, matching price from Part Stock where possible
+    let added=0;
+    for(const r of rows){
+      const pn=(r.part_number||'').trim().toLowerCase();
+      const match=pn?allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
+      const price=match?(parseFloat(match.price)||parseFloat(match.priority_price)||0):0;
+      const qty=parseFloat(r.qty)||1;
+      sdItems.push({
+        part_number:r.part_number||r.item||'',
+        description:r.description||'',
+        qty, unit:r.unit||match?.unit||match?.units||'pcs',
+        price, total:price*qty
+      });
+      added++;
+    }
+    toast(`Added ${added} parts to Sales Desk`,'success');
+    closeModal();
+    // Re-render SD table
+    document.getElementById('sd-tbody') && renderSalesDesk();
+  } catch(e){ body.innerHTML+=`<p style="color:red;margin-top:12px">${e.message}</p>`;
+    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`; }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SETTINGS
+// ══════════════════════════════════════════════════════════════════════════════
+async function renderSettings(){
+  setActions('');
+  setContent(`
+    <div style="max-width:520px">
+      <div style="background:#fff;border:1px solid var(--border);border-radius:9px;padding:22px;margin-bottom:14px">
+        <h3 style="margin-bottom:14px;color:var(--blue-dark)">🤖 Anthropic AI</h3>
+        <div class="form-field">
+          <label>API Key (for BOM extraction from PDF/Image)</label>
+          <input class="form-input" id="set-anth" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
+        </div>
+        <button class="btn btn-blue" id="btn-save-anth">Save</button>
+        <p style="margin-top:8px;font-size:11px;color:var(--muted)">
+          Get your key at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>.
+          Stored securely in your company's Firestore.
+        </p>
+      </div>
+      <div style="background:#fff;border:1px solid var(--border);border-radius:9px;padding:22px">
+        <h3 style="margin-bottom:4px;color:var(--blue-dark)">ℹ️ Company</h3>
+        <p style="color:var(--muted);font-size:12px">Company: <strong>${esc(companyName)}</strong></p>
+        <p style="color:var(--muted);font-size:12px;margin-top:4px">ID: <code>${esc(companyId)}</code></p>
+      </div>
+    </div>`);
+
+  document.getElementById('btn-save-anth').addEventListener('click',async()=>{
+    const key=document.getElementById('set-anth').value.trim();
+    try {
+      await updateDoc(doc(db,'companies',companyId),{anthropic_key:key});
+      anthKey=key;
+      toast('API key saved','success');
+    } catch(e){ toast(e.message,'error'); }
+  });
+}
+
+function showSettingsModal(callback){
+  showModal(`<div class="modal modal-sm">
+    <div class="modal-head"><h3>🤖 Anthropic API Key needed</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p style="margin-bottom:12px;color:var(--muted)">Enter your Anthropic API key to use AI features (BOM extraction from PDF/Image).</p>
+      <div class="form-field">
+        <label>API Key</label>
+        <input class="form-input" id="inline-anth" type="password" placeholder="sk-ant-…">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-blue" id="btn-save-inline-anth">Save & Continue</button>
+    </div>
+  </div>`);
+
+  document.getElementById('btn-save-inline-anth').addEventListener('click',async()=>{
+    const key=document.getElementById('inline-anth').value.trim();
+    if(!key){ toast('Please enter a key','error'); return; }
+    try {
+      await updateDoc(doc(db,'companies',companyId),{anthropic_key:key});
+      anthKey=key; closeModal(); toast('Key saved','success');
+      if(callback) setTimeout(callback,300);
+    } catch(e){ toast(e.message,'error'); }
+  });
+}
+
+// ── Make closeModal global so inline onclick works ────────────────────────────
+window.closeModal = closeModal;
+</script>
+</body>
+</html>
