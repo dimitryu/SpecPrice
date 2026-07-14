@@ -221,12 +221,13 @@
       <div class="nav-item active" data-view="part-stock"><span class="icon">📦</span>Part Stock</div>
       <div class="nav-item" data-view="rfq"><span class="icon">📋</span>RFQ</div>
       <div class="nav-item" data-view="sales-desk"><span class="icon">💰</span>Sales Desk</div>
+      <div class="nav-item" data-view="customers"><span class="icon">👥</span>Customers</div>
       <div class="nav-item" data-view="settings"><span class="icon">⚙️</span>Settings</div>
     </nav>
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.3.0</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.0</div>
     </div>
   </aside>
   <div class="main">
@@ -270,7 +271,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.3.0';
+const APP_VER   = '1.4.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -378,12 +379,13 @@ function setActions(html){document.getElementById('topbar-actions').innerHTML=ht
 function route(v){
   currentView=v||'part-stock';
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.view===currentView));
-  const TITLES={'part-stock':'📦 Part Stock','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','settings':'⚙️ Settings'};
+  const TITLES={'part-stock':'📦 Part Stock','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','customers':'👥 Customers','settings':'⚙️ Settings'};
   document.getElementById('page-title').textContent=TITLES[currentView]||'';
   setActions('');
   if(currentView==='part-stock') renderPartStock();
   else if(currentView==='rfq') renderRFQList();
   else if(currentView==='sales-desk') renderSalesDesk();
+  else if(currentView==='customers') renderCustomers();
   else if(currentView==='settings') renderSettings();
 }
 document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',()=>route(el.dataset.view)));
@@ -502,7 +504,7 @@ async function renderRFQList(){
         <div class="rfq-card-icon">📋</div>
         <div class="rfq-card-body">
           <h3>${esc(p.name||p._id)}</h3>
-          <p>${fmtDate(p.updatedAt)||'—'}</p>
+          <p>${p.customer_name?esc(p.customer_name)+' · ':''}${fmtDate(p.updatedAt)||'—'}</p>
         </div>
         <button class="btn btn-red btn-sm del-rfq" data-id="${esc(p._id)}" data-name="${esc(p.name||p._id)}"
           title="Delete" style="flex-shrink:0;align-self:center">✕</button>
@@ -518,15 +520,86 @@ async function renderRFQList(){
 }
 
 async function createRFQ(){
-  const name=prompt('RFQ / Project name:','');
-  if(!name||!name.trim()) return;
+  // Load customers + existing projects
+  let customers=[], allProjects=[];
   try {
-    const ref=await addDoc(collection(db,'companies',companyId,'projects'),{
-      name:name.trim(), updatedAt:serverTimestamp(), createdAt:serverTimestamp()
-    });
-    toast('RFQ created','success');
-    renderRFQDetail(ref.id, name.trim());
-  } catch(e){ toast('Error: '+e.message,'error'); }
+    const [cs,ps]=await Promise.all([
+      getDocs(query(collection(db,'companies',companyId,'customers'),orderBy('name'))),
+      getDocs(collection(db,'companies',companyId,'projects'))
+    ]);
+    customers=cs.docs.map(d=>({_id:d.id,...d.data()}));
+    allProjects=ps.docs.map(d=>({_id:d.id,...d.data()}));
+  } catch(e){ toast('Error: '+e.message,'error'); return; }
+
+  if(!customers.length){
+    if(confirm('No customers yet. Go to Customers to add one first?')) route('customers');
+    return;
+  }
+
+  showModal(`<div class="modal modal-sm">
+    <div class="modal-head"><h3>New RFQ</h3><button class="close-modal" id="modal-close">✕</button></div>
+    <div class="modal-body">
+      <div class="form-field">
+        <label>Customer</label>
+        <select class="form-input" id="rfq-cust-sel">
+          <option value="">— Select customer —</option>
+          ${customers.map(c=>`<option value="${c._id}" data-name="${esc(c.name)}">${esc(c.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-field" style="margin-top:10px">
+        <label>RFQ Name (auto-generated)</label>
+        <input class="form-input" id="rfq-name-prev" readonly
+          style="background:#F7FAFC;color:var(--blue-dark);font-weight:700;letter-spacing:.5px"
+          placeholder="Select a customer first…">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+      <button class="btn btn-green" id="btn-confirm-rfq" disabled>✓ Create RFQ</button>
+    </div>
+  </div>`);
+
+  document.getElementById('modal-close').addEventListener('click',closeModal);
+  document.getElementById('modal-cancel').addEventListener('click',closeModal);
+
+  const sel=document.getElementById('rfq-cust-sel');
+  const prev=document.getElementById('rfq-name-prev');
+  const confirmBtn=document.getElementById('btn-confirm-rfq');
+
+  function calcName(custId, custName){
+    const existing=allProjects.filter(p=>p.customer_id===custId
+      ||(p.name||'').toLowerCase().startsWith(custName.toLowerCase()+'-'));
+    let maxN=0;
+    existing.forEach(p=>{const m=(p.name||'').match(/-0*(\d+)$/);if(m)maxN=Math.max(maxN,+m[1]);});
+    return `${custName}-${String(maxN+1).padStart(3,'0')}`;
+  }
+
+  sel.addEventListener('change',()=>{
+    const custId=sel.value;
+    const custName=sel.selectedOptions[0]?.dataset.name||'';
+    if(!custId){prev.value='';confirmBtn.disabled=true;return;}
+    const rfqName=calcName(custId,custName);
+    prev.value=rfqName;
+    confirmBtn.disabled=false;
+    confirmBtn.dataset.custid=custId;
+    confirmBtn.dataset.custname=custName;
+    confirmBtn.dataset.rfqname=rfqName;
+  });
+
+  confirmBtn.addEventListener('click',async()=>{
+    const{custid:custId,custname:custName,rfqname:rfqName}=confirmBtn.dataset;
+    if(!custId||!rfqName) return;
+    try {
+      confirmBtn.disabled=true; confirmBtn.textContent='Creating…';
+      const ref=await addDoc(collection(db,'companies',companyId,'projects'),{
+        name:rfqName, customer_id:custId, customer_name:custName,
+        updatedAt:serverTimestamp(), createdAt:serverTimestamp()
+      });
+      toast('RFQ created','success');
+      closeModal();
+      renderRFQDetail(ref.id,rfqName);
+    } catch(e){ toast('Error: '+e.message,'error'); confirmBtn.disabled=false; confirmBtn.textContent='✓ Create RFQ'; }
+  });
 }
 
 async function deleteRFQ(id, name){
@@ -1108,6 +1181,138 @@ async function handleSDFile(file){
     document.getElementById('sd-tbody') && renderSalesDesk();
   } catch(e){ body.innerHTML+=`<p style="color:red;margin-top:12px">${e.message}</p>`;
     foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`; }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CUSTOMERS
+// ══════════════════════════════════════════════════════════════════════════════
+async function renderCustomers(){
+  setActions(`<button class="btn btn-green" id="btn-new-cust">＋ New Customer</button>`);
+  document.getElementById('btn-new-cust').addEventListener('click',()=>openCustomerModal());
+
+  let customers=[];
+  try {
+    const snap=await getDocs(query(collection(db,'companies',companyId,'customers'),orderBy('name')));
+    customers=snap.docs.map(d=>({_id:d.id,...d.data()}));
+  } catch(e){ setContent(`<p style="color:red;padding:20px">${e.message}</p>`); return; }
+
+  if(!customers.length){
+    setContent(`<div style="text-align:center;padding:80px;color:var(--muted)">
+      <div style="font-size:48px;margin-bottom:12px">👥</div>
+      <div>No customers yet. Click <strong>＋ New Customer</strong> to add one.</div></div>`);
+    return;
+  }
+
+  setContent(`
+    <div class="toolbar"><span class="count-badge">${customers.length} customers</span></div>
+    <div class="card-grid">
+    ${customers.map(c=>`
+      <div class="rfq-card">
+        <div class="rfq-card-icon">🏢</div>
+        <div class="rfq-card-body">
+          <h3>${esc(c.name)}</h3>
+          <p>${(c.contacts||[]).length} contact(s)</p>
+          ${(c.contacts||[]).slice(0,2).map(ct=>`<p style="margin-top:2px;font-size:10px">${esc(ct.name)}${ct.email?' · '+esc(ct.email):''}</p>`).join('')}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;align-self:flex-start">
+          <button class="btn btn-ghost btn-sm edit-cust" data-id="${c._id}">✏️ Edit</button>
+          <button class="btn btn-red btn-sm del-cust" data-id="${c._id}" data-name="${esc(c.name)}">✕</button>
+        </div>
+      </div>`).join('')}
+    </div>`);
+
+  document.querySelectorAll('.edit-cust').forEach(btn=>btn.addEventListener('click',()=>{
+    const c=customers.find(x=>x._id===btn.dataset.id); if(c) openCustomerModal(c);
+  }));
+  document.querySelectorAll('.del-cust').forEach(btn=>btn.addEventListener('click',()=>
+    deleteCustomer(btn.dataset.id,btn.dataset.name)));
+}
+
+function openCustomerModal(cust={}){
+  const isEdit=!!cust._id;
+  const contacts=(cust.contacts||[{name:'',email:'',phone:''}]);
+
+  function contactRow(c={},i){
+    return `<tr>
+      <td><input class="form-input" style="padding:4px 7px;font-size:12px" placeholder="Full name" value="${esc(c.name||'')}" data-f="name" data-ci="${i}"></td>
+      <td><input class="form-input" style="padding:4px 7px;font-size:12px" placeholder="email@…" value="${esc(c.email||'')}" data-f="email" data-ci="${i}"></td>
+      <td><input class="form-input" style="padding:4px 7px;font-size:12px" placeholder="+972…" value="${esc(c.phone||'')}" data-f="phone" data-ci="${i}"></td>
+      <td><button class="btn btn-red btn-sm del-contact" style="padding:3px 6px">✕</button></td>
+    </tr>`;
+  }
+
+  showModal(`<div class="modal">
+    <div class="modal-head"><h3>${isEdit?'Edit':'New'} Customer</h3><button class="close-modal" id="modal-close">✕</button></div>
+    <div class="modal-body">
+      <div class="form-field">
+        <label>Customer Name</label>
+        <input class="form-input" id="cust-name-inp" placeholder="e.g. Elbit Systems" value="${esc(cust.name||'')}">
+      </div>
+      <div style="margin-top:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Contacts</span>
+          <button class="btn btn-ghost btn-sm" id="btn-add-contact">＋ Add Contact</button>
+        </div>
+        <div class="table-wrap" style="max-height:280px;overflow:auto">
+          <table style="width:100%">
+            <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th style="width:36px"></th></tr></thead>
+            <tbody id="contacts-tbody">${contacts.map((c,i)=>contactRow(c,i)).join('')}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+      <button class="btn btn-blue" id="btn-save-cust">💾 Save Customer</button>
+    </div>
+  </div>`);
+
+  document.getElementById('modal-close').addEventListener('click',closeModal);
+  document.getElementById('modal-cancel').addEventListener('click',closeModal);
+  document.getElementById('cust-name-inp').focus();
+
+  function bindDelContact(){
+    document.querySelectorAll('.del-contact').forEach(btn=>btn.addEventListener('click',()=>btn.closest('tr').remove()));
+  }
+  bindDelContact();
+
+  document.getElementById('btn-add-contact').addEventListener('click',()=>{
+    const tbody=document.getElementById('contacts-tbody');
+    const i=tbody.querySelectorAll('tr').length;
+    tbody.insertAdjacentHTML('beforeend',contactRow({},i));
+    bindDelContact();
+    tbody.querySelectorAll('tr:last-child input')[0]?.focus();
+  });
+
+  document.getElementById('btn-save-cust').addEventListener('click',async()=>{
+    const name=document.getElementById('cust-name-inp').value.trim();
+    if(!name){toast('Customer name required','error');return;}
+    const contactsArr=[];
+    document.querySelectorAll('#contacts-tbody tr').forEach(tr=>{
+      const inps=tr.querySelectorAll('input');
+      const c={name:inps[0]?.value.trim()||'',email:inps[1]?.value.trim()||'',phone:inps[2]?.value.trim()||''};
+      if(c.name||c.email||c.phone) contactsArr.push(c);
+    });
+    const data={name,contacts:contactsArr,updatedAt:serverTimestamp()};
+    try {
+      if(isEdit){
+        await updateDoc(doc(db,'companies',companyId,'customers',cust._id),data);
+        toast('Customer updated','success');
+      } else {
+        await addDoc(collection(db,'companies',companyId,'customers'),{...data,createdAt:serverTimestamp()});
+        toast('Customer created','success');
+      }
+      closeModal(); renderCustomers();
+    } catch(e){toast(e.message,'error');}
+  });
+}
+
+async function deleteCustomer(id,name){
+  if(!confirm(`Delete customer "${name}"?`)) return;
+  try {
+    await deleteDoc(doc(db,'companies',companyId,'customers',id));
+    toast('Customer deleted','success'); renderCustomers();
+  } catch(e){toast(e.message,'error');}
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
