@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpecPrice</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" async></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --sidebar-w: 220px;
+      --topbar-h: 52px;
+      --blue-dark:  #1F3A5F;
+      --blue-mid:   #2E75B6;
+      --blue-light: #EBF3FB;
+      --text:       #1A202C;
+      --muted:      #718096;
+      --border:     #CBD5E0;
+      --green:      #1B6B3A;
+      --green-bg:   #D4EDDA;
+      --red:        #9B1C1C;
+      --red-bg:     #FDE8E8;
+      --row-alt:    #F0F6FB;
+    }
+    html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+
+    /* ── Splash ── */
+    #splash { position:fixed; inset:0; background:var(--blue-dark); display:flex; align-items:center;
+              justify-content:center; flex-direction:column; gap:16px; z-index:999; }
+    #splash h1 { color:#fff; font-size:22px; font-weight:700; }
+    .ring { width:34px; height:34px; border:3px solid rgba(255,255,255,.2); border-top-color:#fff;
+            border-radius:50%; animation:spin .8s linear infinite; }
+
+    /* ── Shell ── */
+    #shell { display:flex; height:100vh; }
+    aside { width:var(--sidebar-w); background:var(--blue-dark); color:#CBD5E0;
+            display:flex; flex-direction:column; flex-shrink:0; overflow:hidden; }
+    .sb-brand { padding:18px 16px 10px; font-size:17px; font-weight:700; color:#fff;
+                border-bottom:1px solid rgba(255,255,255,.08); }
+    .sb-company { padding:7px 16px 10px; font-size:11px; color:#90A4AE;
+                  border-bottom:1px solid rgba(255,255,255,.08);
+                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    nav { flex:1; padding:6px 0; overflow-y:auto; }
+    .nav-item { display:flex; align-items:center; gap:9px; padding:9px 18px; cursor:pointer;
+                font-size:13px; color:#B0BEC5; transition:background .12s, color .12s;
+                user-select:none; border-left:3px solid transparent; }
+    .nav-item:hover { background:rgba(255,255,255,.07); color:#fff; }
+    .nav-item.active { background:rgba(46,117,182,.3); color:#fff; border-left-color:var(--blue-mid); }
+    .nav-item .icon { font-size:15px; width:20px; text-align:center; }
+    .sb-foot { padding:10px 14px; border-top:1px solid rgba(255,255,255,.08); font-size:11px; color:#90A4AE; }
+    #user-email-sb { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:7px; }
+    .btn-signout { width:100%; padding:5px; background:rgba(255,255,255,.08);
+                   border:1px solid rgba(255,255,255,.12); border-radius:5px;
+                   color:#B0BEC5; font-size:11px; cursor:pointer; }
+    .btn-signout:hover { background:rgba(255,255,255,.15); color:#fff; }
+
+    /* ── Main ── */
+    .main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+    .topbar { height:var(--topbar-h); background:#fff; border-bottom:1px solid var(--border);
+              display:flex; align-items:center; padding:0 18px; gap:10px; flex-shrink:0; }
+    .topbar h2 { font-size:15px; font-weight:700; color:var(--blue-dark); flex:1; }
+    #content { flex:1; overflow:auto; padding:18px; background:#F7FAFC; }
+
+    /* ── Buttons ── */
+    .btn { display:inline-flex; align-items:center; gap:6px; padding:7px 13px; border:none;
+           border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; transition:opacity .12s; }
+    .btn:hover:not(:disabled) { opacity:.85; }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+    .btn-blue   { background:var(--blue-mid); color:#fff; }
+    .btn-green  { background:#1F8B4C; color:#fff; }
+    .btn-red    { background:#E53E3E; color:#fff; }
+    .btn-ghost  { background:var(--blue-light); color:var(--blue-dark); }
+    .btn-sm     { padding:4px 9px; font-size:11px; }
+
+    /* ── Toolbar ── */
+    .toolbar { display:flex; align-items:center; gap:9px; margin-bottom:13px; flex-wrap:wrap; }
+    .search-box { flex:1; min-width:200px; padding:7px 11px; border:1.5px solid var(--border);
+                  border-radius:7px; font-size:13px; outline:none; color:var(--text); }
+    .search-box:focus { border-color:var(--blue-mid); box-shadow:0 0 0 3px rgba(46,117,182,.1); }
+    .count-badge { font-size:11px; color:var(--muted); white-space:nowrap; }
+
+    /* ── Tables ── */
+    .table-wrap { overflow:auto; border-radius:8px; border:1px solid var(--border); background:#fff; }
+    table { width:100%; border-collapse:collapse; font-size:12.5px; }
+    thead th { position:sticky; top:0; z-index:2; background:var(--blue-mid); color:#fff;
+               font-weight:600; padding:7px 9px; text-align:left; white-space:nowrap;
+               cursor:pointer; user-select:none; border-right:1px solid rgba(255,255,255,.25); }
+    thead th:last-child { border-right:none; }
+    thead th:hover { background:#1F5B92; }
+    tbody tr:nth-child(odd)  { background:#FFFFFF; }
+    tbody tr:nth-child(even) { background:var(--row-alt); }
+    tbody tr:hover { background:#D6EAF8 !important; }
+    td { padding:5px 9px; border-bottom:1px solid #EDF2F7; border-right:1px solid #E2E8F0;
+         white-space:nowrap; vertical-align:middle; }
+    td:last-child { border-right:none; }
+    td.wrap { white-space:normal; max-width:240px; line-height:1.3; }
+    td[contenteditable="true"] { outline:2px solid var(--blue-mid); outline-offset:-2px;
+                                  background:#FFFDE7 !important; min-width:60px; }
+    .price-green { color:var(--green); background:var(--green-bg); font-weight:600;
+                   border-radius:4px; padding:1px 6px; }
+    .price-red   { color:var(--red);   background:var(--red-bg);   font-weight:600;
+                   border-radius:4px; padding:1px 6px; }
+    .empty-row td { text-align:center; padding:40px; color:var(--muted); border-right:none; }
+
+    /* ── Cards ── */
+    .card-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; }
+    .rfq-card { background:#fff; border:1px solid var(--border); border-radius:9px;
+                padding:14px 16px; cursor:pointer; transition:box-shadow .12s, border-color .12s;
+                animation:fadeIn .2s; display:flex; align-items:flex-start; gap:12px; }
+    .rfq-card:hover { box-shadow:0 4px 16px rgba(0,0,0,.1); border-color:var(--blue-mid); }
+    .rfq-card-body { flex:1; min-width:0; }
+    .rfq-card h3 { font-size:13px; font-weight:700; color:var(--blue-dark);
+                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .rfq-card p  { font-size:11px; color:var(--muted); margin-top:3px; }
+    .rfq-card-icon { font-size:24px; flex-shrink:0; }
+
+    /* ── Back / Breadcrumb ── */
+    .breadcrumb { display:flex; align-items:center; gap:6px; margin-bottom:13px; font-size:12px; }
+    .breadcrumb a { color:var(--blue-mid); cursor:pointer; }
+    .breadcrumb a:hover { text-decoration:underline; }
+    .breadcrumb span { color:var(--muted); }
+
+    /* ── Drop zone ── */
+    .drop-zone { border:2px dashed var(--border); border-radius:10px; padding:40px 20px;
+                 text-align:center; cursor:pointer; transition:border-color .15s, background .15s; }
+    .drop-zone:hover, .drop-zone.dragover { border-color:var(--blue-mid); background:var(--blue-light); }
+    .drop-zone p { color:var(--muted); font-size:13px; margin-top:8px; }
+    .drop-zone .icon-big { font-size:40px; display:block; margin-bottom:8px; }
+
+    /* ── Modal ── */
+    .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex;
+                align-items:center; justify-content:center; z-index:200;
+                animation:fadeIn .15s; }
+    .modal { background:#fff; border-radius:12px; width:min(94vw,860px);
+             max-height:90vh; display:flex; flex-direction:column;
+             box-shadow:0 24px 64px rgba(0,0,0,.3); overflow:hidden; }
+    .modal-sm { width:min(94vw,420px); }
+    .modal-head { padding:16px 20px; border-bottom:1px solid var(--border);
+                  display:flex; align-items:center; gap:10px; flex-shrink:0; }
+    .modal-head h3 { font-size:15px; font-weight:700; color:var(--blue-dark); flex:1; }
+    .modal-body { padding:20px; overflow-y:auto; flex:1; }
+    .modal-foot { padding:12px 20px; border-top:1px solid var(--border);
+                  display:flex; gap:8px; justify-content:flex-end; flex-shrink:0; }
+    .close-modal { background:none; border:none; font-size:18px; cursor:pointer;
+                   color:var(--muted); line-height:1; padding:2px 4px; }
+    .close-modal:hover { color:var(--text); }
+
+    /* ── Form ── */
+    .form-field { margin-bottom:14px; }
+    .form-field label { display:block; font-size:11px; font-weight:700; color:var(--muted);
+                        text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
+    .form-input { width:100%; padding:8px 11px; border:1.5px solid var(--border);
+                  border-radius:7px; font-size:13px; outline:none; }
+    .form-input:focus { border-color:var(--blue-mid); }
+
+    /* ── Sales Desk ── */
+    .sd-split { display:grid; grid-template-columns:1fr 300px; gap:14px; height:calc(100vh - 110px); }
+    .sd-panel { background:#fff; border:1px solid var(--border); border-radius:9px;
+                display:flex; flex-direction:column; overflow:hidden; }
+    .sd-panel-title { padding:9px 13px; font-size:12px; font-weight:700;
+                      color:var(--blue-dark); background:var(--blue-light);
+                      border-bottom:1px solid var(--border); flex-shrink:0; }
+    .sd-scroll { flex:1; overflow:auto; }
+    .summary-row { display:flex; justify-content:space-between; padding:7px 13px;
+                   font-size:12px; border-bottom:1px solid #EDF2F7; }
+    .summary-total { background:var(--blue-dark); color:#fff; padding:11px 13px;
+                     display:flex; justify-content:space-between; font-weight:700; font-size:13px; }
+
+    /* ── Suggest dropdown ── */
+    .suggest-wrap { position:relative; flex:1; }
+    .suggest-list { position:absolute; top:100%; left:0; right:0; background:#fff;
+                    border:1px solid var(--border); border-radius:7px;
+                    box-shadow:0 8px 24px rgba(0,0,0,.12); z-index:50; max-height:260px;
+                    overflow-y:auto; animation:fadeIn .1s; }
+    .suggest-item { padding:8px 12px; cursor:pointer; border-bottom:1px solid #EDF2F7;
+                    font-size:12px; }
+    .suggest-item:hover { background:var(--blue-light); }
+    .suggest-item:last-child { border-bottom:none; }
+    .suggest-item strong { color:var(--blue-dark); }
+
+    /* ── Toast ── */
+    .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+             padding:10px 20px; border-radius:8px; font-size:13px; font-weight:600;
+             z-index:900; animation:fadeIn .2s; white-space:nowrap; }
+    .toast-info    { background:var(--blue-dark); color:#fff; }
+    .toast-success { background:#1F8B4C; color:#fff; }
+    .toast-error   { background:#C0392B; color:#fff; }
+
+    /* ── Progress bar ── */
+    .progress-bar { height:4px; background:var(--blue-light); border-radius:2px; overflow:hidden; margin-top:8px; }
+    .progress-fill { height:100%; background:var(--blue-mid); width:0%;
+                     transition:width .3s; border-radius:2px; }
+
+    /* ── AI status ── */
+    .ai-status { display:flex; align-items:center; gap:8px; padding:10px 14px;
+                 background:var(--blue-light); border-radius:7px; margin-bottom:12px; font-size:12px; }
+    .ai-status .ring { width:16px; height:16px; border-width:2px; flex-shrink:0; }
+    .ai-status .ring.done { border-color:var(--green); border-top-color:var(--green);
+                             animation:none; }
+
+    @media print {
+      aside, .topbar, .toolbar { display:none !important; }
+      #content { padding:0 !important; background:#fff !important; overflow:visible !important; }
+      #shell { display:block; height:auto; }
+      .main { overflow:visible; }
+      table { font-size:11px; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="splash"><h1>⚡ SpecPrice</h1><div class="ring" id="splash-ring"></div><p id="splash-msg" style="color:#90A4AE;font-size:12px;margin-top:12px;text-align:center;max-width:320px;line-height:1.5">Connecting…</p></div>
+
+<div id="shell" style="display:none">
+  <aside>
+    <div class="sb-brand">⚡ SpecPrice</div>
+    <div class="sb-company" id="sb-company">—</div>
+    <nav>
+      <div class="nav-item active" data-view="part-stock"><span class="icon">📦</span>Part Stock</div>
+      <div class="nav-item" data-view="rfq"><span class="icon">📋</span>RFQ</div>
+      <div class="nav-item" data-view="sales-desk"><span class="icon">💰</span>Sales Desk</div>
+      <div class="nav-item" data-view="settings"><span class="icon">⚙️</span>Settings</div>
+    </nav>
+    <div class="sb-foot">
+      <div id="user-email-sb"></div>
+      <button class="btn-signout" id="logout-btn">Sign Out</button>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <h2 id="page-title">Part Stock</h2>
+      <div id="topbar-actions" style="display:flex;gap:8px"></div>
+    </div>
+    <div id="content"></div>
+  </div>
+</div>
+
+<div id="toast-el" class="toast toast-info" style="display:none"></div>
+
+<script type="module">
+import { initializeApp }       from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js';
+import { getAuth, onAuthStateChanged, signOut }
+                               from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
+import { getFirestore, doc, getDoc, getDocs, setDoc, addDoc,
+         updateDoc, deleteDoc, collection, query, orderBy, serverTimestamp }
+                               from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js';
+
+// ── Firebase ──────────────────────────────────────────────────────────────────
+const FB = initializeApp({
+  apiKey:"AIzaSyCyRRnbEE_h7KC5RieXiNcVAZv_aaiqNK4",
+  authDomain:"specprice-236a2.firebaseapp.com",
+  projectId:"specprice-236a2",
+  storageBucket:"specprice-236a2.firebasestorage.app",
+  messagingSenderId:"294680326166",
+  appId:"1:294680326166:web:d3ef0602f2103c87b30537"
+});
+const auth = getAuth(FB);
+const db   = getFirestore(FB);
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let companyId   = '';
+let companyName = '';
+let allParts    = [];
+let anthKey     = '';
+let currentView = 'part-stock';
+let sortCol     = 'part_number';
+let sortAsc     = true;
+let sdItems     = [];
+
+// ── PDF.js ────────────────────────────────────────────────────────────────────
+if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+// Show error on splash
+function splashErr(msg) {
+  const el = document.getElementById('splash-msg');
+  if (el) { el.textContent = msg; el.style.color = '#E53E3E'; }
+  const ring = document.getElementById('splash-ring');
+  if (ring) ring.style.display = 'none';
+}
+function splashMsg(msg) {
+  const el = document.getElementById('splash-msg');
+  if (el) el.textContent = msg;
+}
+
+// Catch uncaught errors and show on splash
+window.addEventListener('unhandledrejection', e => splashErr('Error: ' + String(e.reason)));
+window.addEventListener('error', e => splashErr('Error: ' + e.message));
+
+// Timeout if Firebase never responds (likely: domain not authorized)
+const _authTimeout = setTimeout(() => {
+  splashErr('Could not connect.\n\nIf this is your first time: go to Firebase Console → Authentication → Settings → Authorized Domains → Add "dimitryu.github.io"');
+}, 8000);
+
+onAuthStateChanged(auth, async user => {
+  clearTimeout(_authTimeout);
+  if (!user) { location.href = 'index.html'; return; }
+  splashMsg('Loading company data…');
+  document.getElementById('user-email-sb').textContent = user.email;
+  try {
+    await initCompany(user);
+  } catch(e) { splashErr('Company load error: ' + e.message); return; }
+  document.getElementById('splash').style.display = 'none';
+  document.getElementById('shell').style.display = 'flex';
+  route('part-stock');
+});
+document.getElementById('logout-btn').addEventListener('click',
+  () => signOut(auth).then(() => location.href = 'index.html'));
+
+// ── Company ───────────────────────────────────────────────────────────────────
+async function initCompany(user) {
+  try {
+    const uSnap = await getDoc(doc(db,'users',user.uid));
+    companyId = (uSnap.data()||{}).company_id || '';
+    if (!companyId) {
+      const snap = await getDocs(collection(db,'companies'));
+      if (snap.size === 1) companyId = snap.docs[0].id;
+      else if (snap.size > 1) companyId = await pickCompany(snap.docs);
+    }
+    if (companyId) {
+      const cSnap = await getDoc(doc(db,'companies',companyId));
+      const cData = cSnap.data() || {};
+      companyName = cData.name || companyId;
+      anthKey = cData.anthropic_key || '';
+      document.getElementById('sb-company').textContent = companyName;
+    }
+  } catch(e) { console.error('initCompany', e); }
+}
+function pickCompany(docs) {
+  return new Promise(resolve => {
+    const bg = mkEl('div','modal-bg');
+    bg.innerHTML = `<div class="modal modal-sm"><div class="modal-head"><h3>Select Company</h3></div>
+      <div class="modal-body">${docs.map(d=>`<div class="rfq-card" data-id="${d.id}" style="margin-bottom:8px">
+        <div class="rfq-card-icon">🏢</div><div class="rfq-card-body"><h3>${esc(d.data().name||d.id)}</h3></div>
+      </div>`).join('')}</div></div>`;
+    bg.querySelectorAll('.rfq-card').forEach(el=>el.addEventListener('click',()=>{
+      document.body.removeChild(bg); resolve(el.dataset.id);
+    }));
+    document.body.appendChild(bg);
+  });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function mkEl(tag,cls='',html=''){const e=document.createElement(tag);if(cls)e.className=cls;if(html)e.innerHTML=html;return e;}
+function fmtPrice(v){const n=parseFloat(v);return isNaN(n)||n===0?'':'$'+n.toFixed(4);}
+function fmtDate(v){if(!v)return'';try{const d=v.toDate?v.toDate():new Date(v);return d.toLocaleDateString('en-GB');}catch{return String(v);}}
+function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};}
+function nowISO(){return new Date().toISOString();}
+
+let toastTimer;
+function toast(msg,type='info'){
+  const el=document.getElementById('toast-el');
+  el.textContent=msg; el.className=`toast toast-${type}`; el.style.display='block';
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.style.display='none',3500);
+}
+
+function showModal(html){
+  closeModal();
+  const bg=mkEl('div','modal-bg'); bg.id='modal-bg';
+  bg.innerHTML=html; document.body.appendChild(bg);
+  bg.addEventListener('click',e=>{if(e.target===bg)closeModal();});
+  return bg;
+}
+function closeModal(){const m=document.getElementById('modal-bg');if(m)m.remove();}
+
+function setContent(html){document.getElementById('content').innerHTML=html;}
+function setActions(html){document.getElementById('topbar-actions').innerHTML=html;}
+
+// ── Router ────────────────────────────────────────────────────────────────────
+function route(v){
+  currentView=v||'part-stock';
+  document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.view===currentView));
+  const TITLES={'part-stock':'📦 Part Stock','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','settings':'⚙️ Settings'};
+  document.getElementById('page-title').textContent=TITLES[currentView]||'';
+  setActions('');
+  if(currentView==='part-stock') renderPartStock();
+  else if(currentView==='rfq') renderRFQList();
+  else if(currentView==='sales-desk') renderSalesDesk();
+  else if(currentView==='settings') renderSettings();
+}
+document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',()=>route(el.dataset.view)));
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PART STOCK
+// ══════════════════════════════════════════════════════════════════════════════
+async function loadParts(){
+  if(allParts.length>0) return;
+  const snap=await getDocs(collection(db,'companies',companyId,'parts_cache'));
+  allParts=snap.docs.map(d=>({_id:d.id,...d.data()}));
+}
+
+async function renderPartStock(filter=''){
+  setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading parts…</div>`);
+  setActions('');
+  try { await loadParts(); } catch(e){ setContent(`<p style="color:red;padding:20px">${e.message}</p>`); return; }
+
+  const q=(filter||'').toLowerCase().trim();
+  const filtered=q
+    ? allParts.filter(p=>[p.part_number,p.drawing_number,p.drawing_name,p.description,p.manufacturer,p.atlantium_pn]
+        .some(v=>String(v||'').toLowerCase().includes(q)))
+    : allParts;
+
+  const sorted=[...filtered].sort((a,b)=>{
+    let va=String(a[sortCol]||'').toLowerCase(), vb=String(b[sortCol]||'').toLowerCase();
+    if(['price','priority_price'].includes(sortCol)){va=parseFloat(a[sortCol])||0;vb=parseFloat(b[sortCol])||0;}
+    return sortAsc?(va<vb?-1:va>vb?1:0):(va<vb?1:va>vb?-1:0);
+  });
+
+  const COLS=[
+    {k:'part_number',   l:'Part Number',    w:'120px'},
+    {k:'drawing_number',l:'Drawing #',       w:'100px'},
+    {k:'drawing_name',  l:'Drawing Name',    w:'130px'},
+    {k:'atlantium_pn',  l:'Customer PN',     w:'100px'},
+    {k:'description',   l:'Description',     w:'200px',wrap:true},
+    {k:'manufacturer',  l:'Manufacturer',    w:'110px'},
+    {k:'price',         l:'FC Price',         w:'85px'},
+    {k:'priority_price',l:'Priority Price',   w:'95px'},
+    {k:'qty',           l:'QTY',              w:'55px'},
+    {k:'unit',          l:'Units',            w:'55px'},
+    {k:'updatedAt',     l:'Updated',          w:'90px'},
+    {k:'_fc',           l:'FindChips',        w:'80px'},
+  ];
+  const arrow=k=>k===sortCol?(sortAsc?' ▲':' ▼'):'';
+  const rows=sorted.slice(0,2000).map(p=>{
+    const fcPrice=parseFloat(p.price)||0, prPrice=parseFloat(p.priority_price)||0;
+    let fcC='',prC='';
+    if(fcPrice&&prPrice){fcC=fcPrice<=prPrice?'price-green':'price-red';prC=prPrice<=fcPrice?'price-green':'price-red';}
+    const unit=esc(p.unit||p.units||'');
+    const fcUrl=p.findchips_url||`https://www.findchips.com/search/${encodeURIComponent(p.part_number||'')}`;
+    return`<tr>
+      <td>${esc(p.part_number)}</td><td>${esc(p.drawing_number)}</td>
+      <td>${esc(p.drawing_name)}</td><td>${esc(p.atlantium_pn)}</td>
+      <td class="wrap">${esc(p.description)}</td><td>${esc(p.manufacturer)}</td>
+      <td>${fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:''}</td>
+      <td>${prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:''}</td>
+      <td>${esc(p.qty)}</td><td>${unit}</td><td>${fmtDate(p.updatedAt)}</td>
+      <td>${p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px">🔍 FC</a>`:''}</td>
+    </tr>`;
+  }).join('');
+
+  setContent(`
+    <div class="toolbar">
+      <input class="search-box" id="ps-search" placeholder="Search part number, description, manufacturer…" value="${esc(filter)}">
+      <span class="count-badge">${filtered.length} parts${filtered.length>2000?' (showing 2000)':''}</span>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr>${COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}">${c.l}${arrow(c.k)}</th>`).join('')}</tr></thead>
+      <tbody>${rows||'<tr class="empty-row"><td colspan="12">No parts found</td></tr>'}</tbody>
+    </table></div>`);
+
+  const inp=document.getElementById('ps-search');
+  inp.addEventListener('input',debounce(()=>renderPartStock(inp.value),260));
+  inp.focus();
+  document.querySelectorAll('thead th[data-col]').forEach(th=>th.addEventListener('click',()=>{
+    const k=th.dataset.col;
+    if(sortCol===k)sortAsc=!sortAsc;else{sortCol=k;sortAsc=true;}
+    renderPartStock(inp.value);
+  }));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RFQ LIST
+// ══════════════════════════════════════════════════════════════════════════════
+async function renderRFQList(){
+  setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading RFQs…</div>`);
+  setActions(`<button class="btn btn-green" id="btn-new-rfq">＋ New RFQ</button>`);
+
+  document.getElementById('btn-new-rfq').addEventListener('click', createRFQ);
+
+  let projects=[];
+  try {
+    const snap=await getDocs(query(collection(db,'companies',companyId,'projects'),orderBy('updatedAt','desc')));
+    projects=snap.docs.map(d=>({_id:d.id,...d.data()}));
+  } catch {
+    try {
+      const snap=await getDocs(collection(db,'companies',companyId,'projects'));
+      projects=snap.docs.map(d=>({_id:d.id,...d.data()}));
+      projects.sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));
+    } catch(e2){ setContent(`<p style="color:red;padding:20px">${e2.message}</p>`); return; }
+  }
+
+  if(!projects.length){
+    setContent(`<div style="text-align:center;padding:80px;color:var(--muted)">
+      <div style="font-size:48px;margin-bottom:12px">📋</div>
+      <div>No RFQs yet. Click <strong>＋ New RFQ</strong> to create one.</div></div>`);
+    return;
+  }
+
+  setContent(`
+    <div class="toolbar"><span class="count-badge">${projects.length} RFQs</span></div>
+    <div class="card-grid" id="rfq-grid">
+    ${projects.map(p=>`
+      <div class="rfq-card" data-id="${esc(p._id)}">
+        <div class="rfq-card-icon">📋</div>
+        <div class="rfq-card-body">
+          <h3>${esc(p.name||p._id)}</h3>
+          <p>${fmtDate(p.updatedAt)||'—'}</p>
+        </div>
+        <button class="btn btn-red btn-sm del-rfq" data-id="${esc(p._id)}" data-name="${esc(p.name||p._id)}"
+          title="Delete" style="flex-shrink:0;align-self:center">✕</button>
+      </div>`).join('')}
+    </div>`);
+
+  document.querySelectorAll('.rfq-card').forEach(el=>{
+    el.addEventListener('click',e=>{if(!e.target.classList.contains('del-rfq')) renderRFQDetail(el.dataset.id, el.querySelector('h3').textContent);});
+  });
+  document.querySelectorAll('.del-rfq').forEach(btn=>{
+    btn.addEventListener('click',e=>{e.stopPropagation(); deleteRFQ(btn.dataset.id, btn.dataset.name);});
+  });
+}
+
+async function createRFQ(){
+  const name=prompt('RFQ / Project name:','');
+  if(!name||!name.trim()) return;
+  try {
+    const ref=await addDoc(collection(db,'companies',companyId,'projects'),{
+      name:name.trim(), updatedAt:serverTimestamp(), createdAt:serverTimestamp()
+    });
+    toast('RFQ created','success');
+    renderRFQDetail(ref.id, name.trim());
+  } catch(e){ toast('Error: '+e.message,'error'); }
+}
+
+async function deleteRFQ(id, name){
+  if(!confirm(`Delete RFQ "${name}"? This removes all drawings.`)) return;
+  try {
+    // Delete all drawings first
+    const snap=await getDocs(collection(db,'companies',companyId,'projects',id,'drawings'));
+    await Promise.all(snap.docs.map(d=>deleteDoc(d.ref)));
+    await deleteDoc(doc(db,'companies',companyId,'projects',id));
+    toast('RFQ deleted','success');
+    renderRFQList();
+  } catch(e){ toast('Error: '+e.message,'error'); }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RFQ DETAIL  (show drawings – each drawing has items[] array)
+// ══════════════════════════════════════════════════════════════════════════════
+async function renderRFQDetail(projectId, projectName){
+  setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading BOM…</div>`);
+  setActions(`
+    <button class="btn btn-blue" id="btn-add-drawing">＋ Add Drawing</button>
+    <button class="btn btn-ghost" id="btn-back-rfq">← Back</button>`);
+
+  document.getElementById('btn-back-rfq').addEventListener('click', renderRFQList);
+  document.getElementById('btn-add-drawing').addEventListener('click',
+    () => openAddDrawingModal(projectId, projectName));
+
+  document.getElementById('page-title').textContent = `📋 ${projectName}`;
+
+  let drawings=[];
+  try {
+    const snap=await getDocs(collection(db,'companies',companyId,'projects',projectId,'drawings'));
+    drawings=snap.docs.map(d=>({_id:d.id,...d.data()}));
+    drawings.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  } catch(e){
+    setContent(`<p style="color:red;padding:20px">Error loading BOM: ${e.message}</p>`);
+    return;
+  }
+
+  // Flatten items from all drawings.
+  // Desktop app stores: { name, items:[{item,part_number,...}] }
+  // Old web format stored individual docs with BOM fields directly – handle both.
+  const allRows = [];
+  for(const dwg of drawings){
+    if(Array.isArray(dwg.items) && dwg.items.length > 0){
+      dwg.items.forEach((it,idx)=>allRows.push({...it, _dwgId:dwg._id, _dwgName:dwg.name||'', _idx:idx, _fmt:'arr'}));
+    } else if(dwg.part_number || dwg.description || dwg.drawing_number){
+      // Old format: document IS the BOM row
+      allRows.push({...dwg, _dwgId:dwg._id, _dwgName:'', _idx:-1, _fmt:'doc'});
+    }
+  }
+  allRows.sort((a,b)=>(parseInt(a.item)||0)-(parseInt(b.item)||0));
+
+  const BOM_COLS=[
+    {k:'item',          l:'Item',        w:'45px'},
+    {k:'drawing_number',l:'Drawing #',   w:'100px'},
+    {k:'part_number',   l:'Part #',      w:'130px'},
+    {k:'drawing_name',  l:'Dwg Name',    w:'120px'},
+    {k:'atlantium_pn',  l:'Cust PN',     w:'100px'},
+    {k:'description',   l:'Description', w:'210px',wrap:true},
+    {k:'qty',           l:'QTY',         w:'55px'},
+    {k:'unit',          l:'Units',       w:'55px'},
+    {k:'manufacturer',  l:'Manufacturer',w:'110px'},
+  ];
+
+  // Build rows with drawing-name group headers
+  let lastDwgName = null;
+  const rowsHtml = allRows.map((row,ri)=>{
+    let header = '';
+    if(row._dwgName && row._dwgName !== lastDwgName){
+      lastDwgName = row._dwgName;
+      header = `<tr style="background:var(--blue-light)"><td colspan="10" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none">📄 ${esc(row._dwgName)}</td></tr>`;
+    }
+    return header + `<tr>
+      ${BOM_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${esc(row[c.k]||'')}</td>`).join('')}
+      <td><button class="btn btn-red btn-sm del-row" data-dwgid="${esc(row._dwgId)}" data-idx="${row._idx}" data-fmt="${row._fmt}" title="Delete row">✕</button></td>
+    </tr>`;
+  }).join('');
+
+  setContent(`
+    <div class="table-wrap"><table>
+      <thead><tr>${BOM_COLS.map(c=>`<th style="min-width:${c.w}">${c.l}</th>`).join('')}<th style="width:40px"></th></tr></thead>
+      <tbody id="bom-tbody">${rowsHtml||'<tr class="empty-row"><td colspan="10">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
+    </table></div>
+    <div style="margin-top:8px;font-size:11px;color:var(--muted)">${allRows.length} parts across ${drawings.length} drawing(s)</div>`);
+
+  document.querySelectorAll('.del-row').forEach((btn,ri)=>{
+    btn.addEventListener('click', async()=>{
+      if(!confirm('Delete this BOM row?')) return;
+      const dwgId=btn.dataset.dwgid, idx=parseInt(btn.dataset.idx), fmt=btn.dataset.fmt;
+      try {
+        if(fmt==='doc'){
+          await deleteDoc(doc(db,'companies',companyId,'projects',projectId,'drawings',dwgId));
+        } else {
+          // Remove item at idx from drawing.items array
+          const dwgRef=doc(db,'companies',companyId,'projects',projectId,'drawings',dwgId);
+          const dwgSnap=await getDoc(dwgRef);
+          const items=[...(dwgSnap.data()?.items||[])];
+          items.splice(idx,1);
+          if(items.length===0){
+            await deleteDoc(dwgRef);
+          } else {
+            await updateDoc(dwgRef,{items, updatedAt:serverTimestamp()});
+          }
+        }
+        toast('Row deleted','success');
+        renderRFQDetail(projectId, projectName);
+      } catch(e){ toast(e.message,'error'); }
+    });
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ADD DRAWING MODAL — PDF / Image → AI → BOM
+// ══════════════════════════════════════════════════════════════════════════════
+function openAddDrawingModal(projectId, projectName){
+  if(!anthKey){ showSettingsModal(()=>openAddDrawingModal(projectId,projectName)); return; }
+
+  showModal(`<div class="modal">
+    <div class="modal-head"><h3>Add Drawing to ${esc(projectName)}</h3><button class="close-modal" id="modal-close">✕</button></div>
+    <div class="modal-body" id="modal-body-inner">
+      <div class="form-field" style="margin-bottom:14px">
+        <label>Drawing Name / Title</label>
+        <input class="form-input" id="drawing-name-inp" placeholder="e.g. KARA-002 or Main Assembly" autocomplete="off">
+      </div>
+      <div class="drop-zone" id="drop-zone" tabindex="0">
+        <span class="icon-big">📄</span>
+        <strong>Drop PDF or Image here</strong>
+        <p>or click to browse (PDF, PNG, JPG, JPEG, WEBP, BMP)</p>
+        <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp"
+               style="display:none">
+      </div>
+    </div>
+    <div class="modal-foot" id="modal-foot">
+      <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+    </div>
+  </div>`);
+
+  document.getElementById('modal-close').addEventListener('click', closeModal);
+  document.getElementById('modal-cancel').addEventListener('click', closeModal);
+
+  const dz = document.getElementById('drop-zone');
+  const fi = document.getElementById('file-input');
+  dz.addEventListener('click', ()=>fi.click());
+  dz.addEventListener('dragover', e=>{e.preventDefault();dz.classList.add('dragover');});
+  dz.addEventListener('dragleave', ()=>dz.classList.remove('dragover'));
+  dz.addEventListener('drop', e=>{
+    e.preventDefault();dz.classList.remove('dragover');
+    const dwgName=document.getElementById('drawing-name-inp')?.value.trim()||'';
+    handleFile(e.dataTransfer.files[0],projectId,projectName,dwgName);
+  });
+  fi.addEventListener('change', ()=>{
+    if(fi.files[0]){
+      const dwgName=document.getElementById('drawing-name-inp')?.value.trim()||'';
+      handleFile(fi.files[0],projectId,projectName,dwgName);
+    }
+  });
+}
+
+async function handleFile(file, projectId, projectName, drawingName=''){
+  if(!file) return;
+  const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+  const isImg = file.type.startsWith('image/');
+  if(!isPDF && !isImg){ toast('Please upload a PDF or image file','error'); return; }
+
+  const body = document.getElementById('modal-body-inner');
+  const foot = document.getElementById('modal-foot');
+  body.innerHTML = `
+    <div class="ai-status"><div class="ring"></div><span id="ai-msg">${isPDF?'Extracting PDF text…':'Reading image…'}</span></div>
+    <div class="progress-bar"><div class="progress-fill" id="prog"></div></div>`;
+  foot.innerHTML = '';
+
+  const setMsg = (m,pct) => {
+    const el=document.getElementById('ai-msg'); if(el)el.textContent=m;
+    const pb=document.getElementById('prog'); if(pb)pb.style.width=pct+'%';
+  };
+
+  try {
+    let extractedRows = [];
+
+    if(isPDF){
+      setMsg('Extracting text from PDF…', 20);
+      const text = await extractPDFText(file);
+      setMsg('Sending to AI for BOM analysis…', 50);
+      extractedRows = await aiExtractBOM(text, false, null, file.name);
+    } else {
+      setMsg('Encoding image…', 20);
+      const {b64, mimeType} = await encodeImage(file);
+      setMsg('Sending to AI (vision)…', 50);
+      extractedRows = await aiExtractBOM('', true, {b64, mimeType}, file.name);
+    }
+
+    setMsg('Done — review the table below', 100);
+    document.querySelector('.ai-status .ring').classList.add('done');
+
+    if(!extractedRows.length){
+      body.innerHTML += `<p style="color:var(--muted);margin-top:12px">No BOM rows detected. Try a clearer file.</p>`;
+      foot.innerHTML = `<button class="btn btn-ghost" id="modal-cancel">Close</button>`;
+      document.getElementById('modal-cancel').addEventListener('click',closeModal);
+      return;
+    }
+
+    showBOMPreview(extractedRows, projectId, projectName, drawingName, body, foot);
+  } catch(e){
+    const hint = e.message==='Failed to fetch'
+      ? 'Network error — check your internet connection. If the problem persists, the Anthropic API key may be invalid or expired.'
+      : e.message;
+    body.innerHTML += `<p style="color:red;margin-top:12px">Error: ${hint}</p>`;
+    foot.innerHTML = `<button class="btn btn-ghost" id="modal-cancel-err">Close</button>`;
+    document.getElementById('modal-cancel-err')?.addEventListener('click',closeModal);
+  }
+}
+
+function showBOMPreview(rows, projectId, projectName, drawingName, body, foot){
+  const PCOLS=['item','drawing_number','part_number','drawing_name','atlantium_pn','description','qty','unit','manufacturer'];
+  const PLABELS=['Item','Drawing #','Part #','Dwg Name','Cust PN','Description','QTY','Units','Manufacturer'];
+
+  const tBody = rows.map((r,i)=>`<tr data-i="${i}">
+    ${PCOLS.map(k=>`<td contenteditable="true" data-k="${k}" data-i="${i}">${esc(r[k]||'')}</td>`).join('')}
+    <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
+  </tr>`).join('');
+
+  body.innerHTML = `
+    <div class="ai-status" style="margin-bottom:10px">
+      <div class="ring done"></div>
+      <span>${rows.length} rows extracted — you can edit cells before saving</span>
+    </div>
+    <div class="table-wrap" style="max-height:360px;overflow:auto"><table>
+      <thead><tr>${PLABELS.map(l=>`<th>${l}</th>`).join('')}<th></th></tr></thead>
+      <tbody id="preview-tbody">${tBody}</tbody>
+    </table></div>`;
+
+  foot.innerHTML = `
+    <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+    <button class="btn btn-green" id="btn-save-bom">💾 Save to RFQ (${rows.length} rows)</button>`;
+
+  document.getElementById('modal-cancel').addEventListener('click',closeModal);
+  document.getElementById('btn-save-bom').addEventListener('click',async()=>{
+    // Collect edited values from contenteditable cells
+    const updatedRows=[];
+    document.querySelectorAll('#preview-tbody tr').forEach(tr=>{
+      const row={};
+      tr.querySelectorAll('td[contenteditable]').forEach(td=>{row[td.dataset.k]=td.textContent.trim();});
+      if(Object.values(row).some(v=>v)) updatedRows.push(row);
+    });
+    if(!updatedRows.length){ toast('No rows to save','error'); return; }
+    await saveBOMToRFQ(updatedRows, projectId, projectName, drawingName);
+  });
+}
+
+async function saveBOMToRFQ(rows, projectId, projectName, drawingName=''){
+  const btn=document.getElementById('btn-save-bom');
+  if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
+  try {
+    const col=collection(db,'companies',companyId,'projects',projectId,'drawings');
+    const dwgName=drawingName||projectName;
+    // Check if a drawing with this name already exists; update or create
+    const existSnap=await getDocs(col);
+    const existing=existSnap.docs.find(d=>(d.data().name||'')===(dwgName));
+    if(existing){
+      // Merge items into existing drawing
+      const oldItems=existing.data().items||[];
+      await updateDoc(existing.ref,{items:[...oldItems,...rows], updatedAt:serverTimestamp()});
+    } else {
+      await addDoc(col,{name:dwgName, items:rows, updatedAt:serverTimestamp()});
+    }
+    // Update project updatedAt
+    await updateDoc(doc(db,'companies',companyId,'projects',projectId),{updatedAt:serverTimestamp()});
+    toast(`Saved ${rows.length} BOM rows to drawing "${dwgName}"`,'success');
+    closeModal();
+    renderRFQDetail(projectId, projectName);
+  } catch(e){ toast('Save error: '+e.message,'error'); if(btn){btn.disabled=false;btn.textContent='Save to RFQ';} }
+}
+
+// ── PDF text extraction ────────────────────────────────────────────────────────
+async function extractPDFText(file){
+  if(!window.pdfjsLib) throw new Error('PDF.js not loaded — please reload the page and try again.');
+  // Lazy worker setup (script may load async after module init)
+  if(!pdfjsLib.GlobalWorkerOptions.workerSrc){
+    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+  const ab = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data:ab}).promise;
+  const parts=[];
+  for(let i=1;i<=pdf.numPages;i++){
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    // Reconstruct rows by grouping items with similar Y position
+    const items = content.items.map(it=>({x:it.transform[4],y:it.transform[5],str:it.str}));
+    items.sort((a,b)=>b.y-a.y||a.x-b.x);
+    let lastY=null, line='';
+    for(const it of items){
+      if(lastY!==null && Math.abs(it.y-lastY)>4){ parts.push(line); line=''; }
+      line+=(line?' ':'')+it.str;
+      lastY=it.y;
+    }
+    if(line) parts.push(line);
+    parts.push(`--- Page ${i} ---`);
+  }
+  return parts.join('\n');
+}
+
+// ── Image encoding ─────────────────────────────────────────────────────────────
+function encodeImage(file){
+  return new Promise((res,rej)=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const url=e.target.result; // data:image/png;base64,...
+      const b64=url.split(',')[1];
+      const mimeType=url.split(';')[0].slice(5);
+      res({b64, mimeType});
+    };
+    reader.onerror=rej;
+    reader.readAsDataURL(file);
+  });
+}
+
+// ── Anthropic API BOM extraction ──────────────────────────────────────────────
+async function aiExtractBOM(text, isImage, imgData, filename){
+  const PROMPT=`You are a BOM (Bill of Materials) extraction expert.
+Extract ALL parts from this ${isImage?'image':'document'} ("${filename}") and return them as a JSON array.
+
+Each part object must have EXACTLY these fields (use "" if not found):
+- "item": row/item number (e.g. "1", "2", "A1")
+- "drawing_number": drawing number this BOM belongs to
+- "part_number": manufacturer or supplier part number
+- "drawing_name": drawing title or assembly name
+- "atlantium_pn": customer internal part number
+- "description": full part description
+- "qty": quantity as a number string (e.g. "1", "10", "2.5")
+- "unit": unit of measure (pcs, m, cm, mm, set, kg, etc.)
+- "manufacturer": manufacturer or vendor name
+
+CRITICAL: Return ONLY a valid JSON array. No markdown, no explanation, no extra text.
+Example: [{"item":"1","drawing_number":"DWG-001","part_number":"ABC123","drawing_name":"Main Assembly","atlantium_pn":"","description":"Resistor 10K Ohm","qty":"5","unit":"pcs","manufacturer":"Vishay"}]
+
+If no BOM is found, return: []`;
+
+  const messages = isImage ? [{
+    role:'user',
+    content:[
+      {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
+      {type:'text',text:PROMPT}
+    ]
+  }] : [{
+    role:'user',
+    content: PROMPT + '\n\nDOCUMENT TEXT:\n' + text.slice(0,30000)
+  }];
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{
+      'x-api-key': anthKey,
+      'anthropic-version':'2023-06-01',
+      'anthropic-dangerous-allow-browser':'true',
+      'content-type':'application/json',
+    },
+    body:JSON.stringify({
+      model:'claude-haiku-4-5-20251001',
+      max_tokens:4096,
+      messages
+    })
+  });
+  if(!resp.ok){
+    let msg=`API error ${resp.status}`;
+    try { const e=await resp.json(); msg=e.error?.message||msg; } catch{}
+    throw new Error(msg);
+  }
+  const data=await resp.json();
+  const raw=data.content[0].text.trim();
+  // Extract JSON array from response (even if wrapped in markdown)
+  const match=raw.match(/\[[\s\S]*\]/);
+  if(!match) return [];
+  try { return JSON.parse(match[0]); } catch { return []; }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SALES DESK
+// ══════════════════════════════════════════════════════════════════════════════
+async function renderSalesDesk(){
+  await loadParts();
+  setActions('');
+
+  const renderSD=()=>{
+    const partsTotal=sdItems.reduce((s,r)=>s+r.total,0);
+    const tbody=sdItems.map((r,i)=>`<tr>
+      <td>${esc(r.part_number)}</td>
+      <td class="wrap">${esc(r.description)}</td>
+      <td><input type="number" class="sd-qty" data-i="${i}" value="${r.qty}" min="0.001" step="any"
+           style="width:60px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px"></td>
+      <td>${esc(r.unit)}</td>
+      <td>${fmtPrice(r.price)}</td>
+      <td><strong>$${r.total.toFixed(2)}</strong></td>
+      <td><button class="btn btn-red btn-sm" data-i="${i}">✕</button></td>
+    </tr>`).join('');
+
+    document.getElementById('sd-tbody').innerHTML=tbody||
+      `<tr class="empty-row"><td colspan="7">No parts added yet</td></tr>`;
+    document.getElementById('sd-total').textContent='$'+partsTotal.toFixed(2);
+
+    document.querySelectorAll('.sd-qty').forEach(inp=>inp.addEventListener('change',()=>{
+      const i=+inp.dataset.i, qty=parseFloat(inp.value)||1;
+      sdItems[i].qty=qty; sdItems[i].total=sdItems[i].price*qty; renderSD();
+    }));
+    document.querySelectorAll('#sd-tbody .btn-red').forEach(btn=>btn.addEventListener('click',()=>{
+      sdItems.splice(+btn.dataset.i,1); renderSD();
+    }));
+  };
+
+  setContent(`
+    <div class="sd-split">
+      <div class="sd-panel">
+        <div class="sd-panel-title">BOM Items</div>
+        <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap">
+          <div class="suggest-wrap">
+            <input class="search-box" id="sd-search" placeholder="Search Part Stock…" style="min-width:0;flex:1">
+            <div class="suggest-list" id="sd-suggest" style="display:none"></div>
+          </div>
+          <button class="btn btn-blue" id="btn-sd-file">📎 From File (BOM)</button>
+          <button class="btn btn-ghost" id="btn-sd-clear">Clear All</button>
+        </div>
+        <div class="sd-scroll">
+          <table style="width:100%">
+            <thead><tr>
+              <th>Part #</th><th>Description</th><th>QTY</th>
+              <th>Units</th><th>Price</th><th>Total</th><th></th>
+            </tr></thead>
+            <tbody id="sd-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="sd-panel">
+          <div class="sd-panel-title">Summary</div>
+          <div style="padding:6px 0">
+            <div class="summary-row"><span>Parts</span><span id="sd-count">${sdItems.length}</span></div>
+          </div>
+          <div class="summary-total">
+            <span>TOTAL PARTS COST</span>
+            <span id="sd-total">$0.00</span>
+          </div>
+        </div>
+        <button class="btn btn-green" style="width:100%;padding:10px;justify-content:center" id="btn-sd-print">🖨 Print / Save PDF</button>
+      </div>
+    </div>`);
+
+  renderSD();
+
+  // Search Part Stock
+  const sdSearch=document.getElementById('sd-search');
+  const sdSuggest=document.getElementById('sd-suggest');
+  let suggestions=[];
+
+  sdSearch.addEventListener('input',()=>{
+    const q=sdSearch.value.toLowerCase().trim();
+    if(!q){ sdSuggest.style.display='none'; return; }
+    suggestions=allParts.filter(p=>
+      [p.part_number,p.description,p.manufacturer,p.drawing_number]
+        .some(v=>String(v||'').toLowerCase().includes(q))
+    ).slice(0,10);
+    if(!suggestions.length){ sdSuggest.style.display='none'; return; }
+    sdSuggest.style.display='block';
+    sdSuggest.innerHTML=suggestions.map((p,i)=>`
+      <div class="suggest-item" data-si="${i}">
+        <strong>${esc(p.part_number)}</strong>
+        <span style="color:var(--muted)"> — ${esc((p.description||'').slice(0,50))}</span>
+        ${p.price?`<span style="float:right;color:var(--green)">$${parseFloat(p.price).toFixed(4)}</span>`:''}
+      </div>`).join('');
+    sdSuggest.querySelectorAll('.suggest-item').forEach(el=>el.addEventListener('click',()=>{
+      const p=suggestions[+el.dataset.si];
+      const price=parseFloat(p.price)||parseFloat(p.priority_price)||0;
+      sdItems.push({part_number:p.part_number||'',description:p.description||'',
+        qty:1,unit:p.unit||p.units||'pcs',price,total:price});
+      sdSearch.value=''; sdSuggest.style.display='none';
+      renderSD();
+      // Update count
+      document.getElementById('sd-count').textContent=sdItems.length;
+    }));
+  });
+  document.addEventListener('click',e=>{if(!e.target.closest('.suggest-wrap'))sdSuggest.style.display='none';});
+
+  document.getElementById('btn-sd-clear').addEventListener('click',()=>{sdItems=[];renderSD();});
+  document.getElementById('btn-sd-print').addEventListener('click',()=>window.print());
+
+  // From File (BOM extraction for Sales Desk)
+  document.getElementById('btn-sd-file').addEventListener('click',()=>{
+    if(!anthKey){ showSettingsModal(()=>document.getElementById('btn-sd-file')?.click()); return; }
+    openSDFileModal();
+  });
+}
+
+function openSDFileModal(){
+  showModal(`<div class="modal">
+    <div class="modal-head"><h3>Import BOM from File</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" id="sd-modal-body">
+      <div class="drop-zone" id="sd-drop-zone" tabindex="0">
+        <span class="icon-big">📄</span>
+        <strong>Drop PDF or Image here</strong>
+        <p>Parts will be added to Sales Desk</p>
+        <input type="file" id="sd-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" style="display:none">
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+  </div>`);
+
+  const dz=document.getElementById('sd-drop-zone');
+  const fi=document.getElementById('sd-file-input');
+  dz.addEventListener('click',()=>fi.click());
+  dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover');});
+  dz.addEventListener('dragleave',()=>dz.classList.remove('dragover'));
+  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');handleSDFile(e.dataTransfer.files[0]);});
+  fi.addEventListener('change',()=>{ if(fi.files[0]) handleSDFile(fi.files[0]); });
+}
+
+async function handleSDFile(file){
+  const isPDF=file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf');
+  const isImg=file.type.startsWith('image/');
+  if(!isPDF&&!isImg){ toast('Please upload a PDF or image','error'); return; }
+
+  const body=document.getElementById('sd-modal-body');
+  const foot=document.querySelector('#modal-bg .modal-foot');
+  body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="sd-ai-msg">Processing…</span></div>
+    <div class="progress-bar"><div class="progress-fill" id="sd-prog"></div></div>`;
+  const setM=(m,p)=>{
+    const e=document.getElementById('sd-ai-msg');if(e)e.textContent=m;
+    const b=document.getElementById('sd-prog');if(b)b.style.width=p+'%';
+  };
+  foot.innerHTML='';
+
+  try {
+    let rows=[];
+    if(isPDF){
+      setM('Extracting PDF text…',25);
+      const text=await extractPDFText(file);
+      setM('AI analyzing BOM…',60);
+      rows=await aiExtractBOM(text,false,null,file.name);
+    } else {
+      setM('Encoding image…',25);
+      const img=await encodeImage(file);
+      setM('AI vision analyzing…',60);
+      rows=await aiExtractBOM('',true,img,file.name);
+    }
+    setM('Done',100);
+    if(!rows.length){ body.innerHTML+='<p style="margin-top:12px;color:var(--muted)">No parts detected.</p>';
+      foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`; return; }
+
+    // Add to sdItems, matching price from Part Stock where possible
+    let added=0;
+    for(const r of rows){
+      const pn=(r.part_number||'').trim().toLowerCase();
+      const match=pn?allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
+      const price=match?(parseFloat(match.price)||parseFloat(match.priority_price)||0):0;
+      const qty=parseFloat(r.qty)||1;
+      sdItems.push({
+        part_number:r.part_number||r.item||'',
+        description:r.description||'',
+        qty, unit:r.unit||match?.unit||match?.units||'pcs',
+        price, total:price*qty
+      });
+      added++;
+    }
+    toast(`Added ${added} parts to Sales Desk`,'success');
+    closeModal();
+    // Re-render SD table
+    document.getElementById('sd-tbody') && renderSalesDesk();
+  } catch(e){ body.innerHTML+=`<p style="color:red;margin-top:12px">${e.message}</p>`;
+    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`; }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SETTINGS
+// ══════════════════════════════════════════════════════════════════════════════
+async function renderSettings(){
+  setActions('');
+  setContent(`
+    <div style="max-width:520px">
+      <div style="background:#fff;border:1px solid var(--border);border-radius:9px;padding:22px;margin-bottom:14px">
+        <h3 style="margin-bottom:14px;color:var(--blue-dark)">🤖 Anthropic AI</h3>
+        <div class="form-field">
+          <label>API Key (for BOM extraction from PDF/Image)</label>
+          <input class="form-input" id="set-anth" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
+        </div>
+        <button class="btn btn-blue" id="btn-save-anth">Save</button>
+        <p style="margin-top:8px;font-size:11px;color:var(--muted)">
+          Get your key at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>.
+          Stored securely in your company's Firestore.
+        </p>
+      </div>
+      <div style="background:#fff;border:1px solid var(--border);border-radius:9px;padding:22px">
+        <h3 style="margin-bottom:4px;color:var(--blue-dark)">ℹ️ Company</h3>
+        <p style="color:var(--muted);font-size:12px">Company: <strong>${esc(companyName)}</strong></p>
+        <p style="color:var(--muted);font-size:12px;margin-top:4px">ID: <code>${esc(companyId)}</code></p>
+      </div>
+    </div>`);
+
+  document.getElementById('btn-save-anth').addEventListener('click',async()=>{
+    const key=document.getElementById('set-anth').value.trim();
+    try {
+      await updateDoc(doc(db,'companies',companyId),{anthropic_key:key});
+      anthKey=key;
+      toast('API key saved','success');
+    } catch(e){ toast(e.message,'error'); }
+  });
+}
+
+function showSettingsModal(callback){
+  showModal(`<div class="modal modal-sm">
+    <div class="modal-head"><h3>🤖 Anthropic API Key needed</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p style="margin-bottom:12px;color:var(--muted)">Enter your Anthropic API key to use AI features (BOM extraction from PDF/Image).</p>
+      <div class="form-field">
+        <label>API Key</label>
+        <input class="form-input" id="inline-anth" type="password" placeholder="sk-ant-…">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-blue" id="btn-save-inline-anth">Save & Continue</button>
+    </div>
+  </div>`);
+
+  document.getElementById('btn-save-inline-anth').addEventListener('click',async()=>{
+    const key=document.getElementById('inline-anth').value.trim();
+    if(!key){ toast('Please enter a key','error'); return; }
+    try {
+      await updateDoc(doc(db,'companies',companyId),{anthropic_key:key});
+      anthKey=key; closeModal(); toast('Key saved','success');
+      if(callback) setTimeout(callback,300);
+    } catch(e){ toast(e.message,'error'); }
+  });
+}
+
+// ── Make closeModal global so inline onclick works ────────────────────────────
+window.closeModal = closeModal;
+</script>
+</body>
+</html>
