@@ -227,7 +227,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.1</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.2</div>
     </div>
   </aside>
   <div class="main">
@@ -271,7 +271,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.4.1';
+const APP_VER   = '1.4.2';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -651,7 +651,12 @@ async function renderRFQDetail(projectId, projectName){
       allRows.push({...dwg, _dwgId:dwg._id, _dwgName:'', _idx:-1, _fmt:'doc'});
     }
   }
-  allRows.sort((a,b)=>(parseInt(a.item)||0)-(parseInt(b.item)||0));
+  // Sort: drawing name first (keeps groups together), then item number within each drawing
+  allRows.sort((a,b)=>{
+    const nc=String(a._dwgName||'').localeCompare(String(b._dwgName||''));
+    if(nc!==0) return nc;
+    return (parseInt(a.item)||0)-(parseInt(b.item)||0);
+  });
 
   const BOM_COLS=[
     {k:'item',          l:'Item',        w:'45px'},
@@ -795,7 +800,10 @@ async function handleFile(file, projectId, projectName, drawingName=''){
     document.querySelector('.ai-status .ring').classList.add('done');
 
     if(!extractedRows.length){
-      body.innerHTML += `<p style="color:var(--muted);margin-top:12px">No BOM rows detected. Try a clearer file.</p>`;
+      const noPartsP = document.createElement('p');
+      noPartsP.style.cssText = 'color:var(--muted);margin-top:12px';
+      noPartsP.textContent = 'No BOM rows detected. Try a clearer file.';
+      body.appendChild(noPartsP);
       foot.innerHTML = `<button class="btn btn-ghost" id="modal-cancel">Close</button>`;
       document.getElementById('modal-cancel').addEventListener('click',closeModal);
       return;
@@ -985,7 +993,7 @@ async function _geminiBOM(text, isImage, imgData, filename){
   if(!resp.ok){let m=`Gemini error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
   const data=await resp.json();
-  const raw=data.candidates?.[0]?.content?.parts?.[0]?.text||'';
+  const raw=(data.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
   return _parseAIJson(raw.trim());
 }
 
