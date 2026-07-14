@@ -1,1 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpecPrice</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #1F3A5F 0%, #2E75B6 100%);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 48px 40px 40px;
+      width: 370px;
+      box-shadow: 0 24px 64px rgba(0,0,0,.35);
+    }
+    .logo { text-align: center; margin-bottom: 36px; }
+    .logo h1 { font-size: 26px; font-weight: 700; color: #1F3A5F; letter-spacing: -.5px; }
+    .logo p  { color: #7F8C8D; font-size: 12px; margin-top: 4px; letter-spacing: .3px; }
+    label { display: block; font-size: 11px; font-weight: 700; color: #4A5568;
+            text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px; margin-top: 16px; }
+    input {
+      width: 100%; padding: 10px 13px; border: 1.5px solid #E2E8F0; border-radius: 7px;
+      font-size: 14px; color: #1A202C; outline: none; transition: border-color .15s;
+    }
+    input:focus { border-color: #2E75B6; box-shadow: 0 0 0 3px rgba(46,117,182,.12); }
+    .btn {
+      width: 100%; margin-top: 24px; padding: 11px;
+      background: #2E75B6; color: #fff; border: none; border-radius: 7px;
+      font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn:hover:not(:disabled) { background: #1F5B92; }
+    .btn:disabled { background: #A0AEC0; cursor: not-allowed; }
+    .error { color: #E53E3E; font-size: 13px; margin-top: 14px; text-align: center; min-height: 18px; }
+    .spinner {
+      width: 15px; height: 15px;
+      border: 2px solid rgba(255,255,255,.4); border-top-color: #fff;
+      border-radius: 50%; animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <h1>⚡ SpecPrice</h1>
+    <p>Electronics BOM Manager</p>
+  </div>
 
+  <label for="email">Email</label>
+  <input type="email" id="email" placeholder="your@email.com" autocomplete="email">
+
+  <label for="pw">Password</label>
+  <input type="password" id="pw" placeholder="••••••••" autocomplete="current-password">
+
+  <button class="btn" id="btn">Sign In</button>
+  <div class="error" id="err"></div>
+</div>
+
+<script type="module">
+import { initializeApp }                        from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js';
+import { getAuth, signInWithEmailAndPassword,
+         onAuthStateChanged, setPersistence,
+         browserLocalPersistence }              from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
+
+const app  = initializeApp({
+  apiKey:            "AIzaSyCyRRnbEE_h7KC5RieXiNcVAZv_aaiqNK4",
+  authDomain:        "specprice-236a2.firebaseapp.com",
+  projectId:         "specprice-236a2",
+  storageBucket:     "specprice-236a2.firebasestorage.app",
+  messagingSenderId: "294680326166",
+  appId:             "1:294680326166:web:d3ef0602f2103c87b30537"
+});
+const auth = getAuth(app);
+
+// Already logged in → skip to app
+onAuthStateChanged(auth, u => { if (u) location.href = 'app.html'; });
+
+const btn = document.getElementById('btn');
+const err = document.getElementById('err');
+
+async function doLogin() {
+  const email = document.getElementById('email').value.trim();
+  const pw    = document.getElementById('pw').value;
+  if (!email || !pw) { err.textContent = 'Please enter email and password.'; return; }
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Signing in…';
+  err.textContent = '';
+  try {
+    await setPersistence(auth, browserLocalPersistence);
+    await signInWithEmailAndPassword(auth, email, pw);
+    location.href = 'app.html';
+  } catch (e) {
+    err.textContent =
+      ['auth/wrong-password','auth/user-not-found','auth/invalid-credential'].includes(e.code)
+        ? 'Invalid email or password.' : e.message;
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+}
+
+btn.addEventListener('click', doLogin);
+document.getElementById('pw').addEventListener('keydown', e => e.key === 'Enter' && doLogin());
+</script>
+</body>
+</html>
