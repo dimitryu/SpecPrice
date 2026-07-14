@@ -227,7 +227,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.0</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.1</div>
     </div>
   </aside>
   <div class="main">
@@ -271,7 +271,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.4.0';
+const APP_VER   = '1.4.1';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -978,7 +978,7 @@ async function _geminiBOM(text, isImage, imgData, filename){
     ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:PROMPT}]
     : [{text: PROMPT+'\n\nDOCUMENT TEXT:\n'+text.slice(0,30000)}];
   const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
     {method:'POST',headers:{'content-type':'application/json'},
      body:JSON.stringify({contents:[{parts}]})}
   );
