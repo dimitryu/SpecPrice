@@ -226,6 +226,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.2.0</div>
     </div>
   </aside>
   <div class="main">
@@ -268,6 +269,7 @@ let currentView = 'part-stock';
 let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
+const APP_VER   = '1.2.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -422,20 +424,23 @@ async function renderPartStock(filter=''){
     {k:'qty',           l:'QTY',              w:'55px'},
     {k:'unit',          l:'Units',            w:'55px'},
     {k:'updatedAt',     l:'Updated',          w:'90px'},
+    {k:'_fc',           l:'FindChips',        w:'80px'},
   ];
   const arrow=k=>k===sortCol?(sortAsc?' ▲':' ▼'):'';
   const rows=sorted.slice(0,2000).map(p=>{
-    const fc=parseFloat(p.price)||0, pr=parseFloat(p.priority_price)||0;
+    const fcPrice=parseFloat(p.price)||0, prPrice=parseFloat(p.priority_price)||0;
     let fcC='',prC='';
-    if(fc&&pr){fcC=fc<=pr?'price-green':'price-red';prC=pr<=fc?'price-green':'price-red';}
+    if(fcPrice&&prPrice){fcC=fcPrice<=prPrice?'price-green':'price-red';prC=prPrice<=fcPrice?'price-green':'price-red';}
     const unit=esc(p.unit||p.units||'');
+    const fcUrl=p.findchips_url||`https://www.findchips.com/search/${encodeURIComponent(p.part_number||'')}`;
     return`<tr>
       <td>${esc(p.part_number)}</td><td>${esc(p.drawing_number)}</td>
       <td>${esc(p.drawing_name)}</td><td>${esc(p.atlantium_pn)}</td>
       <td class="wrap">${esc(p.description)}</td><td>${esc(p.manufacturer)}</td>
-      <td>${fc?`<span class="${fcC}">${fmtPrice(fc)}</span>`:''}</td>
-      <td>${pr?`<span class="${prC}">${fmtPrice(pr)}</span>`:''}</td>
+      <td>${fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:''}</td>
+      <td>${prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:''}</td>
       <td>${esc(p.qty)}</td><td>${unit}</td><td>${fmtDate(p.updatedAt)}</td>
+      <td>${p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px">🔍 FC</a>`:''}</td>
     </tr>`;
   }).join('');
 
@@ -446,7 +451,7 @@ async function renderPartStock(filter=''){
     </div>
     <div class="table-wrap"><table>
       <thead><tr>${COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}">${c.l}${arrow(c.k)}</th>`).join('')}</tr></thead>
-      <tbody>${rows||'<tr class="empty-row"><td colspan="11">No parts found</td></tr>'}</tbody>
+      <tbody>${rows||'<tr class="empty-row"><td colspan="12">No parts found</td></tr>'}</tbody>
     </table></div>`);
 
   const inp=document.getElementById('ps-search');
@@ -535,7 +540,7 @@ async function deleteRFQ(id, name){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// RFQ DETAIL  (show drawings = BOM rows)
+// RFQ DETAIL  (show drawings – each drawing has items[] array)
 // ══════════════════════════════════════════════════════════════════════════════
 async function renderRFQDetail(projectId, projectName){
   setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading BOM…</div>`);
@@ -553,44 +558,83 @@ async function renderRFQDetail(projectId, projectName){
   try {
     const snap=await getDocs(collection(db,'companies',companyId,'projects',projectId,'drawings'));
     drawings=snap.docs.map(d=>({_id:d.id,...d.data()}));
-    // Sort by item number
-    drawings.sort((a,b)=>{ const na=parseInt(a.item)||0, nb=parseInt(b.item)||0; return na-nb; });
+    drawings.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   } catch(e){
     setContent(`<p style="color:red;padding:20px">Error loading BOM: ${e.message}</p>`);
     return;
   }
 
+  // Flatten items from all drawings.
+  // Desktop app stores: { name, items:[{item,part_number,...}] }
+  // Old web format stored individual docs with BOM fields directly – handle both.
+  const allRows = [];
+  for(const dwg of drawings){
+    if(Array.isArray(dwg.items) && dwg.items.length > 0){
+      dwg.items.forEach((it,idx)=>allRows.push({...it, _dwgId:dwg._id, _dwgName:dwg.name||'', _idx:idx, _fmt:'arr'}));
+    } else if(dwg.part_number || dwg.description || dwg.drawing_number){
+      // Old format: document IS the BOM row
+      allRows.push({...dwg, _dwgId:dwg._id, _dwgName:'', _idx:-1, _fmt:'doc'});
+    }
+  }
+  allRows.sort((a,b)=>(parseInt(a.item)||0)-(parseInt(b.item)||0));
+
   const BOM_COLS=[
-    {k:'item',          l:'Item',      w:'45px'},
-    {k:'drawing_number',l:'Drawing #', w:'100px'},
-    {k:'part_number',   l:'Part #',    w:'130px'},
-    {k:'drawing_name',  l:'Dwg Name',  w:'120px'},
-    {k:'atlantium_pn',  l:'Cust PN',   w:'100px'},
-    {k:'description',   l:'Description',w:'210px',wrap:true},
-    {k:'qty',           l:'QTY',        w:'55px'},
-    {k:'unit',          l:'Units',      w:'55px'},
+    {k:'item',          l:'Item',        w:'45px'},
+    {k:'drawing_number',l:'Drawing #',   w:'100px'},
+    {k:'part_number',   l:'Part #',      w:'130px'},
+    {k:'drawing_name',  l:'Dwg Name',    w:'120px'},
+    {k:'atlantium_pn',  l:'Cust PN',     w:'100px'},
+    {k:'description',   l:'Description', w:'210px',wrap:true},
+    {k:'qty',           l:'QTY',         w:'55px'},
+    {k:'unit',          l:'Units',       w:'55px'},
     {k:'manufacturer',  l:'Manufacturer',w:'110px'},
   ];
-  const rows=drawings.map(d=>`<tr>
-    ${BOM_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${esc(d[c.k]||'')}</td>`).join('')}
-    <td><button class="btn btn-red btn-sm del-row" data-id="${d._id}" title="Delete row">✕</button></td>
-  </tr>`).join('');
+
+  // Build rows with drawing-name group headers
+  let lastDwgName = null;
+  const rowsHtml = allRows.map((row,ri)=>{
+    let header = '';
+    if(row._dwgName && row._dwgName !== lastDwgName){
+      lastDwgName = row._dwgName;
+      header = `<tr style="background:var(--blue-light)"><td colspan="10" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none">📄 ${esc(row._dwgName)}</td></tr>`;
+    }
+    return header + `<tr>
+      ${BOM_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${esc(row[c.k]||'')}</td>`).join('')}
+      <td><button class="btn btn-red btn-sm del-row" data-dwgid="${esc(row._dwgId)}" data-idx="${row._idx}" data-fmt="${row._fmt}" title="Delete row">✕</button></td>
+    </tr>`;
+  }).join('');
 
   setContent(`
     <div class="table-wrap"><table>
       <thead><tr>${BOM_COLS.map(c=>`<th style="min-width:${c.w}">${c.l}</th>`).join('')}<th style="width:40px"></th></tr></thead>
-      <tbody id="bom-tbody">${rows||'<tr class="empty-row"><td colspan="10">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
+      <tbody id="bom-tbody">${rowsHtml||'<tr class="empty-row"><td colspan="10">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
     </table></div>
-    <div style="margin-top:8px;font-size:11px;color:var(--muted)">${drawings.length} parts</div>`);
+    <div style="margin-top:8px;font-size:11px;color:var(--muted)">${allRows.length} parts across ${drawings.length} drawing(s)</div>`);
 
-  document.querySelectorAll('.del-row').forEach(btn=>btn.addEventListener('click',async()=>{
-    if(!confirm('Delete this BOM row?')) return;
-    try {
-      await deleteDoc(doc(db,'companies',companyId,'projects',projectId,'drawings',btn.dataset.id));
-      toast('Row deleted','success');
-      renderRFQDetail(projectId, projectName);
-    } catch(e){ toast(e.message,'error'); }
-  }));
+  document.querySelectorAll('.del-row').forEach((btn,ri)=>{
+    btn.addEventListener('click', async()=>{
+      if(!confirm('Delete this BOM row?')) return;
+      const dwgId=btn.dataset.dwgid, idx=parseInt(btn.dataset.idx), fmt=btn.dataset.fmt;
+      try {
+        if(fmt==='doc'){
+          await deleteDoc(doc(db,'companies',companyId,'projects',projectId,'drawings',dwgId));
+        } else {
+          // Remove item at idx from drawing.items array
+          const dwgRef=doc(db,'companies',companyId,'projects',projectId,'drawings',dwgId);
+          const dwgSnap=await getDoc(dwgRef);
+          const items=[...(dwgSnap.data()?.items||[])];
+          items.splice(idx,1);
+          if(items.length===0){
+            await deleteDoc(dwgRef);
+          } else {
+            await updateDoc(dwgRef,{items, updatedAt:serverTimestamp()});
+          }
+        }
+        toast('Row deleted','success');
+        renderRFQDetail(projectId, projectName);
+      } catch(e){ toast(e.message,'error'); }
+    });
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -602,6 +646,10 @@ function openAddDrawingModal(projectId, projectName){
   showModal(`<div class="modal">
     <div class="modal-head"><h3>Add Drawing to ${esc(projectName)}</h3><button class="close-modal" id="modal-close">✕</button></div>
     <div class="modal-body" id="modal-body-inner">
+      <div class="form-field" style="margin-bottom:14px">
+        <label>Drawing Name / Title</label>
+        <input class="form-input" id="drawing-name-inp" placeholder="e.g. KARA-002 or Main Assembly" autocomplete="off">
+      </div>
       <div class="drop-zone" id="drop-zone" tabindex="0">
         <span class="icon-big">📄</span>
         <strong>Drop PDF or Image here</strong>
@@ -623,11 +671,20 @@ function openAddDrawingModal(projectId, projectName){
   dz.addEventListener('click', ()=>fi.click());
   dz.addEventListener('dragover', e=>{e.preventDefault();dz.classList.add('dragover');});
   dz.addEventListener('dragleave', ()=>dz.classList.remove('dragover'));
-  dz.addEventListener('drop', e=>{e.preventDefault();dz.classList.remove('dragover');handleFile(e.dataTransfer.files[0],projectId,projectName);});
-  fi.addEventListener('change', ()=>{ if(fi.files[0]) handleFile(fi.files[0],projectId,projectName); });
+  dz.addEventListener('drop', e=>{
+    e.preventDefault();dz.classList.remove('dragover');
+    const dwgName=document.getElementById('drawing-name-inp')?.value.trim()||'';
+    handleFile(e.dataTransfer.files[0],projectId,projectName,dwgName);
+  });
+  fi.addEventListener('change', ()=>{
+    if(fi.files[0]){
+      const dwgName=document.getElementById('drawing-name-inp')?.value.trim()||'';
+      handleFile(fi.files[0],projectId,projectName,dwgName);
+    }
+  });
 }
 
-async function handleFile(file, projectId, projectName){
+async function handleFile(file, projectId, projectName, drawingName=''){
   if(!file) return;
   const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
   const isImg = file.type.startsWith('image/');
@@ -670,14 +727,18 @@ async function handleFile(file, projectId, projectName){
       return;
     }
 
-    showBOMPreview(extractedRows, projectId, projectName, body, foot);
+    showBOMPreview(extractedRows, projectId, projectName, drawingName, body, foot);
   } catch(e){
-    body.innerHTML += `<p style="color:red;margin-top:12px">Error: ${e.message}</p>`;
-    foot.innerHTML = `<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+    const hint = e.message==='Failed to fetch'
+      ? 'Network error — check your internet connection. If the problem persists, the Anthropic API key may be invalid or expired.'
+      : e.message;
+    body.innerHTML += `<p style="color:red;margin-top:12px">Error: ${hint}</p>`;
+    foot.innerHTML = `<button class="btn btn-ghost" id="modal-cancel-err">Close</button>`;
+    document.getElementById('modal-cancel-err')?.addEventListener('click',closeModal);
   }
 }
 
-function showBOMPreview(rows, projectId, projectName, body, foot){
+function showBOMPreview(rows, projectId, projectName, drawingName, body, foot){
   const PCOLS=['item','drawing_number','part_number','drawing_name','atlantium_pn','description','qty','unit','manufacturer'];
   const PLABELS=['Item','Drawing #','Part #','Dwg Name','Cust PN','Description','QTY','Units','Manufacturer'];
 
@@ -710,19 +771,29 @@ function showBOMPreview(rows, projectId, projectName, body, foot){
       if(Object.values(row).some(v=>v)) updatedRows.push(row);
     });
     if(!updatedRows.length){ toast('No rows to save','error'); return; }
-    await saveBOMToRFQ(updatedRows, projectId, projectName);
+    await saveBOMToRFQ(updatedRows, projectId, projectName, drawingName);
   });
 }
 
-async function saveBOMToRFQ(rows, projectId, projectName){
+async function saveBOMToRFQ(rows, projectId, projectName, drawingName=''){
   const btn=document.getElementById('btn-save-bom');
   if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
   try {
     const col=collection(db,'companies',companyId,'projects',projectId,'drawings');
-    await Promise.all(rows.map(r=>addDoc(col,{...r, createdAt:serverTimestamp()})));
+    const dwgName=drawingName||projectName;
+    // Check if a drawing with this name already exists; update or create
+    const existSnap=await getDocs(col);
+    const existing=existSnap.docs.find(d=>(d.data().name||'')===(dwgName));
+    if(existing){
+      // Merge items into existing drawing
+      const oldItems=existing.data().items||[];
+      await updateDoc(existing.ref,{items:[...oldItems,...rows], updatedAt:serverTimestamp()});
+    } else {
+      await addDoc(col,{name:dwgName, items:rows, updatedAt:serverTimestamp()});
+    }
     // Update project updatedAt
     await updateDoc(doc(db,'companies',companyId,'projects',projectId),{updatedAt:serverTimestamp()});
-    toast(`Saved ${rows.length} BOM rows`,'success');
+    toast(`Saved ${rows.length} BOM rows to drawing "${dwgName}"`,'success');
     closeModal();
     renderRFQDetail(projectId, projectName);
   } catch(e){ toast('Save error: '+e.message,'error'); if(btn){btn.disabled=false;btn.textContent='Save to RFQ';} }
@@ -730,7 +801,11 @@ async function saveBOMToRFQ(rows, projectId, projectName){
 
 // ── PDF text extraction ────────────────────────────────────────────────────────
 async function extractPDFText(file){
-  if(!window.pdfjsLib) throw new Error('PDF.js not loaded');
+  if(!window.pdfjsLib) throw new Error('PDF.js not loaded — please reload the page and try again.');
+  // Lazy worker setup (script may load async after module init)
+  if(!pdfjsLib.GlobalWorkerOptions.workerSrc){
+    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
   const ab = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({data:ab}).promise;
   const parts=[];
@@ -813,7 +888,11 @@ If no BOM is found, return: []`;
       messages
     })
   });
-  if(!resp.ok){ const e=await resp.json(); throw new Error(e.error?.message||`API error ${resp.status}`); }
+  if(!resp.ok){
+    let msg=`API error ${resp.status}`;
+    try { const e=await resp.json(); msg=e.error?.message||msg; } catch{}
+    throw new Error(msg);
+  }
   const data=await resp.json();
   const raw=data.content[0].text.trim();
   // Extract JSON array from response (even if wrapped in markdown)
