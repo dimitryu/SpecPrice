@@ -226,7 +226,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.2.0</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.3.0</div>
     </div>
   </aside>
   <div class="main">
@@ -269,7 +269,8 @@ let currentView = 'part-stock';
 let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
-const APP_VER   = '1.2.0';
+let geminiKey   = '';
+const APP_VER   = '1.3.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -326,7 +327,8 @@ async function initCompany(user) {
       const cSnap = await getDoc(doc(db,'companies',companyId));
       const cData = cSnap.data() || {};
       companyName = cData.name || companyId;
-      anthKey = cData.anthropic_key || '';
+      anthKey   = cData.anthropic_key || '';
+      geminiKey = cData.gemini_key || '';
       document.getElementById('sb-company').textContent = companyName;
     }
   } catch(e) { console.error('initCompany', e); }
@@ -582,7 +584,6 @@ async function renderRFQDetail(projectId, projectName){
     {k:'item',          l:'Item',        w:'45px'},
     {k:'drawing_number',l:'Drawing #',   w:'100px'},
     {k:'part_number',   l:'Part #',      w:'130px'},
-    {k:'drawing_name',  l:'Dwg Name',    w:'120px'},
     {k:'atlantium_pn',  l:'Cust PN',     w:'100px'},
     {k:'description',   l:'Description', w:'210px',wrap:true},
     {k:'qty',           l:'QTY',         w:'55px'},
@@ -596,7 +597,7 @@ async function renderRFQDetail(projectId, projectName){
     let header = '';
     if(row._dwgName && row._dwgName !== lastDwgName){
       lastDwgName = row._dwgName;
-      header = `<tr style="background:var(--blue-light)"><td colspan="10" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none">📄 ${esc(row._dwgName)}</td></tr>`;
+      header = `<tr style="background:var(--blue-light)"><td colspan="9" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none">📄 ${esc(row._dwgName)}</td></tr>`;
     }
     return header + `<tr>
       ${BOM_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${esc(row[c.k]||'')}</td>`).join('')}
@@ -607,7 +608,7 @@ async function renderRFQDetail(projectId, projectName){
   setContent(`
     <div class="table-wrap"><table>
       <thead><tr>${BOM_COLS.map(c=>`<th style="min-width:${c.w}">${c.l}</th>`).join('')}<th style="width:40px"></th></tr></thead>
-      <tbody id="bom-tbody">${rowsHtml||'<tr class="empty-row"><td colspan="10">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
+      <tbody id="bom-tbody">${rowsHtml||'<tr class="empty-row"><td colspan="9">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
     </table></div>
     <div style="margin-top:8px;font-size:11px;color:var(--muted)">${allRows.length} parts across ${drawings.length} drawing(s)</div>`);
 
@@ -641,7 +642,7 @@ async function renderRFQDetail(projectId, projectName){
 // ADD DRAWING MODAL — PDF / Image → AI → BOM
 // ══════════════════════════════════════════════════════════════════════════════
 function openAddDrawingModal(projectId, projectName){
-  if(!anthKey){ showSettingsModal(()=>openAddDrawingModal(projectId,projectName)); return; }
+  if(!anthKey && !geminiKey){ showSettingsModal(()=>openAddDrawingModal(projectId,projectName)); return; }
 
   showModal(`<div class="modal">
     <div class="modal-head"><h3>Add Drawing to ${esc(projectName)}</h3><button class="close-modal" id="modal-close">✕</button></div>
@@ -842,9 +843,9 @@ function encodeImage(file){
   });
 }
 
-// ── Anthropic API BOM extraction ──────────────────────────────────────────────
-async function aiExtractBOM(text, isImage, imgData, filename){
-  const PROMPT=`You are a BOM (Bill of Materials) extraction expert.
+// ── AI BOM extraction: Anthropic → Gemini fallback ────────────────────────────
+const _BOM_PROMPT = (isImage, filename) =>
+  `You are a BOM (Bill of Materials) extraction expert.
 Extract ALL parts from this ${isImage?'image':'document'} ("${filename}") and return them as a JSON array.
 
 Each part object must have EXACTLY these fields (use "" if not found):
@@ -860,45 +861,59 @@ Each part object must have EXACTLY these fields (use "" if not found):
 
 CRITICAL: Return ONLY a valid JSON array. No markdown, no explanation, no extra text.
 Example: [{"item":"1","drawing_number":"DWG-001","part_number":"ABC123","drawing_name":"Main Assembly","atlantium_pn":"","description":"Resistor 10K Ohm","qty":"5","unit":"pcs","manufacturer":"Vishay"}]
-
 If no BOM is found, return: []`;
 
-  const messages = isImage ? [{
-    role:'user',
-    content:[
-      {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
-      {type:'text',text:PROMPT}
-    ]
-  }] : [{
-    role:'user',
-    content: PROMPT + '\n\nDOCUMENT TEXT:\n' + text.slice(0,30000)
-  }];
+function _parseAIJson(raw){
+  const m=raw.match(/\[[\s\S]*\]/);
+  if(!m) return [];
+  try { return JSON.parse(m[0]); } catch { return []; }
+}
 
+async function aiExtractBOM(text, isImage, imgData, filename){
+  if(anthKey){
+    try { return await _anthropicBOM(text, isImage, imgData, filename); }
+    catch(e){
+      if(!geminiKey) throw e;
+      console.warn('Anthropic failed, using Gemini:', e.message);
+    }
+  }
+  if(geminiKey){ return await _geminiBOM(text, isImage, imgData, filename); }
+  throw new Error('No AI API key configured. Add a Gemini or Anthropic key in Settings.');
+}
+
+async function _anthropicBOM(text, isImage, imgData, filename){
+  const PROMPT = _BOM_PROMPT(isImage, filename);
+  const messages = isImage ? [{role:'user',content:[
+    {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
+    {type:'text',text:PROMPT}
+  ]}] : [{role:'user', content: PROMPT+'\n\nDOCUMENT TEXT:\n'+text.slice(0,30000)}];
   const resp = await fetch('https://api.anthropic.com/v1/messages',{
     method:'POST',
-    headers:{
-      'x-api-key': anthKey,
-      'anthropic-version':'2023-06-01',
-      'anthropic-dangerous-allow-browser':'true',
-      'content-type':'application/json',
-    },
-    body:JSON.stringify({
-      model:'claude-haiku-4-5-20251001',
-      max_tokens:4096,
-      messages
-    })
+    headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
+             'anthropic-dangerous-allow-browser':'true','content-type':'application/json'},
+    body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:4096, messages})
   });
-  if(!resp.ok){
-    let msg=`API error ${resp.status}`;
-    try { const e=await resp.json(); msg=e.error?.message||msg; } catch{}
-    throw new Error(msg);
-  }
+  if(!resp.ok){let m=`Anthropic error ${resp.status}`;
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
   const data=await resp.json();
-  const raw=data.content[0].text.trim();
-  // Extract JSON array from response (even if wrapped in markdown)
-  const match=raw.match(/\[[\s\S]*\]/);
-  if(!match) return [];
-  try { return JSON.parse(match[0]); } catch { return []; }
+  return _parseAIJson(data.content[0].text.trim());
+}
+
+async function _geminiBOM(text, isImage, imgData, filename){
+  const PROMPT = _BOM_PROMPT(isImage, filename);
+  const parts = isImage
+    ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:PROMPT}]
+    : [{text: PROMPT+'\n\nDOCUMENT TEXT:\n'+text.slice(0,30000)}];
+  const resp = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+    {method:'POST',headers:{'content-type':'application/json'},
+     body:JSON.stringify({contents:[{parts}]})}
+  );
+  if(!resp.ok){let m=`Gemini error ${resp.status}`;
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
+  const data=await resp.json();
+  const raw=data.candidates?.[0]?.content?.parts?.[0]?.text||'';
+  return _parseAIJson(raw.trim());
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1012,7 +1027,7 @@ async function renderSalesDesk(){
 
   // From File (BOM extraction for Sales Desk)
   document.getElementById('btn-sd-file').addEventListener('click',()=>{
-    if(!anthKey){ showSettingsModal(()=>document.getElementById('btn-sd-file')?.click()); return; }
+    if(!anthKey && !geminiKey){ showSettingsModal(()=>document.getElementById('btn-sd-file')?.click()); return; }
     openSDFileModal();
   });
 }
@@ -1103,15 +1118,19 @@ async function renderSettings(){
   setContent(`
     <div style="max-width:520px">
       <div style="background:#fff;border:1px solid var(--border);border-radius:9px;padding:22px;margin-bottom:14px">
-        <h3 style="margin-bottom:14px;color:var(--blue-dark)">🤖 Anthropic AI</h3>
+        <h3 style="margin-bottom:14px;color:var(--blue-dark)">🤖 AI Keys (BOM extraction)</h3>
         <div class="form-field">
-          <label>API Key (for BOM extraction from PDF/Image)</label>
+          <label>Anthropic API Key <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
           <input class="form-input" id="set-anth" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
+        </div>
+        <div class="form-field">
+          <label>Gemini API Key <span style="font-weight:400;color:var(--muted)">(recommended — works in browser)</span></label>
+          <input class="form-input" id="set-gemini" type="password" placeholder="AIzaSy…" value="${esc(geminiKey)}">
+          <p style="margin-top:4px;font-size:11px;color:var(--muted)">Free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a></p>
         </div>
         <button class="btn btn-blue" id="btn-save-anth">Save</button>
         <p style="margin-top:8px;font-size:11px;color:var(--muted)">
-          Get your key at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>.
-          Stored securely in your company's Firestore.
+          App tries Anthropic first; falls back to Gemini automatically.
         </p>
       </div>
       <div style="background:#fff;border:1px solid var(--border);border-radius:9px;padding:22px">
@@ -1123,10 +1142,11 @@ async function renderSettings(){
 
   document.getElementById('btn-save-anth').addEventListener('click',async()=>{
     const key=document.getElementById('set-anth').value.trim();
+    const gKey=document.getElementById('set-gemini')?.value.trim()||'';
     try {
-      await updateDoc(doc(db,'companies',companyId),{anthropic_key:key});
-      anthKey=key;
-      toast('API key saved','success');
+      await updateDoc(doc(db,'companies',companyId),{anthropic_key:key, gemini_key:gKey});
+      anthKey=key; geminiKey=gKey;
+      toast('API keys saved','success');
     } catch(e){ toast(e.message,'error'); }
   });
 }
@@ -1135,31 +1155,6 @@ function showSettingsModal(callback){
   showModal(`<div class="modal modal-sm">
     <div class="modal-head"><h3>🤖 Anthropic API Key needed</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
-      <p style="margin-bottom:12px;color:var(--muted)">Enter your Anthropic API key to use AI features (BOM extraction from PDF/Image).</p>
+      <p style="margin-bottom:12px;color:var(--muted)">Enter an AI API key to enable BOM extraction. <strong>Gemini</strong> (recommended) is free at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>. Anthropic key also works.</p>
       <div class="form-field">
-        <label>API Key</label>
-        <input class="form-input" id="inline-anth" type="password" placeholder="sk-ant-…">
-      </div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-blue" id="btn-save-inline-anth">Save & Continue</button>
-    </div>
-  </div>`);
-
-  document.getElementById('btn-save-inline-anth').addEventListener('click',async()=>{
-    const key=document.getElementById('inline-anth').value.trim();
-    if(!key){ toast('Please enter a key','error'); return; }
-    try {
-      await updateDoc(doc(db,'companies',companyId),{anthropic_key:key});
-      anthKey=key; closeModal(); toast('Key saved','success');
-      if(callback) setTimeout(callback,300);
-    } catch(e){ toast(e.message,'error'); }
-  });
-}
-
-// ── Make closeModal global so inline onclick works ────────────────────────────
-window.closeModal = closeModal;
-</script>
-</body>
-</html>
+        <label>API Key</l
