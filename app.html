@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SpecPrice — App</title>
+  <title>SpecPrice</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -14,642 +15,498 @@
       --blue-light: #EBF3FB;
       --text:       #1A202C;
       --muted:      #718096;
-      --border:     #E2E8F0;
+      --border:     #CBD5E0;
       --green:      #1B6B3A;
       --green-bg:   #D4EDDA;
       --red:        #9B1C1C;
       --red-bg:     #FDE8E8;
       --row-alt:    #F0F6FB;
-      --row-even:   #FFFFFF;
     }
-    html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; }
-
-    /* ---------- Splash ---------- */
-    #splash {
-      position: fixed; inset: 0; background: var(--blue-dark);
-      display: flex; align-items: center; justify-content: center;
-      flex-direction: column; gap: 16px; z-index: 999;
-    }
-    #splash h1 { color: #fff; font-size: 22px; font-weight: 700; }
-    .ring {
-      width: 36px; height: 36px;
-      border: 3px solid rgba(255,255,255,.25); border-top-color: #fff;
-      border-radius: 50%; animation: spin .8s linear infinite;
-    }
+    html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
 
-    /* ---------- Layout ---------- */
-    #shell { display: flex; height: 100vh; }
+    /* ── Splash ── */
+    #splash { position:fixed; inset:0; background:var(--blue-dark); display:flex; align-items:center;
+              justify-content:center; flex-direction:column; gap:16px; z-index:999; }
+    #splash h1 { color:#fff; font-size:22px; font-weight:700; }
+    .ring { width:34px; height:34px; border:3px solid rgba(255,255,255,.2); border-top-color:#fff;
+            border-radius:50%; animation:spin .8s linear infinite; }
 
-    /* Sidebar */
-    aside {
-      width: var(--sidebar-w); background: var(--blue-dark); color: #CBD5E0;
-      display: flex; flex-direction: column; flex-shrink: 0;
-      overflow: hidden;
-    }
-    .sb-brand {
-      padding: 18px 16px 10px; font-size: 17px; font-weight: 700;
-      color: #fff; border-bottom: 1px solid rgba(255,255,255,.08);
-    }
-    .sb-company {
-      padding: 8px 16px 12px; font-size: 11px; color: #90A4AE;
-      letter-spacing: .3px; border-bottom: 1px solid rgba(255,255,255,.08);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    nav { flex: 1; padding: 8px 0; }
-    .nav-item {
-      display: flex; align-items: center; gap: 9px;
-      padding: 9px 18px; cursor: pointer; font-size: 13px;
-      color: #B0BEC5; transition: background .12s, color .12s;
-      user-select: none; border-left: 3px solid transparent;
-    }
-    .nav-item:hover   { background: rgba(255,255,255,.07); color: #fff; }
-    .nav-item.active  { background: rgba(46,117,182,.3); color: #fff;
-                        border-left-color: var(--blue-mid); }
-    .nav-item .icon   { font-size: 15px; width: 20px; text-align: center; }
-    .sb-foot {
-      padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.08);
-      font-size: 11px; color: #90A4AE;
-    }
-    #user-email-sb { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 8px; }
-    .btn-signout {
-      width: 100%; padding: 6px; background: rgba(255,255,255,.08);
-      border: 1px solid rgba(255,255,255,.12); border-radius: 5px;
-      color: #B0BEC5; font-size: 12px; cursor: pointer; transition: background .12s;
-    }
-    .btn-signout:hover { background: rgba(255,255,255,.15); color: #fff; }
+    /* ── Shell ── */
+    #shell { display:flex; height:100vh; }
+    aside { width:var(--sidebar-w); background:var(--blue-dark); color:#CBD5E0;
+            display:flex; flex-direction:column; flex-shrink:0; overflow:hidden; }
+    .sb-brand { padding:18px 16px 10px; font-size:17px; font-weight:700; color:#fff;
+                border-bottom:1px solid rgba(255,255,255,.08); }
+    .sb-company { padding:7px 16px 10px; font-size:11px; color:#90A4AE;
+                  border-bottom:1px solid rgba(255,255,255,.08);
+                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    nav { flex:1; padding:6px 0; overflow-y:auto; }
+    .nav-item { display:flex; align-items:center; gap:9px; padding:9px 18px; cursor:pointer;
+                font-size:13px; color:#B0BEC5; transition:background .12s, color .12s;
+                user-select:none; border-left:3px solid transparent; }
+    .nav-item:hover { background:rgba(255,255,255,.07); color:#fff; }
+    .nav-item.active { background:rgba(46,117,182,.3); color:#fff; border-left-color:var(--blue-mid); }
+    .nav-item .icon { font-size:15px; width:20px; text-align:center; }
+    .sb-foot { padding:10px 14px; border-top:1px solid rgba(255,255,255,.08); font-size:11px; color:#90A4AE; }
+    #user-email-sb { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:7px; }
+    .btn-signout { width:100%; padding:5px; background:rgba(255,255,255,.08);
+                   border:1px solid rgba(255,255,255,.12); border-radius:5px;
+                   color:#B0BEC5; font-size:11px; cursor:pointer; }
+    .btn-signout:hover { background:rgba(255,255,255,.15); color:#fff; }
 
-    /* Main area */
-    .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    /* ── Main ── */
+    .main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+    .topbar { height:var(--topbar-h); background:#fff; border-bottom:1px solid var(--border);
+              display:flex; align-items:center; padding:0 18px; gap:10px; flex-shrink:0; }
+    .topbar h2 { font-size:15px; font-weight:700; color:var(--blue-dark); flex:1; }
+    #content { flex:1; overflow:auto; padding:18px; background:#F7FAFC; }
 
-    /* Topbar */
-    .topbar {
-      height: var(--topbar-h); background: #fff; border-bottom: 1px solid var(--border);
-      display: flex; align-items: center; padding: 0 20px; gap: 12px; flex-shrink: 0;
-    }
-    .topbar h2 { font-size: 15px; font-weight: 700; color: var(--blue-dark); flex: 1; }
-    .topbar-actions { display: flex; gap: 8px; }
+    /* ── Buttons ── */
+    .btn { display:inline-flex; align-items:center; gap:6px; padding:7px 13px; border:none;
+           border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; transition:opacity .12s; }
+    .btn:hover:not(:disabled) { opacity:.85; }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+    .btn-blue   { background:var(--blue-mid); color:#fff; }
+    .btn-green  { background:#1F8B4C; color:#fff; }
+    .btn-red    { background:#E53E3E; color:#fff; }
+    .btn-ghost  { background:var(--blue-light); color:var(--blue-dark); }
+    .btn-sm     { padding:4px 9px; font-size:11px; }
 
-    /* Content */
-    #content { flex: 1; overflow: auto; padding: 20px; background: #F7FAFC; }
+    /* ── Toolbar ── */
+    .toolbar { display:flex; align-items:center; gap:9px; margin-bottom:13px; flex-wrap:wrap; }
+    .search-box { flex:1; min-width:200px; padding:7px 11px; border:1.5px solid var(--border);
+                  border-radius:7px; font-size:13px; outline:none; color:var(--text); }
+    .search-box:focus { border-color:var(--blue-mid); box-shadow:0 0 0 3px rgba(46,117,182,.1); }
+    .count-badge { font-size:11px; color:var(--muted); white-space:nowrap; }
 
-    /* Toolbar */
-    .toolbar {
-      display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap;
-    }
-    .search-box {
-      flex: 1; min-width: 220px; padding: 7px 12px;
-      border: 1.5px solid var(--border); border-radius: 7px;
-      font-size: 13px; outline: none; color: var(--text);
-    }
-    .search-box:focus { border-color: var(--blue-mid); box-shadow: 0 0 0 3px rgba(46,117,182,.1); }
-    .count-badge {
-      font-size: 12px; color: var(--muted); white-space: nowrap;
-    }
-    .btn-action {
-      padding: 7px 14px; border: none; border-radius: 6px;
-      font-size: 12px; font-weight: 600; cursor: pointer; transition: opacity .12s;
-    }
-    .btn-action:hover { opacity: .85; }
-    .btn-blue  { background: var(--blue-mid); color: #fff; }
-    .btn-green { background: #1F8B4C; color: #fff; }
+    /* ── Tables ── */
+    .table-wrap { overflow:auto; border-radius:8px; border:1px solid var(--border); background:#fff; }
+    table { width:100%; border-collapse:collapse; font-size:12.5px; }
+    thead th { position:sticky; top:0; z-index:2; background:var(--blue-mid); color:#fff;
+               font-weight:600; padding:7px 9px; text-align:left; white-space:nowrap;
+               cursor:pointer; user-select:none; border-right:1px solid rgba(255,255,255,.25); }
+    thead th:last-child { border-right:none; }
+    thead th:hover { background:#1F5B92; }
+    tbody tr:nth-child(odd)  { background:#FFFFFF; }
+    tbody tr:nth-child(even) { background:var(--row-alt); }
+    tbody tr:hover { background:#D6EAF8 !important; }
+    td { padding:5px 9px; border-bottom:1px solid #EDF2F7; border-right:1px solid #E2E8F0;
+         white-space:nowrap; vertical-align:middle; }
+    td:last-child { border-right:none; }
+    td.wrap { white-space:normal; max-width:240px; line-height:1.3; }
+    td[contenteditable="true"] { outline:2px solid var(--blue-mid); outline-offset:-2px;
+                                  background:#FFFDE7 !important; min-width:60px; }
+    .price-green { color:var(--green); background:var(--green-bg); font-weight:600;
+                   border-radius:4px; padding:1px 6px; }
+    .price-red   { color:var(--red);   background:var(--red-bg);   font-weight:600;
+                   border-radius:4px; padding:1px 6px; }
+    .empty-row td { text-align:center; padding:40px; color:var(--muted); border-right:none; }
 
-    /* Table */
-    .table-wrap { overflow: auto; border-radius: 9px; border: 1px solid var(--border); background: #fff; }
-    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-    thead th {
-      position: sticky; top: 0; z-index: 2;
-      background: var(--blue-mid); color: #fff; font-weight: 600;
-      padding: 8px 10px; text-align: left; white-space: nowrap;
-      cursor: pointer; user-select: none;
-    }
-    thead th:hover { background: #1F5B92; }
-    tbody tr:nth-child(odd)  { background: var(--row-even); }
-    tbody tr:nth-child(even) { background: var(--row-alt); }
-    tbody tr:hover { background: #D6EAF8; }
-    td { padding: 6px 10px; border-bottom: 1px solid #EDF2F7; white-space: nowrap; }
-    td.wrap { white-space: normal; max-width: 240px; }
-    .price-green { color: var(--green); background: var(--green-bg); font-weight: 600; border-radius: 4px; padding: 2px 6px; }
-    .price-red   { color: var(--red);   background: var(--red-bg);   font-weight: 600; border-radius: 4px; padding: 2px 6px; }
+    /* ── Cards ── */
+    .card-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; }
+    .rfq-card { background:#fff; border:1px solid var(--border); border-radius:9px;
+                padding:14px 16px; cursor:pointer; transition:box-shadow .12s, border-color .12s;
+                animation:fadeIn .2s; display:flex; align-items:flex-start; gap:12px; }
+    .rfq-card:hover { box-shadow:0 4px 16px rgba(0,0,0,.1); border-color:var(--blue-mid); }
+    .rfq-card-body { flex:1; min-width:0; }
+    .rfq-card h3 { font-size:13px; font-weight:700; color:var(--blue-dark);
+                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .rfq-card p  { font-size:11px; color:var(--muted); margin-top:3px; }
+    .rfq-card-icon { font-size:24px; flex-shrink:0; }
 
-    /* Empty / loading */
-    .placeholder { text-align: center; padding: 60px 20px; color: var(--muted); }
-    .placeholder .big { font-size: 36px; margin-bottom: 10px; }
+    /* ── Back / Breadcrumb ── */
+    .breadcrumb { display:flex; align-items:center; gap:6px; margin-bottom:13px; font-size:12px; }
+    .breadcrumb a { color:var(--blue-mid); cursor:pointer; }
+    .breadcrumb a:hover { text-decoration:underline; }
+    .breadcrumb span { color:var(--muted); }
 
-    /* RFQ list */
-    .rfq-list { display: grid; gap: 10px; }
-    .rfq-card {
-      background: #fff; border: 1px solid var(--border); border-radius: 9px;
-      padding: 14px 18px; cursor: pointer; transition: box-shadow .12s, border-color .12s;
-    }
-    .rfq-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.08); border-color: var(--blue-mid); }
-    .rfq-card h3 { font-size: 14px; color: var(--blue-dark); }
-    .rfq-card p  { font-size: 11px; color: var(--muted); margin-top: 3px; }
-    .back-btn {
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 5px 12px; background: var(--blue-light); border: none;
-      border-radius: 6px; font-size: 12px; font-weight: 600;
-      color: var(--blue-dark); cursor: pointer; margin-bottom: 14px;
-    }
-    .back-btn:hover { background: #D0E8F5; }
+    /* ── Drop zone ── */
+    .drop-zone { border:2px dashed var(--border); border-radius:10px; padding:40px 20px;
+                 text-align:center; cursor:pointer; transition:border-color .15s, background .15s; }
+    .drop-zone:hover, .drop-zone.dragover { border-color:var(--blue-mid); background:var(--blue-light); }
+    .drop-zone p { color:var(--muted); font-size:13px; margin-top:8px; }
+    .drop-zone .icon-big { font-size:40px; display:block; margin-bottom:8px; }
 
-    /* Sales Desk */
-    .sd-layout { display: grid; grid-template-columns: 1fr 340px; gap: 16px; height: 100%; }
-    .sd-panel { background: #fff; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
-    .sd-panel-title {
-      padding: 10px 14px; font-size: 12px; font-weight: 700;
-      color: var(--blue-dark); background: var(--blue-light);
-      border-bottom: 1px solid var(--border);
-    }
-    .sd-scroll { overflow: auto; max-height: calc(100vh - 160px); }
-    .summary-row { display: flex; justify-content: space-between; padding: 8px 14px;
-                   font-size: 13px; border-bottom: 1px solid var(--border); }
-    .summary-row strong { color: var(--blue-dark); }
-    .summary-total { background: var(--blue-dark); color: #fff; padding: 12px 14px;
-                     display: flex; justify-content: space-between; font-weight: 700; }
+    /* ── Modal ── */
+    .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex;
+                align-items:center; justify-content:center; z-index:200;
+                animation:fadeIn .15s; }
+    .modal { background:#fff; border-radius:12px; width:min(94vw,860px);
+             max-height:90vh; display:flex; flex-direction:column;
+             box-shadow:0 24px 64px rgba(0,0,0,.3); overflow:hidden; }
+    .modal-sm { width:min(94vw,420px); }
+    .modal-head { padding:16px 20px; border-bottom:1px solid var(--border);
+                  display:flex; align-items:center; gap:10px; flex-shrink:0; }
+    .modal-head h3 { font-size:15px; font-weight:700; color:var(--blue-dark); flex:1; }
+    .modal-body { padding:20px; overflow-y:auto; flex:1; }
+    .modal-foot { padding:12px 20px; border-top:1px solid var(--border);
+                  display:flex; gap:8px; justify-content:flex-end; flex-shrink:0; }
+    .close-modal { background:none; border:none; font-size:18px; cursor:pointer;
+                   color:var(--muted); line-height:1; padding:2px 4px; }
+    .close-modal:hover { color:var(--text); }
 
-    /* Company selector modal */
-    .modal-bg {
-      position: fixed; inset: 0; background: rgba(0,0,0,.5);
-      display: flex; align-items: center; justify-content: center; z-index: 500;
+    /* ── Form ── */
+    .form-field { margin-bottom:14px; }
+    .form-field label { display:block; font-size:11px; font-weight:700; color:var(--muted);
+                        text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
+    .form-input { width:100%; padding:8px 11px; border:1.5px solid var(--border);
+                  border-radius:7px; font-size:13px; outline:none; }
+    .form-input:focus { border-color:var(--blue-mid); }
+
+    /* ── Sales Desk ── */
+    .sd-split { display:grid; grid-template-columns:1fr 300px; gap:14px; height:calc(100vh - 110px); }
+    .sd-panel { background:#fff; border:1px solid var(--border); border-radius:9px;
+                display:flex; flex-direction:column; overflow:hidden; }
+    .sd-panel-title { padding:9px 13px; font-size:12px; font-weight:700;
+                      color:var(--blue-dark); background:var(--blue-light);
+                      border-bottom:1px solid var(--border); flex-shrink:0; }
+    .sd-scroll { flex:1; overflow:auto; }
+    .summary-row { display:flex; justify-content:space-between; padding:7px 13px;
+                   font-size:12px; border-bottom:1px solid #EDF2F7; }
+    .summary-total { background:var(--blue-dark); color:#fff; padding:11px 13px;
+                     display:flex; justify-content:space-between; font-weight:700; font-size:13px; }
+
+    /* ── Suggest dropdown ── */
+    .suggest-wrap { position:relative; flex:1; }
+    .suggest-list { position:absolute; top:100%; left:0; right:0; background:#fff;
+                    border:1px solid var(--border); border-radius:7px;
+                    box-shadow:0 8px 24px rgba(0,0,0,.12); z-index:50; max-height:260px;
+                    overflow-y:auto; animation:fadeIn .1s; }
+    .suggest-item { padding:8px 12px; cursor:pointer; border-bottom:1px solid #EDF2F7;
+                    font-size:12px; }
+    .suggest-item:hover { background:var(--blue-light); }
+    .suggest-item:last-child { border-bottom:none; }
+    .suggest-item strong { color:var(--blue-dark); }
+
+    /* ── Toast ── */
+    .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+             padding:10px 20px; border-radius:8px; font-size:13px; font-weight:600;
+             z-index:900; animation:fadeIn .2s; white-space:nowrap; }
+    .toast-info    { background:var(--blue-dark); color:#fff; }
+    .toast-success { background:#1F8B4C; color:#fff; }
+    .toast-error   { background:#C0392B; color:#fff; }
+
+    /* ── Progress bar ── */
+    .progress-bar { height:4px; background:var(--blue-light); border-radius:2px; overflow:hidden; margin-top:8px; }
+    .progress-fill { height:100%; background:var(--blue-mid); width:0%;
+                     transition:width .3s; border-radius:2px; }
+
+    /* ── AI status ── */
+    .ai-status { display:flex; align-items:center; gap:8px; padding:10px 14px;
+                 background:var(--blue-light); border-radius:7px; margin-bottom:12px; font-size:12px; }
+    .ai-status .ring { width:16px; height:16px; border-width:2px; flex-shrink:0; }
+    .ai-status .ring.done { border-color:var(--green); border-top-color:var(--green);
+                             animation:none; }
+
+    @media print {
+      aside, .topbar, .toolbar { display:none !important; }
+      #content { padding:0 !important; background:#fff !important; overflow:visible !important; }
+      #shell { display:block; height:auto; }
+      .main { overflow:visible; }
+      table { font-size:11px; }
     }
-    .modal {
-      background: #fff; border-radius: 12px; padding: 28px;
-      min-width: 320px; max-width: 480px; box-shadow: 0 24px 64px rgba(0,0,0,.25);
-    }
-    .modal h3 { font-size: 16px; margin-bottom: 16px; color: var(--blue-dark); }
-    .company-card {
-      padding: 12px 16px; border: 1.5px solid var(--border); border-radius: 8px;
-      margin-bottom: 8px; cursor: pointer; transition: border-color .12s, background .12s;
-      font-size: 14px; font-weight: 600; color: var(--blue-dark);
-    }
-    .company-card:hover { border-color: var(--blue-mid); background: var(--blue-light); }
   </style>
 </head>
 <body>
 
-<!-- Splash -->
-<div id="splash">
-  <h1>⚡ SpecPrice</h1>
-  <div class="ring"></div>
-</div>
+<div id="splash"><h1>⚡ SpecPrice</h1><div class="ring"></div></div>
 
-<!-- Main shell (hidden until ready) -->
 <div id="shell" style="display:none">
   <aside>
     <div class="sb-brand">⚡ SpecPrice</div>
     <div class="sb-company" id="sb-company">—</div>
     <nav>
-      <div class="nav-item active" data-view="part-stock">
-        <span class="icon">📦</span> Part Stock
-      </div>
-      <div class="nav-item" data-view="rfq">
-        <span class="icon">📋</span> RFQ List
-      </div>
-      <div class="nav-item" data-view="sales-desk">
-        <span class="icon">💰</span> Sales Desk
-      </div>
+      <div class="nav-item active" data-view="part-stock"><span class="icon">📦</span>Part Stock</div>
+      <div class="nav-item" data-view="rfq"><span class="icon">📋</span>RFQ</div>
+      <div class="nav-item" data-view="sales-desk"><span class="icon">💰</span>Sales Desk</div>
+      <div class="nav-item" data-view="settings"><span class="icon">⚙️</span>Settings</div>
     </nav>
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
     </div>
   </aside>
-
   <div class="main">
     <div class="topbar">
       <h2 id="page-title">Part Stock</h2>
-      <div class="topbar-actions" id="topbar-actions"></div>
+      <div id="topbar-actions" style="display:flex;gap:8px"></div>
     </div>
-    <div id="content"><div class="placeholder"><div class="big">⏳</div>Loading…</div></div>
+    <div id="content"></div>
   </div>
 </div>
 
+<div id="toast-el" class="toast toast-info" style="display:none"></div>
+
 <script type="module">
-import { initializeApp }            from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js';
+import { initializeApp }       from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js';
 import { getAuth, onAuthStateChanged, signOut }
-                                    from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
-import { getFirestore, doc, getDoc, getDocs, collection, query, orderBy }
-                                    from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js';
+                               from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
+import { getFirestore, doc, getDoc, getDocs, setDoc, addDoc,
+         updateDoc, deleteDoc, collection, query, orderBy, serverTimestamp }
+                               from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js';
 
 // ── Firebase ──────────────────────────────────────────────────────────────────
-const app = initializeApp({
-  apiKey:            "AIzaSyCyRRnbEE_h7KC5RieXiNcVAZv_aaiqNK4",
-  authDomain:        "specprice-236a2.firebaseapp.com",
-  projectId:         "specprice-236a2",
-  storageBucket:     "specprice-236a2.firebasestorage.app",
-  messagingSenderId: "294680326166",
-  appId:             "1:294680326166:web:d3ef0602f2103c87b30537"
+const FB = initializeApp({
+  apiKey:"AIzaSyCyRRnbEE_h7KC5RieXiNcVAZv_aaiqNK4",
+  authDomain:"specprice-236a2.firebaseapp.com",
+  projectId:"specprice-236a2",
+  storageBucket:"specprice-236a2.firebasestorage.app",
+  messagingSenderId:"294680326166",
+  appId:"1:294680326166:web:d3ef0602f2103c87b30537"
 });
-const auth = getAuth(app);
-const db   = getFirestore(app);
+const auth = getAuth(FB);
+const db   = getFirestore(FB);
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let companyId   = '';
 let companyName = '';
 let allParts    = [];
+let anthKey     = '';
 let currentView = 'part-stock';
 let sortCol     = 'part_number';
 let sortAsc     = true;
-let sdItems     = [];   // sales desk rows
+let sdItems     = [];
 
-// ── Auth guard ────────────────────────────────────────────────────────────────
+// ── PDF.js ────────────────────────────────────────────────────────────────────
+if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
 onAuthStateChanged(auth, async user => {
   if (!user) { location.href = 'index.html'; return; }
   document.getElementById('user-email-sb').textContent = user.email;
   await initCompany(user);
-  hideSplash();
+  document.getElementById('splash').style.display = 'none';
+  document.getElementById('shell').style.display = 'flex';
   route('part-stock');
 });
+document.getElementById('logout-btn').addEventListener('click',
+  () => signOut(auth).then(() => location.href = 'index.html'));
 
-document.getElementById('logout-btn').addEventListener('click', () => {
-  signOut(auth).then(() => location.href = 'index.html');
-});
-
-// ── Company init ──────────────────────────────────────────────────────────────
+// ── Company ───────────────────────────────────────────────────────────────────
 async function initCompany(user) {
-  // Try user doc first
-  const uSnap = await getDoc(doc(db, 'users', user.uid));
-  const uData = uSnap.data() || {};
-  companyId = uData.company_id || '';
-
-  if (!companyId) {
-    // Fall back: list companies and pick (or show selector)
-    const snap = await getDocs(collection(db, 'companies'));
-    if (snap.size === 1) {
-      companyId = snap.docs[0].id;
-    } else if (snap.size > 1) {
-      companyId = await pickCompany(snap.docs);
+  try {
+    const uSnap = await getDoc(doc(db,'users',user.uid));
+    companyId = (uSnap.data()||{}).company_id || '';
+    if (!companyId) {
+      const snap = await getDocs(collection(db,'companies'));
+      if (snap.size === 1) companyId = snap.docs[0].id;
+      else if (snap.size > 1) companyId = await pickCompany(snap.docs);
     }
-  }
-
-  if (companyId) {
-    const cSnap = await getDoc(doc(db, 'companies', companyId));
-    companyName = cSnap.data()?.name || companyId;
-    document.getElementById('sb-company').textContent = companyName;
-  }
+    if (companyId) {
+      const cSnap = await getDoc(doc(db,'companies',companyId));
+      const cData = cSnap.data() || {};
+      companyName = cData.name || companyId;
+      anthKey = cData.anthropic_key || '';
+      document.getElementById('sb-company').textContent = companyName;
+    }
+  } catch(e) { console.error('initCompany', e); }
 }
-
 function pickCompany(docs) {
   return new Promise(resolve => {
-    const bg = document.createElement('div');
-    bg.className = 'modal-bg';
-    bg.innerHTML = `<div class="modal">
-      <h3>Select Company</h3>
-      ${docs.map(d => `<div class="company-card" data-id="${d.id}">${d.data().name || d.id}</div>`).join('')}
-    </div>`;
-    bg.querySelectorAll('.company-card').forEach(el => {
-      el.addEventListener('click', () => { document.body.removeChild(bg); resolve(el.dataset.id); });
-    });
+    const bg = mkEl('div','modal-bg');
+    bg.innerHTML = `<div class="modal modal-sm"><div class="modal-head"><h3>Select Company</h3></div>
+      <div class="modal-body">${docs.map(d=>`<div class="rfq-card" data-id="${d.id}" style="margin-bottom:8px">
+        <div class="rfq-card-icon">🏢</div><div class="rfq-card-body"><h3>${esc(d.data().name||d.id)}</h3></div>
+      </div>`).join('')}</div></div>`;
+    bg.querySelectorAll('.rfq-card').forEach(el=>el.addEventListener('click',()=>{
+      document.body.removeChild(bg); resolve(el.dataset.id);
+    }));
     document.body.appendChild(bg);
   });
 }
 
-// ── Router ────────────────────────────────────────────────────────────────────
-function route(view) {
-  currentView = view || 'part-stock';
-  document.querySelectorAll('.nav-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.view === currentView);
-  });
-  document.getElementById('topbar-actions').innerHTML = '';
-  const TITLES = { 'part-stock': '📦 Part Stock', 'rfq': '📋 RFQ List', 'sales-desk': '💰 Sales Desk' };
-  document.getElementById('page-title').textContent = TITLES[currentView] || '';
-  if      (currentView === 'part-stock')  renderPartStock();
-  else if (currentView === 'rfq')         renderRFQ();
-  else if (currentView === 'sales-desk')  renderSalesDesk();
-}
-
-document.querySelectorAll('.nav-item').forEach(el => {
-  el.addEventListener('click', () => route(el.dataset.view));
-});
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function hideSplash() {
-  document.getElementById('splash').style.display = 'none';
-  document.getElementById('shell').style.display  = 'flex';
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function mkEl(tag,cls='',html=''){const e=document.createElement(tag);if(cls)e.className=cls;if(html)e.innerHTML=html;return e;}
+function fmtPrice(v){const n=parseFloat(v);return isNaN(n)||n===0?'':'$'+n.toFixed(4);}
+function fmtDate(v){if(!v)return'';try{const d=v.toDate?v.toDate():new Date(v);return d.toLocaleDateString('en-GB');}catch{return String(v);}}
+function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};}
+function nowISO(){return new Date().toISOString();}
+
+let toastTimer;
+function toast(msg,type='info'){
+  const el=document.getElementById('toast-el');
+  el.textContent=msg; el.className=`toast toast-${type}`; el.style.display='block';
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.style.display='none',3500);
 }
 
-function fmt(v) { return v ? String(v) : ''; }
-function fmtPrice(v) {
-  const n = parseFloat(v);
-  return isNaN(n) || n === 0 ? '' : '$' + n.toFixed(4);
+function showModal(html){
+  closeModal();
+  const bg=mkEl('div','modal-bg'); bg.id='modal-bg';
+  bg.innerHTML=html; document.body.appendChild(bg);
+  bg.addEventListener('click',e=>{if(e.target===bg)closeModal();});
+  return bg;
 }
-function fmtDate(v) {
-  if (!v) return '';
-  try {
-    const d = v.toDate ? v.toDate() : new Date(v);
-    return d.toLocaleDateString('en-GB');
-  } catch { return fmt(v); }
+function closeModal(){const m=document.getElementById('modal-bg');if(m)m.remove();}
+
+function setContent(html){document.getElementById('content').innerHTML=html;}
+function setActions(html){document.getElementById('topbar-actions').innerHTML=html;}
+
+// ── Router ────────────────────────────────────────────────────────────────────
+function route(v){
+  currentView=v||'part-stock';
+  document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.view===currentView));
+  const TITLES={'part-stock':'📦 Part Stock','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','settings':'⚙️ Settings'};
+  document.getElementById('page-title').textContent=TITLES[currentView]||'';
+  setActions('');
+  if(currentView==='part-stock') renderPartStock();
+  else if(currentView==='rfq') renderRFQList();
+  else if(currentView==='sales-desk') renderSalesDesk();
+  else if(currentView==='settings') renderSettings();
 }
-function debounce(fn, ms) {
-  let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
-}
-function esc(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',()=>route(el.dataset.view)));
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PART STOCK
+// ══════════════════════════════════════════════════════════════════════════════
+async function loadParts(){
+  if(allParts.length>0) return;
+  const snap=await getDocs(collection(db,'companies',companyId,'parts_cache'));
+  allParts=snap.docs.map(d=>({_id:d.id,...d.data()}));
 }
 
-// ── PART STOCK ────────────────────────────────────────────────────────────────
-async function loadParts() {
-  if (allParts.length > 0) return;
-  const snap = await getDocs(collection(db, 'companies', companyId, 'parts_cache'));
-  allParts = snap.docs.map(d => ({ _id: d.id, ...d.data() }));
-}
+async function renderPartStock(filter=''){
+  setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading parts…</div>`);
+  setActions('');
+  try { await loadParts(); } catch(e){ setContent(`<p style="color:red;padding:20px">${e.message}</p>`); return; }
 
-function sortParts(parts) {
-  const k = sortCol;
-  return [...parts].sort((a, b) => {
-    let va = String(a[k] || '').toLowerCase();
-    let vb = String(b[k] || '').toLowerCase();
-    // numeric sort for price columns
-    if (['price','priority_price'].includes(k)) {
-      va = parseFloat(a[k]) || 0;
-      vb = parseFloat(b[k]) || 0;
-    }
-    if (va < vb) return sortAsc ? -1 : 1;
-    if (va > vb) return sortAsc ?  1 : -1;
-    return 0;
-  });
-}
-
-async function renderPartStock(filterText) {
-  const content = document.getElementById('content');
-  content.innerHTML = '<div class="placeholder"><div class="big">⏳</div>Loading parts…</div>';
-
-  try {
-    await loadParts();
-  } catch (e) {
-    content.innerHTML = `<div class="placeholder"><div class="big">⚠️</div>${e.message}</div>`;
-    return;
-  }
-
-  const q = (filterText || '').toLowerCase().trim();
-  const filtered = q
-    ? allParts.filter(p =>
-        [p.part_number, p.drawing_number, p.drawing_name, p.description, p.manufacturer, p.atlantium_pn]
-          .some(v => String(v || '').toLowerCase().includes(q)))
+  const q=(filter||'').toLowerCase().trim();
+  const filtered=q
+    ? allParts.filter(p=>[p.part_number,p.drawing_number,p.drawing_name,p.description,p.manufacturer,p.atlantium_pn]
+        .some(v=>String(v||'').toLowerCase().includes(q)))
     : allParts;
 
-  const sorted = sortParts(filtered);
+  const sorted=[...filtered].sort((a,b)=>{
+    let va=String(a[sortCol]||'').toLowerCase(), vb=String(b[sortCol]||'').toLowerCase();
+    if(['price','priority_price'].includes(sortCol)){va=parseFloat(a[sortCol])||0;vb=parseFloat(b[sortCol])||0;}
+    return sortAsc?(va<vb?-1:va>vb?1:0):(va<vb?1:va>vb?-1:0);
+  });
 
-  const cols = [
-    { k: 'part_number',    label: 'Part Number',   w: '130px' },
-    { k: 'drawing_number', label: 'Drawing #',      w: '100px' },
-    { k: 'drawing_name',   label: 'Drawing Name',   w: '130px' },
-    { k: 'atlantium_pn',   label: 'Customer PN',    w: '110px' },
-    { k: 'description',    label: 'Description',    w: '220px', wrap: true },
-    { k: 'manufacturer',   label: 'Manufacturer',   w: '110px' },
-    { k: 'price',          label: 'FC Price',        w: '90px'  },
-    { k: 'priority_price', label: 'Priority Price',  w: '100px' },
-    { k: 'qty',            label: 'QTY',             w: '60px'  },
-    { k: 'unit',           label: 'Units',           w: '60px'  },
-    { k: 'updatedAt',      label: 'Updated',         w: '90px'  },
+  const COLS=[
+    {k:'part_number',   l:'Part Number',    w:'120px'},
+    {k:'drawing_number',l:'Drawing #',       w:'100px'},
+    {k:'drawing_name',  l:'Drawing Name',    w:'130px'},
+    {k:'atlantium_pn',  l:'Customer PN',     w:'100px'},
+    {k:'description',   l:'Description',     w:'200px',wrap:true},
+    {k:'manufacturer',  l:'Manufacturer',    w:'110px'},
+    {k:'price',         l:'FC Price',         w:'85px'},
+    {k:'priority_price',l:'Priority Price',   w:'95px'},
+    {k:'qty',           l:'QTY',              w:'55px'},
+    {k:'unit',          l:'Units',            w:'55px'},
+    {k:'updatedAt',     l:'Updated',          w:'90px'},
   ];
-
-  const sortArrow = (k) => k === sortCol ? (sortAsc ? ' ▲' : ' ▼') : '';
-
-  const tbody = sorted.slice(0, 2000).map((p, i) => {
-    const fc   = parseFloat(p.price) || 0;
-    const pr   = parseFloat(p.priority_price) || 0;
-    let fcCls = '', prCls = '';
-    if (fc && pr) {
-      fcCls = fc <= pr ? 'price-green' : 'price-red';
-      prCls = pr <= fc ? 'price-green' : 'price-red';
-    }
-    const unit = esc(p.unit || p.units || '');
-    return `<tr>
-      <td>${esc(p.part_number)}</td>
-      <td>${esc(p.drawing_number)}</td>
-      <td>${esc(p.drawing_name)}</td>
-      <td>${esc(p.atlantium_pn)}</td>
-      <td class="wrap">${esc(p.description)}</td>
-      <td>${esc(p.manufacturer)}</td>
-      <td>${fc ? `<span class="${fcCls}">${fmtPrice(fc)}</span>` : ''}</td>
-      <td>${pr ? `<span class="${prCls}">${fmtPrice(pr)}</span>` : ''}</td>
-      <td>${esc(p.qty)}</td>
-      <td>${unit}</td>
-      <td>${fmtDate(p.updatedAt)}</td>
+  const arrow=k=>k===sortCol?(sortAsc?' ▲':' ▼'):'';
+  const rows=sorted.slice(0,2000).map(p=>{
+    const fc=parseFloat(p.price)||0, pr=parseFloat(p.priority_price)||0;
+    let fcC='',prC='';
+    if(fc&&pr){fcC=fc<=pr?'price-green':'price-red';prC=pr<=fc?'price-green':'price-red';}
+    const unit=esc(p.unit||p.units||'');
+    return`<tr>
+      <td>${esc(p.part_number)}</td><td>${esc(p.drawing_number)}</td>
+      <td>${esc(p.drawing_name)}</td><td>${esc(p.atlantium_pn)}</td>
+      <td class="wrap">${esc(p.description)}</td><td>${esc(p.manufacturer)}</td>
+      <td>${fc?`<span class="${fcC}">${fmtPrice(fc)}</span>`:''}</td>
+      <td>${pr?`<span class="${prC}">${fmtPrice(pr)}</span>`:''}</td>
+      <td>${esc(p.qty)}</td><td>${unit}</td><td>${fmtDate(p.updatedAt)}</td>
     </tr>`;
   }).join('');
 
-  const overage = sorted.length > 2000 ? `<p style="color:var(--muted);font-size:12px;padding:8px 10px">Showing first 2000 of ${sorted.length} parts</p>` : '';
-
-  content.innerHTML = `
+  setContent(`
     <div class="toolbar">
-      <input class="search-box" id="ps-search" placeholder="Search part number, description, manufacturer…" value="${esc(filterText || '')}">
-      <span class="count-badge">${filtered.length} parts</span>
+      <input class="search-box" id="ps-search" placeholder="Search part number, description, manufacturer…" value="${esc(filter)}">
+      <span class="count-badge">${filtered.length} parts${filtered.length>2000?' (showing 2000)':''}</span>
     </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr>${cols.map(c =>
-          `<th data-col="${c.k}" style="min-width:${c.w}">${esc(c.label)}${sortArrow(c.k)}</th>`
-        ).join('')}</tr></thead>
-        <tbody>${tbody || '<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--muted)">No parts found</td></tr>'}</tbody>
-      </table>
-      ${overage}
-    </div>`;
+    <div class="table-wrap"><table>
+      <thead><tr>${COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}">${c.l}${arrow(c.k)}</th>`).join('')}</tr></thead>
+      <tbody>${rows||'<tr class="empty-row"><td colspan="11">No parts found</td></tr>'}</tbody>
+    </table></div>`);
 
-  // Search
-  const input = document.getElementById('ps-search');
-  input.addEventListener('input', debounce(() => renderPartStock(input.value), 280));
-  input.focus();
-
-  // Sort on header click
-  document.querySelectorAll('thead th[data-col]').forEach(th => {
-    th.addEventListener('click', () => {
-      const k = th.dataset.col;
-      if (sortCol === k) sortAsc = !sortAsc; else { sortCol = k; sortAsc = true; }
-      renderPartStock(input.value);
-    });
-  });
+  const inp=document.getElementById('ps-search');
+  inp.addEventListener('input',debounce(()=>renderPartStock(inp.value),260));
+  inp.focus();
+  document.querySelectorAll('thead th[data-col]').forEach(th=>th.addEventListener('click',()=>{
+    const k=th.dataset.col;
+    if(sortCol===k)sortAsc=!sortAsc;else{sortCol=k;sortAsc=true;}
+    renderPartStock(inp.value);
+  }));
 }
 
-// ── RFQ LIST ──────────────────────────────────────────────────────────────────
-async function renderRFQ(projectId) {
-  const content = document.getElementById('content');
+// ══════════════════════════════════════════════════════════════════════════════
+// RFQ LIST
+// ══════════════════════════════════════════════════════════════════════════════
+async function renderRFQList(){
+  setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading RFQs…</div>`);
+  setActions(`<button class="btn btn-green" id="btn-new-rfq">＋ New RFQ</button>`);
 
-  if (!projectId) {
-    // Show project list
-    content.innerHTML = '<div class="placeholder"><div class="big">⏳</div>Loading RFQs…</div>';
-    let projects = [];
+  document.getElementById('btn-new-rfq').addEventListener('click', createRFQ);
+
+  let projects=[];
+  try {
+    const snap=await getDocs(query(collection(db,'companies',companyId,'projects'),orderBy('updatedAt','desc')));
+    projects=snap.docs.map(d=>({_id:d.id,...d.data()}));
+  } catch {
     try {
-      const snap = await getDocs(query(
-        collection(db, 'companies', companyId, 'projects'),
-        orderBy('updatedAt', 'desc')
-      ));
-      projects = snap.docs.map(d => ({ _id: d.id, ...d.data() }));
-    } catch {
-      const snap = await getDocs(collection(db, 'companies', companyId, 'projects'));
-      projects = snap.docs.map(d => ({ _id: d.id, ...d.data() }));
-      projects.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
-    }
-
-    if (!projects.length) {
-      content.innerHTML = '<div class="placeholder"><div class="big">📋</div>No RFQs found</div>';
-      return;
-    }
-
-    const cards = projects.map(p => `
-      <div class="rfq-card" data-id="${esc(p._id)}">
-        <h3>${esc(p.name || p._id)}</h3>
-        <p>${fmtDate(p.updatedAt)}  ${p.members ? '· ' + Object.keys(p.members).length + ' members' : ''}</p>
-      </div>`).join('');
-
-    content.innerHTML = `<div class="toolbar"><span class="count-badge">${projects.length} RFQs</span></div><div class="rfq-list">${cards}</div>`;
-    content.querySelectorAll('.rfq-card').forEach(el => {
-      el.addEventListener('click', () => renderRFQ(el.dataset.id));
-    });
-
-  } else {
-    // Show drawings for this project
-    content.innerHTML = '<div class="placeholder"><div class="big">⏳</div>Loading BOM…</div>';
-    const pSnap = await getDoc(doc(db, 'companies', companyId, 'projects', projectId));
-    const pData = pSnap.data() || {};
-    const dSnap = await getDocs(collection(db, 'companies', companyId, 'projects', projectId, 'drawings'));
-    const drawings = dSnap.docs.map(d => ({ _id: d.id, ...d.data() }));
-
-    const BOM_COLS = [
-      { k: 'item',          label: 'Item',          w: '40px' },
-      { k: 'drawing_number',label: 'Drawing #',     w: '100px' },
-      { k: 'part_number',   label: 'Part Number',   w: '130px' },
-      { k: 'drawing_name',  label: 'Drawing Name',  w: '130px' },
-      { k: 'atlantium_pn',  label: 'Customer PN',   w: '110px' },
-      { k: 'description',   label: 'Description',   w: '220px', wrap: true },
-      { k: 'qty',           label: 'QTY',            w: '55px' },
-      { k: 'unit',          label: 'Units',          w: '55px' },
-      { k: 'manufacturer',  label: 'Manufacturer',  w: '110px' },
-    ];
-
-    const rows = drawings.map((d, i) => `<tr>
-      ${BOM_COLS.map(c => `<td${c.wrap?' class="wrap"':''}>${esc(d[c.k] || '')}</td>`).join('')}
-    </tr>`).join('');
-
-    content.innerHTML = `
-      <button class="back-btn" id="back-rfq">← Back to RFQ List</button>
-      <h3 style="margin-bottom:12px;color:var(--blue-dark)">${esc(pData.name || projectId)}</h3>
-      <div class="table-wrap">
-        <table>
-          <thead><tr>${BOM_COLS.map(c => `<th style="min-width:${c.w}">${esc(c.label)}</th>`).join('')}</tr></thead>
-          <tbody>${rows || '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--muted)">No BOM rows</td></tr>'}</tbody>
-        </table>
-      </div>`;
-
-    document.getElementById('back-rfq').addEventListener('click', () => renderRFQ());
+      const snap=await getDocs(collection(db,'companies',companyId,'projects'));
+      projects=snap.docs.map(d=>({_id:d.id,...d.data()}));
+      projects.sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));
+    } catch(e2){ setContent(`<p style="color:red;padding:20px">${e2.message}</p>`); return; }
   }
-}
 
-// ── SALES DESK ────────────────────────────────────────────────────────────────
-async function renderSalesDesk() {
-  const content = document.getElementById('content');
-  await loadParts();
+  if(!projects.length){
+    setContent(`<div style="text-align:center;padding:80px;color:var(--muted)">
+      <div style="font-size:48px;margin-bottom:12px">📋</div>
+      <div>No RFQs yet. Click <strong>＋ New RFQ</strong> to create one.</div></div>`);
+    return;
+  }
 
-  const renderSD = () => {
-    const total = sdItems.reduce((s, r) => s + r.total, 0);
-    const rows = sdItems.map((r, i) => `<tr>
-      <td>${esc(r.part_number)}</td>
-      <td class="wrap">${esc(r.description)}</td>
-      <td>${esc(r.qty)}</td>
-      <td>${esc(r.unit)}</td>
-      <td>${fmtPrice(r.price)}</td>
-      <td>$${r.total.toFixed(2)}</td>
-      <td><button class="btn-action" style="background:#E53E3E;color:#fff;padding:3px 8px" data-i="${i}">✕</button></td>
-    </tr>`).join('');
-
-    document.getElementById('sd-tbody').innerHTML = rows || `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted)">No parts added yet</td></tr>`;
-    document.getElementById('sd-total').textContent = '$' + total.toFixed(2);
-    document.querySelectorAll('#sd-tbody button[data-i]').forEach(btn => {
-      btn.addEventListener('click', () => { sdItems.splice(+btn.dataset.i, 1); renderSD(); });
-    });
-  };
-
-  content.innerHTML = `
-    <div class="sd-layout">
-      <div class="sd-panel">
-        <div class="sd-panel-title">BOM Items</div>
-        <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;gap:8px">
-          <input class="search-box" id="sd-search" placeholder="Search and add part…" style="flex:1">
-          <div id="sd-suggestions" style="position:relative"></div>
+  setContent(`
+    <div class="toolbar"><span class="count-badge">${projects.length} RFQs</span></div>
+    <div class="card-grid" id="rfq-grid">
+    ${projects.map(p=>`
+      <div class="rfq-card" data-id="${esc(p._id)}">
+        <div class="rfq-card-icon">📋</div>
+        <div class="rfq-card-body">
+          <h3>${esc(p.name||p._id)}</h3>
+          <p>${fmtDate(p.updatedAt)||'—'}</p>
         </div>
-        <div class="sd-scroll">
-          <table style="width:100%">
-            <thead><tr>
-              <th>Part Number</th><th>Description</th><th>QTY</th>
-              <th>Units</th><th>Price</th><th>Total</th><th></th>
-            </tr></thead>
-            <tbody id="sd-tbody"></tbody>
-          </table>
-        </div>
-      </div>
+        <button class="btn btn-red btn-sm del-rfq" data-id="${esc(p._id)}" data-name="${esc(p.name||p._id)}"
+          title="Delete" style="flex-shrink:0;align-self:center">✕</button>
+      </div>`).join('')}
+    </div>`);
 
-      <div>
-        <div class="sd-panel" style="margin-bottom:12px">
-          <div class="sd-panel-title">Summary</div>
-          <div id="sd-summary-rows"></div>
-          <div class="summary-total">
-            <span>TOTAL PARTS COST</span>
-            <span id="sd-total">$0.00</span>
-          </div>
-        </div>
-        <button class="btn-action btn-green" style="width:100%;padding:10px" id="sd-print">🖨 Print / Save PDF</button>
-      </div>
-    </div>`;
-
-  renderSD();
-
-  // Search to add parts
-  let suggestions = [];
-  const sdSearch = document.getElementById('sd-search');
-  const suggestBox = document.getElementById('sd-suggestions');
-
-  sdSearch.addEventListener('input', () => {
-    const q = sdSearch.value.toLowerCase().trim();
-    if (!q) { suggestBox.innerHTML = ''; return; }
-    suggestions = allParts.filter(p =>
-      [p.part_number, p.description, p.manufacturer].some(v => String(v||'').toLowerCase().includes(q))
-    ).slice(0, 8);
-
-    if (!suggestions.length) { suggestBox.innerHTML = ''; return; }
-
-    suggestBox.innerHTML = `<div style="
-      position:absolute; top:0; left:0; right:0;
-      background:#fff; border:1px solid var(--border); border-radius:7px;
-      box-shadow:0 8px 24px rgba(0,0,0,.12); z-index:100; min-width:360px;
-      transform:translateY(36px)">
-      ${suggestions.map((p, i) => `
-        <div data-si="${i}" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);
-          font-size:12px" onmouseover="this.style.background='#EBF3FB'" onmouseout="this.style.background=''">
-          <strong>${esc(p.part_number)}</strong>
-          <span style="color:var(--muted)"> — ${esc((p.description||'').substring(0,50))}</span>
-          ${p.price ? `<span style="float:right;color:var(--green)">$${parseFloat(p.price).toFixed(4)}</span>` : ''}
-        </div>`).join('')}
-    </div>`;
-
-    suggestBox.querySelectorAll('[data-si]').forEach(el => {
-      el.addEventListener('click', () => {
-        const p = suggestions[+el.dataset.si];
-        const qtyStr = prompt(`QTY for ${p.part_number}?`, '1');
-        if (qtyStr === null) return;
-        const qty = parseFloat(qtyStr) || 1;
-        const price = parseFloat(p.price) || parseFloat(p.priority_price) || 0;
-        sdItems.push({
-          part_number: p.part_number || '',
-          description: p.description || '',
-          qty: qty,
-          unit: p.unit || p.units || '',
-          price: price,
-          total: price * qty,
-        });
-        sdSearch.value = '';
-        suggestBox.innerHTML = '';
-        renderSD();
-      });
-    });
+  document.querySelectorAll('.rfq-card').forEach(el=>{
+    el.addEventListener('click',e=>{if(!e.target.classList.contains('del-rfq')) renderRFQDetail(el.dataset.id, el.querySelector('h3').textContent);});
   });
-
-  document.getElementById('sd-print').addEventListener('click', () => window.print());
+  document.querySelectorAll('.del-rfq').forEach(btn=>{
+    btn.addEventListener('click',e=>{e.stopPropagation(); deleteRFQ(btn.dataset.id, btn.dataset.name);});
+  });
 }
 
-// ── Bootstrap ─────────────────────────────────────────────────────────────────
-// (onAuthStateChanged above handles first load)
-</script>
-</body>
-</html>
+async function createRFQ(){
+  const name=prompt('RFQ / Project name:','');
+  if(!name||!name.trim()) return;
+  try {
+    const ref=await addDoc(collection(db,'companies',companyId,'projects'),{
+      name:name.trim(), updatedAt:serverTimestamp(), createdAt:serverTimestamp()
+    });
+    toast('RFQ created','success');
+    renderRFQDetail(ref.id, name.trim());
+  } catch(e){ toast('Error: '+e.message,'error'); }
+}
+
+async function deleteRFQ(id, name){
+  if(!confirm(`Delete RFQ "${name}"? This removes all drawings.`)) return;
+  try {
+    // Delete all drawings first
+    const snap=await getDocs(collection(db,'companies',companyId,'projects',id,'drawings'));
+    await Promise.all(snap.docs.map(d=>deleteDoc(d.ref)));
+    await deleteDoc(doc(db,'companies',companyId,'projects',id));
+    toast('RFQ deleted','success');
+    renderRFQList();
+  } catch(e){ toast('Error: '+e.message,'error'); }
+}
+
+// ═════════════════════
