@@ -200,6 +200,11 @@
     .ai-status .ring.done { border-color:var(--green); border-top-color:var(--green);
                              animation:none; }
 
+    /* ── Column resizer ── */
+    .col-resizer { position:absolute; right:0; top:0; bottom:0; width:5px; cursor:col-resize;
+                   user-select:none; z-index:3; border-radius:0 3px 3px 0; }
+    .col-resizer:hover, .col-resizer:active { background:rgba(255,255,255,.45); }
+
     @media print {
       aside, .topbar, .toolbar { display:none !important; }
       #content { padding:0 !important; background:#fff !important; overflow:visible !important; }
@@ -227,7 +232,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.2</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.3</div>
     </div>
   </aside>
   <div class="main">
@@ -271,7 +276,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.4.2';
+const APP_VER   = '1.4.3';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -393,6 +398,26 @@ document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',(
 // ══════════════════════════════════════════════════════════════════════════════
 // PART STOCK
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Resizable columns ──────────────────────────────────────────────────────
+function makeTableResizable(table){
+  if(!table) return;
+  table.querySelectorAll('thead th').forEach(th=>{
+    if(th.querySelector('.col-resizer')) return; // already added
+    const r=document.createElement('div');
+    r.className='col-resizer';
+    th.appendChild(r);
+    let x0=0,w0=0;
+    r.addEventListener('mousedown',e=>{
+      x0=e.clientX; w0=th.getBoundingClientRect().width;
+      const move=ev=>{const w=Math.max(28,w0+ev.clientX-x0);th.style.minWidth=w+'px';th.style.width=w+'px';};
+      const up=()=>{document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);};
+      document.addEventListener('mousemove',move);
+      document.addEventListener('mouseup',up);
+      e.preventDefault(); e.stopPropagation();
+    });
+  });
+}
+
 async function loadParts(){
   if(allParts.length>0) return;
   const snap=await getDocs(collection(db,'companies',companyId,'parts_cache'));
@@ -458,6 +483,7 @@ async function renderPartStock(filter=''){
       <tbody>${rows||'<tr class="empty-row"><td colspan="12">No parts found</td></tr>'}</tbody>
     </table></div>`);
 
+  makeTableResizable(document.querySelector('.table-wrap table'));
   const inp=document.getElementById('ps-search');
   inp.addEventListener('input',debounce(()=>renderPartStock(inp.value),260));
   inp.focus();
@@ -669,26 +695,51 @@ async function renderRFQDetail(projectId, projectName){
     {k:'manufacturer',  l:'Manufacturer',w:'110px'},
   ];
 
-  // Build rows with drawing-name group headers
+  // Unique drawing names for filter
+  const uniqueDwgs = [...new Set(allRows.map(r=>r._dwgName).filter(Boolean))];
+
+  // Build rows with drawing-name group headers + data-dwg attributes for filtering
   let lastDwgName = null;
   const rowsHtml = allRows.map((row,ri)=>{
     let header = '';
     if(row._dwgName && row._dwgName !== lastDwgName){
       lastDwgName = row._dwgName;
-      header = `<tr style="background:var(--blue-light)"><td colspan="9" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none">📄 ${esc(row._dwgName)}</td></tr>`;
+      header = `<tr data-dwg="${esc(row._dwgName)}" class="dwg-grp-hdr" style="background:var(--blue-light)"><td colspan="9" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none">📄 ${esc(row._dwgName)}</td></tr>`;
     }
-    return header + `<tr>
+    return header + `<tr data-dwg="${esc(row._dwgName)}">
       ${BOM_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${esc(row[c.k]||'')}</td>`).join('')}
       <td><button class="btn btn-red btn-sm del-row" data-dwgid="${esc(row._dwgId)}" data-idx="${row._idx}" data-fmt="${row._fmt}" title="Delete row">✕</button></td>
     </tr>`;
   }).join('');
 
+  const filterOpts = uniqueDwgs.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
   setContent(`
-    <div class="table-wrap"><table>
+    ${uniqueDwgs.length>1?`<div class="toolbar" style="margin-bottom:10px">
+      <label style="font-size:12px;color:var(--muted);white-space:nowrap">Filter by Drawing:</label>
+      <select id="dwg-filter" class="search-box" style="flex:0 0 auto;max-width:280px;padding:5px 9px">
+        <option value="">All Drawings (${uniqueDwgs.length})</option>
+        ${filterOpts}
+      </select>
+      <span class="count-badge" id="bom-flt-count">${allRows.length} parts</span>
+    </div>`:''}
+    <div class="table-wrap"><table id="bom-table">
       <thead><tr>${BOM_COLS.map(c=>`<th style="min-width:${c.w}">${c.l}</th>`).join('')}<th style="width:40px"></th></tr></thead>
       <tbody id="bom-tbody">${rowsHtml||'<tr class="empty-row"><td colspan="9">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
     </table></div>
     <div style="margin-top:8px;font-size:11px;color:var(--muted)">${allRows.length} parts across ${drawings.length} drawing(s)</div>`);
+
+  // Drawing filter
+  document.getElementById('dwg-filter')?.addEventListener('change',e=>{
+    const val=e.target.value;
+    document.querySelectorAll('#bom-tbody tr').forEach(tr=>{
+      tr.style.display=(!val||tr.dataset.dwg===val)?'':'none';
+    });
+    const cnt=val?document.querySelectorAll(`#bom-tbody tr[data-dwg="${val}"]:not(.dwg-grp-hdr)`).length:allRows.length;
+    const el=document.getElementById('bom-flt-count');
+    if(el) el.textContent=cnt+' parts';
+  });
+
+  makeTableResizable(document.getElementById('bom-table'));
 
   document.querySelectorAll('.del-row').forEach((btn,ri)=>{
     btn.addEventListener('click', async()=>{
@@ -797,7 +848,9 @@ async function handleFile(file, projectId, projectName, drawingName=''){
     }
 
     setMsg('Done — review the table below', 100);
-    document.querySelector('.ai-status .ring').classList.add('done');
+    const _ringEl=document.querySelector('.ai-status .ring');
+    if(_ringEl){_ringEl.classList.add('done');_ringEl.style.animation='none';
+      _ringEl.style.borderColor='#1B6B3A';_ringEl.style.borderTopColor='#1B6B3A';}
 
     if(!extractedRows.length){
       const noPartsP = document.createElement('p');
@@ -831,7 +884,7 @@ function showBOMPreview(rows, projectId, projectName, drawingName, body, foot){
 
   body.innerHTML = `
     <div class="ai-status" style="margin-bottom:10px">
-      <div class="ring done"></div>
+      <div class="ring done" style="animation:none;border-color:#1B6B3A;border-top-color:#1B6B3A"></div>
       <span>${rows.length} rows extracted — you can edit cells before saving</span>
     </div>
     <div class="table-wrap" style="max-height:360px;overflow:auto"><table>
