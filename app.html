@@ -276,7 +276,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.4.6';
+const APP_VER   = '1.4.7';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -923,7 +923,14 @@ async function handleFile(file, projectId, projectName, drawingName=''){
       return;
     }
 
-    showBOMPreview(extractedRows, projectId, projectName, drawingName, body, foot);
+    _normalizeBOMRows(extractedRows);
+    showBOMPreview(extractedRows, body, foot,
+      `💾 Save to Part Stock + RFQ (${extractedRows.length} rows)`,
+      async(updatedRows)=>{
+        await saveBOMToPartStock(updatedRows);
+        await saveBOMToRFQ(updatedRows, projectId, projectName, drawingName);
+      }
+    );
   } catch(e){
     const hint = e.message==='Failed to fetch'
       ? 'Network error — check your internet connection. If the problem persists, the Anthropic API key may be invalid or expired.'
@@ -934,32 +941,37 @@ async function handleFile(file, projectId, projectName, drawingName=''){
   }
 }
 
-function showBOMPreview(rows, projectId, projectName, drawingName, body, foot){
+// showBOMPreview(rows, body, foot, btnLabel, saveCallback)
+// saveCallback(updatedRows) is called when user clicks Save
+function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
   const PCOLS=['item','drawing_number','part_number','drawing_name','atlantium_pn','description','qty','unit','manufacturer'];
   const PLABELS=['Item','Drawing #','Part #','Dwg Name','Cust PN','Description','QTY','Units','Manufacturer'];
 
+  // Expand modal for comfortable editing
+  const modalEl=body.closest('.modal');
+  if(modalEl){ modalEl.style.width='min(94vw,1200px)'; modalEl.style.maxWidth='1200px'; }
+
   const tBody = rows.map((r,i)=>`<tr data-i="${i}">
-    ${PCOLS.map(k=>`<td contenteditable="true" data-k="${k}" data-i="${i}">${esc(r[k]||'')}</td>`).join('')}
+    ${PCOLS.map(k=>`<td contenteditable="true" data-k="${k}" data-i="${i}" style="min-width:70px">${esc(r[k]||'')}</td>`).join('')}
     <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
   </tr>`).join('');
 
   body.innerHTML = `
     <div class="ai-status" style="margin-bottom:10px">
       <div style="width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1">✓</div>
-      <span>${rows.length} rows extracted — you can edit cells before saving</span>
+      <span>${rows.length} rows extracted — click any cell to edit before saving</span>
     </div>
-    <div class="table-wrap" style="max-height:360px;overflow:auto"><table>
+    <div class="table-wrap" style="max-height:calc(85vh - 175px);overflow:auto"><table>
       <thead><tr>${PLABELS.map(l=>`<th>${l}</th>`).join('')}<th></th></tr></thead>
       <tbody id="preview-tbody">${tBody}</tbody>
     </table></div>`;
 
   foot.innerHTML = `
     <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
-    <button class="btn btn-green" id="btn-save-bom">💾 Save to RFQ (${rows.length} rows)</button>`;
+    <button class="btn btn-green" id="btn-save-bom">${btnLabel||'💾 Save'}</button>`;
 
   document.getElementById('modal-cancel').addEventListener('click',closeModal);
   document.getElementById('btn-save-bom').addEventListener('click',async()=>{
-    // Collect edited values from contenteditable cells
     const updatedRows=[];
     document.querySelectorAll('#preview-tbody tr').forEach(tr=>{
       const row={};
@@ -967,7 +979,10 @@ function showBOMPreview(rows, projectId, projectName, drawingName, body, foot){
       if(Object.values(row).some(v=>v)) updatedRows.push(row);
     });
     if(!updatedRows.length){ toast('No rows to save','error'); return; }
-    await saveBOMToRFQ(updatedRows, projectId, projectName, drawingName);
+    const btn=document.getElementById('btn-save-bom');
+    if(btn){btn.disabled=true;btn.textContent='Saving…';}
+    try{ await saveCallback(updatedRows); }
+    catch(e){ toast('Save error: '+e.message,'error'); if(btn){btn.disabled=false;btn.textContent=btnLabel||'💾 Save';} }
   });
 }
 
@@ -993,6 +1008,54 @@ async function saveBOMToRFQ(rows, projectId, projectName, drawingName=''){
     closeModal();
     renderRFQDetail(projectId, projectName);
   } catch(e){ toast('Save error: '+e.message,'error'); if(btn){btn.disabled=false;btn.textContent='Save to RFQ';} }
+}
+
+// ── BOM row normalization ─────────────────────────────────────────────────────
+// If drawing_number empty, fall back to drawing_name (per user requirement)
+function _normalizeBOMRows(rows){
+  rows.forEach(r=>{
+    if(!r.drawing_number && r.drawing_name) r.drawing_number=r.drawing_name;
+  });
+  return rows;
+}
+
+// ── Save BOM rows to Part Stock (parts_cache) ─────────────────────────────────
+// Upserts each row by part_number; never overwrites existing price/stock/distributor
+async function saveBOMToPartStock(rows){
+  let created=0;
+  for(const r of rows){
+    const pn=(r.part_number||'').trim();
+    if(!pn) continue;
+    // Firestore doc IDs can't have / ; replace unsafe chars
+    const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
+    const ref=doc(db,'companies',companyId,'parts_cache',key);
+    try{
+      const snap=await getDoc(ref);
+      if(snap.exists()){
+        // Merge — only fill in fields that are currently empty
+        const d=snap.data();
+        const patch={updatedAt:serverTimestamp()};
+        if(r.description && !d.description) patch.description=r.description;
+        if(r.drawing_number && !d.drawing_number) patch.drawing_number=r.drawing_number;
+        if(r.manufacturer && !d.manufacturer) patch.manufacturer=r.manufacturer;
+        if(r.unit && !d.unit) patch.unit=r.unit;
+        if(r.atlantium_pn && !d.atlantium_pn) patch.atlantium_pn=r.atlantium_pn;
+        if(Object.keys(patch).length>1) await updateDoc(ref,patch);
+      } else {
+        await setDoc(ref,{
+          part_number:pn, description:r.description||'',
+          drawing_number:r.drawing_number||'', manufacturer:r.manufacturer||'',
+          unit:r.unit||'', atlantium_pn:r.atlantium_pn||'',
+          price:'', distributor:'', stock:'', price_description:'',
+          updatedAt:serverTimestamp()
+        });
+        created++;
+      }
+    }catch(e){ console.warn('[PartStock] save error:',pn,e.message); }
+  }
+  // Refresh in-memory parts list so SD search sees new entries
+  await loadParts();
+  return created;
 }
 
 // ── PDF extraction: text + render pages as PNG images (like Windows app) ────────
@@ -1207,6 +1270,7 @@ async function renderSalesDesk(){
             <div class="suggest-list" id="sd-suggest" style="display:none"></div>
           </div>
           <button class="btn btn-blue" id="btn-sd-file">📎 From File (BOM)</button>
+          <button class="btn btn-ghost" id="btn-sd-bydwg">📋 By Drawing #</button>
           <button class="btn btn-ghost" id="btn-sd-clear">Clear All</button>
         </div>
         <div class="sd-scroll">
@@ -1273,6 +1337,42 @@ async function renderSalesDesk(){
   document.getElementById('btn-sd-clear').addEventListener('click',()=>{sdItems=[];renderSD();});
   document.getElementById('btn-sd-print').addEventListener('click',()=>window.print());
 
+  // By Drawing # — pick a drawing number, add all matching parts from Part Stock
+  document.getElementById('btn-sd-bydwg').addEventListener('click',()=>{
+    const dwgNums=[...new Set(
+      allParts.map(p=>p.drawing_number||p.drawing_name).filter(Boolean)
+    )].sort((a,b)=>a.localeCompare(b));
+    if(!dwgNums.length){ toast('No drawing numbers found in Part Stock','error'); return; }
+    showModal(`<div class="modal modal-sm">
+      <div class="modal-head"><h3>Select Drawing #</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+      <div class="modal-body">
+        <p style="margin-bottom:10px;color:var(--muted);font-size:12px">Select a drawing to add all its parts to Sales Desk:</p>
+        <div style="max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:4px">
+          ${dwgNums.map(d=>`<button class="btn btn-ghost dwg-pick" data-dwg="${esc(d)}" style="text-align:left;justify-content:flex-start">
+            ${esc(d)}
+            <span style="color:var(--muted);font-size:11px;margin-left:auto">${allParts.filter(p=>(p.drawing_number||p.drawing_name)===d).length} parts</span>
+          </button>`).join('')}
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+    </div>`);
+    document.querySelectorAll('.dwg-pick').forEach(btn=>btn.addEventListener('click',()=>{
+      const dwg=btn.dataset.dwg;
+      const matching=allParts.filter(p=>(p.drawing_number||p.drawing_name)===dwg);
+      for(const p of matching){
+        const price=parseFloat(p.price)||parseFloat(p.priority_price)||0;
+        const qty=parseFloat(p.qty)||1;
+        sdItems.push({
+          part_number:p.part_number||'', description:p.description||'',
+          qty, unit:p.unit||p.units||'pcs', price, total:price*qty
+        });
+      }
+      closeModal();
+      renderSalesDesk();
+      toast(`Added ${matching.length} parts from drawing "${dwg}"`, 'success');
+    }));
+  });
+
   // From File (BOM extraction for Sales Desk)
   document.getElementById('btn-sd-file').addEventListener('click',()=>{
     if(!anthKey && !geminiKey){ showSettingsModal(()=>document.getElementById('btn-sd-file')?.click()); return; }
@@ -1310,7 +1410,7 @@ async function handleSDFile(file){
 
   const body=document.getElementById('sd-modal-body');
   const foot=document.querySelector('#modal-bg .modal-foot');
-  body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="sd-ai-msg">Processing…</span></div>
+  body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="sd-ai-msg">${isPDF?'Extracting PDF text…':'Reading image…'}</span></div>
     <div class="progress-bar"><div class="progress-fill" id="sd-prog"></div></div>`;
   const setM=(m,p)=>{
     const e=document.getElementById('sd-ai-msg');if(e)e.textContent=m;
@@ -1319,43 +1419,86 @@ async function handleSDFile(file){
   foot.innerHTML='';
 
   try {
-    let rows=[];
-    if(isPDF){
-      setM('Extracting PDF text…',25);
-      const text=await extractPDFText(file);
-      setM('AI analyzing BOM…',60);
-      rows=await aiExtractBOM(text,false,null,file.name);
-    } else {
-      setM('Encoding image…',25);
-      const img=await encodeImage(file);
-      setM('AI vision analyzing…',60);
-      rows=await aiExtractBOM('',true,img,file.name);
-    }
-    setM('Done',100);
-    if(!rows.length){ body.innerHTML+='<p style="margin-top:12px;color:var(--muted)">No parts detected.</p>';
-      foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`; return; }
+    let extractedRows=[];
+    let _pdfText='', _pdfTextLen=0, _pdfImages=[];
 
-    // Add to sdItems, matching price from Part Stock where possible
-    let added=0;
-    for(const r of rows){
-      const pn=(r.part_number||'').trim().toLowerCase();
-      const match=pn?allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
-      const price=match?(parseFloat(match.price)||parseFloat(match.priority_price)||0):0;
-      const qty=parseFloat(r.qty)||1;
-      sdItems.push({
-        part_number:r.part_number||r.item||'',
-        description:r.description||'',
-        qty, unit:r.unit||match?.unit||match?.units||'pcs',
-        price, total:price*qty
-      });
-      added++;
+    if(isPDF){
+      setM('Reading PDF pages…',15);
+      const {pageTexts,pageImages}=await extractPDFPages(file);
+      _pdfImages=pageImages;
+      _pdfText=pageTexts.map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
+      _pdfTextLen=pageTexts.join('').trim().length;
+
+      if(_pdfTextLen>50){
+        setM('Sending text to AI…',45);
+        extractedRows=await aiExtractBOM(_pdfText,false,null,file.name);
+      }
+      if(!extractedRows.length&&(anthKey||geminiKey)){
+        setM('Text extraction found nothing — trying page vision…',60);
+        for(let pi=0;pi<_pdfImages.length;pi++){
+          const b64=_pdfImages[pi];
+          if(!b64) continue;
+          setM(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`,60+Math.round(35*pi/_pdfImages.length));
+          const rows2=await aiExtractBOM('',true,{b64,mimeType:'image/png'},file.name);
+          if(rows2.length){extractedRows=rows2;break;}
+        }
+      }
+    } else {
+      setM('Encoding image…',20);
+      const {b64,mimeType}=await encodeImage(file);
+      setM('Sending to AI (vision)…',50);
+      extractedRows=await aiExtractBOM('',true,{b64,mimeType},file.name);
     }
-    toast(`Added ${added} parts to Sales Desk`,'success');
-    closeModal();
-    // Re-render SD table
-    document.getElementById('sd-tbody') && renderSalesDesk();
-  } catch(e){ body.innerHTML+=`<p style="color:red;margin-top:12px">${e.message}</p>`;
-    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`; }
+
+    _normalizeBOMRows(extractedRows);
+
+    setM('Done — review the table below',100);
+    const _ringEl=body.querySelector('.ring');
+    if(_ringEl){_ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';
+      _ringEl.textContent='✓';}
+
+    if(!extractedRows.length){
+      const scannedWarn=isPDF&&_pdfTextLen<150;
+      const dbg=document.createElement('div');
+      dbg.innerHTML=`
+        <p style="color:var(--muted);margin-top:10px">No BOM rows detected.</p>
+        ${scannedWarn?`<p style="color:#C05621;font-size:12px;margin-top:6px;padding:7px 10px;background:#FEFCBF;border-radius:5px">
+          ⚠️ Scanned PDF — only ${_pdfTextLen} chars extracted. Try uploading a screenshot of the BOM as PNG/JPG.</p>`:''}
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;font-size:11px;color:var(--blue-mid)">Show AI response (debug)</summary>
+          <pre style="white-space:pre-wrap;font-size:10px;max-height:120px;overflow:auto;background:#f5f5f5;padding:8px;border-radius:5px;margin-top:5px;word-break:break-all">${esc(_dbgLastAI.slice(0,3000)||'(empty)')}</pre>
+        </details>`;
+      body.appendChild(dbg);
+      foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+      return;
+    }
+
+    // Show editable preview — on Save: save to Part Stock + add to Sales Desk
+    showBOMPreview(extractedRows, body, foot,
+      `💾 Save to Part Stock + Sales Desk (${extractedRows.length} rows)`,
+      async(updatedRows)=>{
+        await saveBOMToPartStock(updatedRows);
+        let added=0;
+        for(const r of updatedRows){
+          const pn=(r.part_number||'').trim().toLowerCase();
+          const match=pn?allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
+          const price=match?(parseFloat(match.price)||parseFloat(match.priority_price)||0):0;
+          const qty=parseFloat(r.qty)||1;
+          sdItems.push({
+            part_number:r.part_number||r.item||'', description:r.description||'',
+            qty, unit:r.unit||match?.unit||match?.units||'pcs', price, total:price*qty
+          });
+          added++;
+        }
+        toast(`Added ${added} parts to Sales Desk`,'success');
+        closeModal();
+        document.getElementById('sd-tbody')&&renderSalesDesk();
+      }
+    );
+  } catch(e){
+    body.innerHTML+=`<p style="color:red;margin-top:12px">${e.message}</p>`;
+    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1422,147 +1565,121 @@ function openCustomerModal(cust={}){
       <div class="form-field">
         <label>Customer Name</label>
         <input class="form-input" id="cust-name-inp" placeholder="e.g. Elbit Systems" value="${esc(cust.name||'')}">
+      
       </div>
       <div style="margin-top:16px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Contacts</span>
-          <button class="btn btn-ghost btn-sm" id="btn-add-contact">＋ Add Contact</button>
-        </div>
-        <div class="table-wrap" style="max-height:280px;overflow:auto">
-          <table style="width:100%">
-            <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th style="width:36px"></th></tr></thead>
-            <tbody id="contacts-tbody">${contacts.map((c,i)=>contactRow(c,i)).join('')}</tbody>
-          </table>
-        </div>
+        <label style="font-size:12px;font-weight:600;color:var(--blue-dark)">Contacts</label>
+        <table style="width:100%;margin-top:8px;font-size:12px">
+          <thead><tr style="color:var(--muted)">
+            <th style="padding:4px 6px;text-align:left">Name</th>
+            <th style="padding:4px 6px;text-align:left">Email</th>
+            <th style="padding:4px 6px;text-align:left">Phone</th>
+            <th style="width:30px"></th>
+          </tr></thead>
+          <tbody id="contacts-tbody">
+            ${contacts.map((c,i)=>contactRow(c,i)).join('')}
+          </tbody>
+        </table>
+        <button class="btn btn-ghost btn-sm" id="btn-add-contact" style="margin-top:8px">＋ Add Contact</button>
       </div>
     </div>
-    <div class="modal-foot">
+    <div class="modal-foot" id="modal-foot-cust">
       <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
-      <button class="btn btn-blue" id="btn-save-cust">💾 Save Customer</button>
+      ${isEdit?`<button class="btn btn-red btn-sm" id="btn-del-cust">Delete</button>`:''}
+      <button class="btn btn-green" id="btn-save-cust">${isEdit?'Save Changes':'Create Customer'}</button>
     </div>
   </div>`);
 
   document.getElementById('modal-close').addEventListener('click',closeModal);
   document.getElementById('modal-cancel').addEventListener('click',closeModal);
-  document.getElementById('cust-name-inp').focus();
 
-  function bindDelContact(){
-    document.querySelectorAll('.del-contact').forEach(btn=>btn.addEventListener('click',()=>btn.closest('tr').remove()));
-  }
-  bindDelContact();
+  let contactCount=contacts.length;
 
   document.getElementById('btn-add-contact').addEventListener('click',()=>{
-    const tbody=document.getElementById('contacts-tbody');
-    const i=tbody.querySelectorAll('tr').length;
-    tbody.insertAdjacentHTML('beforeend',contactRow({},i));
-    bindDelContact();
-    tbody.querySelectorAll('tr:last-child input')[0]?.focus();
+    const tb=document.getElementById('contacts-tbody');
+    const row=document.createElement('tr');
+    row.innerHTML=contactRow({},contactCount++).replace(/^<tr>/,'').replace(/<\/tr>$/,'');
+    const tr=document.createElement('tr');
+    tr.innerHTML=contactRow({name:'',email:'',phone:''},contactCount-1);
+    tb.appendChild(tr);
+    tr.querySelector('.del-contact').addEventListener('click',()=>tr.remove());
   });
+
+  document.querySelectorAll('.del-contact').forEach(btn=>
+    btn.addEventListener('click',()=>btn.closest('tr').remove()));
 
   document.getElementById('btn-save-cust').addEventListener('click',async()=>{
     const name=document.getElementById('cust-name-inp').value.trim();
-    if(!name){toast('Customer name required','error');return;}
-    const contactsArr=[];
-    document.querySelectorAll('#contacts-tbody tr').forEach(tr=>{
-      const inps=tr.querySelectorAll('input');
-      const c={name:inps[0]?.value.trim()||'',email:inps[1]?.value.trim()||'',phone:inps[2]?.value.trim()||''};
-      if(c.name||c.email||c.phone) contactsArr.push(c);
-    });
-    const data={name,contacts:contactsArr,updatedAt:serverTimestamp()};
-    try {
+    if(!name){ toast('Customer name is required','error'); return; }
+    const rows=[...document.querySelectorAll('#contacts-tbody tr')];
+    const custContacts=rows.map(tr=>({
+      name:(tr.querySelector('[data-f="name"]')?.value||'').trim(),
+      email:(tr.querySelector('[data-f="email"]')?.value||'').trim(),
+      phone:(tr.querySelector('[data-f="phone"]')?.value||'').trim()
+    })).filter(c=>c.name||c.email||c.phone);
+    const btn=document.getElementById('btn-save-cust');
+    btn.disabled=true; btn.textContent='Saving…';
+    try{
+      const col=collection(db,'companies',companyId,'customers');
       if(isEdit){
-        await updateDoc(doc(db,'companies',companyId,'customers',cust._id),data);
-        toast('Customer updated','success');
+        await updateDoc(doc(col,cust._id),{name,contacts:custContacts,updatedAt:serverTimestamp()});
       } else {
-        await addDoc(collection(db,'companies',companyId,'customers'),{...data,createdAt:serverTimestamp()});
-        toast('Customer created','success');
+        await addDoc(col,{name,contacts:custContacts,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
       }
+      toast(isEdit?`Updated "${name}"`:`Customer "${name}" created`,'success');
       closeModal(); renderCustomers();
-    } catch(e){toast(e.message,'error');}
+    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent=isEdit?'Save Changes':'Create Customer'; }
   });
+
+  if(isEdit){
+    document.getElementById('btn-del-cust')?.addEventListener('click',()=>{
+      closeModal(); deleteCustomer(cust._id,cust.name);
+    });
+  }
 }
 
 async function deleteCustomer(id,name){
   if(!confirm(`Delete customer "${name}"?`)) return;
-  try {
+  try{
     await deleteDoc(doc(db,'companies',companyId,'customers',id));
-    toast('Customer deleted','success'); renderCustomers();
-  } catch(e){toast(e.message,'error');}
+    toast(`Deleted "${name}"`,'success'); renderCustomers();
+  }catch(e){ toast('Error: '+e.message,'error'); }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SETTINGS
+// SETTINGS MODAL
 // ══════════════════════════════════════════════════════════════════════════════
-async function renderSettings(){
-  setActions('');
-  setContent(`
-    <div style="max-width:520px">
-      <div style="background:#fff;border:1px solid var(--border);border-radius:9px;padding:22px;margin-bottom:14px">
-        <h3 style="margin-bottom:14px;color:var(--blue-dark)">🤖 AI Keys (BOM extraction)</h3>
-        <div class="form-field">
-          <label>Anthropic API Key <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
-          <input class="form-input" id="set-anth" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
-        </div>
-        <div class="form-field">
-          <label>Gemini API Key <span style="font-weight:400;color:var(--muted)">(recommended — works in browser)</span></label>
-          <input class="form-input" id="set-gemini" type="password" placeholder="AIzaSy…" value="${esc(geminiKey)}">
-          <p style="margin-top:4px;font-size:11px;color:var(--muted)">Free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a></p>
-        </div>
-        <button class="btn btn-blue" id="btn-save-anth">Save</button>
-        <p style="margin-top:8px;font-size:11px;color:var(--muted)">
-          App tries Anthropic first; falls back to Gemini automatically.
-        </p>
-      </div>
-      <div style="background:#fff;border:1px solid var(--border);border-radius:9px;padding:22px">
-        <h3 style="margin-bottom:4px;color:var(--blue-dark)">ℹ️ Company</h3>
-        <p style="color:var(--muted);font-size:12px">Company: <strong>${esc(companyName)}</strong></p>
-        <p style="color:var(--muted);font-size:12px;margin-top:4px">ID: <code>${esc(companyId)}</code></p>
-      </div>
-    </div>`);
-
-  document.getElementById('btn-save-anth').addEventListener('click',async()=>{
-    const key=document.getElementById('set-anth').value.trim();
-    const gKey=document.getElementById('set-gemini')?.value.trim()||'';
-    try {
-      await updateDoc(doc(db,'companies',companyId),{anthropic_key:key, gemini_key:gKey});
-      anthKey=key; geminiKey=gKey;
-      toast('API keys saved','success');
-    } catch(e){ toast(e.message,'error'); }
-  });
-}
-
-function showSettingsModal(callback){
+function showSettingsModal(onSaved){
   showModal(`<div class="modal modal-sm">
-    <div class="modal-head"><h3>🤖 Anthropic API Key needed</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>⚙️ Settings</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
-      <p style="margin-bottom:12px;color:var(--muted)">Enter an AI API key to enable BOM extraction. <strong>Gemini</strong> (recommended) is free at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>. Anthropic key also works.</p>
       <div class="form-field">
-        <label>API Key</label>
-        <input class="form-input" id="inline-anth" type="password" placeholder="AIzaSy… (Gemini) or sk-ant-… (Anthropic)">
+        <label>Anthropic API Key</label>
+        <input class="form-input" id="inp-anth-key" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
       </div>
+      <div class="form-field" style="margin-top:12px">
+        <label>Gemini API Key</label>
+        <input class="form-input" id="inp-gem-key" type="password" placeholder="AIza…" value="${esc(geminiKey)}">
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-top:10px">Keys are stored in your browser (localStorage) and never sent to our servers.</p>
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-blue" id="btn-save-inline-anth">Save & Continue</button>
+      <button class="btn btn-green" id="btn-save-settings">Save</button>
     </div>
   </div>`);
 
-  document.getElementById('btn-save-inline-anth').addEventListener('click',async()=>{
-    const key=document.getElementById('inline-anth').value.trim();
-    if(!key){ toast('Please enter a key','error'); return; }
-    try {
-      const isGemini=key.startsWith('AIza');
-      const upd=isGemini?{gemini_key:key}:{anthropic_key:key};
-      await updateDoc(doc(db,'companies',companyId),upd);
-      if(isGemini) geminiKey=key; else anthKey=key;
-      closeModal(); toast('Key saved','success');
-      if(callback) setTimeout(callback,300);
-    } catch(e){ toast(e.message,'error'); }
+  document.getElementById('btn-save-settings').addEventListener('click',()=>{
+    anthKey=document.getElementById('inp-anth-key').value.trim();
+    geminiKey=document.getElementById('inp-gem-key').value.trim();
+    localStorage.setItem('anth_key',anthKey);
+    localStorage.setItem('gem_key',geminiKey);
+    toast('Settings saved','success');
+    closeModal();
+    if(onSaved) onSaved();
   });
 }
 
-// ── Make closeModal global so inline onclick works ────────────────────────────
-window.closeModal = closeModal;
 </script>
 </body>
 </html>
