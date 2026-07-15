@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SpecPrice</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" async></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -232,7 +233,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.5.0</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.6.0</div>
     </div>
   </aside>
   <div class="main">
@@ -276,7 +277,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.5.0';
+const APP_VER   = '1.6.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -495,6 +496,7 @@ async function renderPartStock(filter=''){
     <div class="toolbar">
       <input class="search-box" id="ps-search" placeholder="Search part number, description, manufacturer…" value="${esc(filter)}">
       <button class="btn btn-blue" id="btn-ps-fc" style="white-space:nowrap;flex-shrink:0">🔍 Check FindChips</button>
+      <button class="btn btn-ghost" id="btn-ps-priority" style="white-space:nowrap;flex-shrink:0">📥 Priority Import</button>
       <span class="count-badge">${filtered.length} parts${filtered.length>2000?' (showing 2000)':''}</span>
     </div>
     <div class="table-wrap"><table id="ps-table">
@@ -537,6 +539,11 @@ async function renderPartStock(filter=''){
     }));
     if(!items.length){toast('No parts with part numbers','error');return;}
     runFCCheckModal(items,'parts');
+  });
+
+  // Priority Import button
+  document.getElementById('btn-ps-priority')?.addEventListener('click',()=>{
+    openPriorityImportModal();
   });
 }
 
@@ -693,6 +700,7 @@ async function renderRFQDetail(projectId, projectName){
   setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading BOM…</div>`);
   setActions(`
     <button class="btn btn-blue" id="btn-add-drawing">＋ Add Drawing</button>
+    <button class="btn btn-red" id="btn-bom-del-sel">🗑 Delete Selected</button>
     <button class="btn btn-ghost" id="btn-back-rfq">← Back</button>`);
 
   document.getElementById('btn-back-rfq').addEventListener('click', renderRFQList);
@@ -751,9 +759,10 @@ async function renderRFQDetail(projectId, projectName){
     let header = '';
     if(row._dwgName && row._dwgName !== lastDwgName){
       lastDwgName = row._dwgName;
-      header = `<tr data-dwg="${esc(row._dwgName)}" class="dwg-grp-hdr" style="background:var(--blue-light)"><td colspan="10" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none"><span class="dwg-toggle" style="cursor:pointer;user-select:none;display:inline-block;width:14px;text-align:center;font-size:11px;margin-right:5px;color:var(--blue-mid)" title="Collapse/expand">▼</span>📄 ${esc(row._dwgName)}</td></tr>`;
+      header = `<tr data-dwg="${esc(row._dwgName)}" class="dwg-grp-hdr" style="background:var(--blue-light)"><td colspan="11" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none"><span class="dwg-toggle" style="cursor:pointer;user-select:none;display:inline-block;width:14px;text-align:center;font-size:11px;margin-right:5px;color:var(--blue-mid)" title="Collapse/expand">▼</span>📄 ${esc(row._dwgName)}</td></tr>`;
     }
     return header + `<tr data-dwg="${esc(row._dwgName)}">
+      <td style="text-align:center"><input type="checkbox" class="bom-check" data-dwgid="${esc(row._dwgId)}" data-idx="${row._idx}" data-fmt="${row._fmt}"></td>
       ${BOM_COLS.map(c=>{
         // Drawing # fallback: if empty, show the drawing container name
         let val=row[c.k]||'';
@@ -775,8 +784,8 @@ async function renderRFQDetail(projectId, projectName){
       <span class="count-badge" id="bom-flt-count">${allRows.length} parts</span>
     </div>`:''}
     <div class="table-wrap"><table id="bom-table">
-      <thead><tr>${BOM_COLS.map(c=>`<th style="min-width:${c.w}">${c.l}</th>`).join('')}<th style="width:40px"></th></tr></thead>
-      <tbody id="bom-tbody">${rowsHtml||'<tr class="empty-row"><td colspan="10">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
+      <thead><tr><th style="width:28px"><input type="checkbox" id="bom-check-all" title="Select all"></th>${BOM_COLS.map(c=>`<th style="min-width:${c.w}">${c.l}</th>`).join('')}<th style="width:40px"></th></tr></thead>
+      <tbody id="bom-tbody">${rowsHtml||'<tr class="empty-row"><td colspan="11">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
     </table></div>
     <div style="margin-top:8px;font-size:11px;color:var(--muted)">${allRows.length} parts across ${drawings.length} drawing(s)</div>`);
 
@@ -830,16 +839,50 @@ async function renderRFQDetail(projectId, projectName){
       } catch(e){ toast(e.message,'error'); }
     });
   });
+
+  // Check-all toggle
+  document.getElementById('bom-check-all')?.addEventListener('change',e=>{
+    document.querySelectorAll('.bom-check').forEach(cb=>cb.checked=e.target.checked);
+  });
+
+  // Bulk delete selected rows
+  document.getElementById('btn-bom-del-sel')?.addEventListener('click', async()=>{
+    const checked=[...document.querySelectorAll('.bom-check:checked')];
+    if(!checked.length){ toast('No rows selected','error'); return; }
+    if(!confirm(`Delete ${checked.length} selected row(s)?`)) return;
+    const selections=checked.map(cb=>({dwgId:cb.dataset.dwgid, idx:parseInt(cb.dataset.idx), fmt:cb.dataset.fmt}));
+    const byDwg={};
+    selections.forEach(s=>{ const key=s.dwgId+'|'+s.fmt; (byDwg[key]=byDwg[key]||[]).push(s); });
+    try{
+      for(const key in byDwg){
+        const group=byDwg[key];
+        const {dwgId,fmt}=group[0];
+        if(fmt==='doc'){
+          await deleteDoc(doc(db,'companies',companyId,'projects',projectId,'drawings',dwgId));
+        } else {
+          const dwgRef=doc(db,'companies',companyId,'projects',projectId,'drawings',dwgId);
+          const dwgSnap=await getDoc(dwgRef);
+          let items=[...(dwgSnap.data()?.items||[])];
+          const idxs=group.map(g=>g.idx).sort((a,b)=>b-a);
+          idxs.forEach(idx=>{ if(idx>=0 && idx<items.length) items.splice(idx,1); });
+          if(items.length===0){ await deleteDoc(dwgRef); }
+          else { await updateDoc(dwgRef,{items, updatedAt:serverTimestamp()}); }
+        }
+      }
+      toast(`Deleted ${selections.length} row(s)`,'success');
+      renderRFQDetail(projectId, projectName);
+    }catch(e){ toast('Error: '+e.message,'error'); }
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ADD DRAWING MODAL — PDF / Image → AI → BOM
 // ══════════════════════════════════════════════════════════════════════════════
-function openAddDrawingModal(projectId, projectName){
-  if(!anthKey && !geminiKey){ showSettingsModal(()=>openAddDrawingModal(projectId,projectName)); return; }
+function openAddDrawingModal(projectId, projectName, queue=[]){
+  if(!anthKey && !geminiKey){ showSettingsModal(()=>openAddDrawingModal(projectId,projectName,queue)); return; }
 
   showModal(`<div class="modal">
-    <div class="modal-head"><h3>Add Drawing to ${esc(projectName)}</h3><button class="close-modal" id="modal-close">✕</button></div>
+    <div class="modal-head"><h3>Add Drawing to ${esc(projectName)}${queue.length?` — ${queue.length} more file(s) queued`:''}</h3><button class="close-modal" id="modal-close">✕</button></div>
     <div class="modal-body" id="modal-body-inner">
       <div class="form-field" style="margin-bottom:14px">
         <label>Drawing Name / Title</label>
@@ -848,8 +891,8 @@ function openAddDrawingModal(projectId, projectName){
       <div class="drop-zone" id="drop-zone" tabindex="0">
         <span class="icon-big">📄</span>
         <strong>Drop PDF or Image here</strong>
-        <p>or click to browse (PDF, PNG, JPG, JPEG, WEBP, BMP)</p>
-        <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp"
+        <p>or click to browse — you can select multiple files (PDF, PNG, JPG, JPEG, WEBP, BMP)</p>
+        <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" multiple
                style="display:none">
       </div>
     </div>
@@ -869,17 +912,26 @@ function openAddDrawingModal(projectId, projectName){
   dz.addEventListener('drop', e=>{
     e.preventDefault();dz.classList.remove('dragover');
     const dwgName=document.getElementById('drawing-name-inp')?.value.trim()||'';
-    handleFile(e.dataTransfer.files[0],projectId,projectName,dwgName);
+    const files=[...e.dataTransfer.files];
+    if(!files.length) return;
+    handleFile(files[0],projectId,projectName,dwgName,files.slice(1));
   });
   fi.addEventListener('change', ()=>{
-    if(fi.files[0]){
+    if(fi.files.length){
       const dwgName=document.getElementById('drawing-name-inp')?.value.trim()||'';
-      handleFile(fi.files[0],projectId,projectName,dwgName);
+      const files=[...fi.files];
+      handleFile(files[0],projectId,projectName,dwgName,files.slice(1));
     }
   });
+
+  // Auto-continue processing a queued batch (multi-file upload)
+  if(queue.length){
+    const nextFile=queue[0], remaining=queue.slice(1);
+    handleFile(nextFile, projectId, projectName, '', remaining);
+  }
 }
 
-async function handleFile(file, projectId, projectName, drawingName=''){
+async function handleFile(file, projectId, projectName, drawingName='', remainingQueue=[]){
   if(!file) return;
   const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
   const isImg = file.type.startsWith('image/');
@@ -966,8 +1018,12 @@ async function handleFile(file, projectId, projectName, drawingName=''){
     const _spaceIdx = _fileBase.indexOf(' ');
     const effectiveDwgName = drawingName || (_spaceIdx>0 ? _fileBase.slice(0,_spaceIdx) : _fileBase);
     const fileRevision = _spaceIdx>0 ? _fileBase.slice(_spaceIdx+1).trim() : '';
+    extractedRows.forEach(r=>{
+      if(!r.drawing_number) r.drawing_number=effectiveDwgName;
+      if(!r.revision) r.revision=fileRevision;
+    });
     showBOMPreview(extractedRows, body, foot,
-      `💾 Save to Part Stock + RFQ (${extractedRows.length} rows)`,
+      `💾 Save to Part Stock + RFQ (${extractedRows.length} rows)${remainingQueue.length?` — ${remainingQueue.length} more queued`:''}`,
       async(updatedRows)=>{
         // Stamp drawing_number + revision into rows if missing
         updatedRows.forEach(r=>{
@@ -976,6 +1032,9 @@ async function handleFile(file, projectId, projectName, drawingName=''){
         });
         await saveBOMToPartStock(updatedRows);
         await saveBOMToRFQ(updatedRows, projectId, projectName, effectiveDwgName);
+        if(remainingQueue.length){
+          setTimeout(()=>openAddDrawingModal(projectId, projectName, remainingQueue), 250);
+        }
       }
     );
   } catch(e){
@@ -1280,6 +1339,63 @@ async function _geminiBOM(text, isImage, imgData, filename){
 
 const FC_PROXY = 'https://corsproxy.io/?url=';
 
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Currency conversion → USD (via coinmill.com, same CORS proxy as FindChips) ─
+const _COINMILL_URLS = {
+  CHF: 'https://iw.coinmill.com/CHF_USD.html',
+  JPY: 'https://iw.coinmill.com/JPY_USD.html',
+  EUR: 'https://iw.coinmill.com/EUR_USD.html',
+  ILS: 'https://iw.coinmill.com/ILS_USD.html',
+  GBP: 'https://iw.coinmill.com/GBP_USD.html',
+};
+const _currencyRateCache = {};
+
+// Detect a 3-letter currency code (or symbol) from a raw price string; defaults to USD
+function _detectCurrency(raw){
+  const s=String(raw||'').trim();
+  if(/₪|\bILS\b|\bNIS\b|שקל/i.test(s)) return 'ILS';
+  if(/€|\bEUR\b/i.test(s)) return 'EUR';
+  if(/£|\bGBP\b/i.test(s)) return 'GBP';
+  if(/¥|\bJPY\b/i.test(s)) return 'JPY';
+  if(/\bCHF\b/i.test(s)) return 'CHF';
+  return 'USD';
+}
+
+async function _fetchCurrencyRate(code){
+  if(code==='USD') return 1;
+  if(_currencyRateCache[code]) return _currencyRateCache[code];
+  const url=_COINMILL_URLS[code];
+  if(!url) return null;
+  try{
+    const resp=await fetch(FC_PROXY+encodeURIComponent(url),{signal:AbortSignal.timeout(15000)});
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    const html=await resp.text();
+    // coinmill pages phrase the rate as "1 XXX = Y.YYYYY USD" somewhere in the text
+    let m = html.match(new RegExp('1\\s*'+code+'\\s*=\\s*([\\d,]+\\.?\\d*)\\s*USD','i'));
+    if(!m) m = html.match(/=\s*([\d,]+\.\d+)\s*USD/i);
+    if(m){
+      const rate=parseFloat(m[1].replace(/,/g,''));
+      if(rate>0){ _currencyRateCache[code]=rate; return rate; }
+    }
+  }catch(e){ console.warn('[Currency] rate fetch error:',code,e.message); }
+  return null;
+}
+
+// Parses a raw price (may include a currency symbol/code) and converts to a plain USD number.
+// Returns null if the value can't be parsed at all. Falls back to the raw number (unconverted)
+// if a live rate can't be fetched, so an import never blocks on network issues.
+async function _convertToUSD(raw){
+  const s=String(raw||'').trim();
+  if(!s) return null;
+  const num=parseFloat(s.replace(/[^\d.\-]/g,''));
+  if(isNaN(num)) return null;
+  const cur=_detectCurrency(s);
+  if(cur==='USD') return num;
+  const rate=await _fetchCurrencyRate(cur);
+  if(!rate){ console.warn('[Currency] no rate for',cur,'- keeping original value'); return num; }
+  return Math.round(num*rate*10000)/10000;
+}
+
 function _fcParsePriceBreaks(texts){
   const breaks=[];
   // Strategy A: "N+ $X.XX" pairs inline
@@ -1375,7 +1491,7 @@ async function runFCCheckModal(items, mode){
   const total=items.length;
 
   showModal(`<div class="modal" style="width:min(94vw,820px)">
-    <div class="modal-head"><h3>🔍 FindChips Price Check</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>🔍 FindChips Price Check</h3><button class="close-modal" id="fc-close-x">✕</button></div>
     <div class="modal-body" id="fc-modal-body">
       <div class="ai-status" style="margin-bottom:8px"><div class="ring"></div><span id="fc-status">Starting…</span></div>
       <div class="progress-bar"><div class="progress-fill" id="fc-prog"></div></div>
@@ -1402,7 +1518,9 @@ async function runFCCheckModal(items, mode){
     </div>
   </div>`);
 
-  document.getElementById('btn-fc-stop').addEventListener('click',()=>{stopped=true;closeModal();});
+  const _fcRefresh=()=>{ if(mode==='parts'){allParts=[];renderPartStock();}else{renderSalesDesk();} };
+  document.getElementById('btn-fc-stop').addEventListener('click',()=>{stopped=true;closeModal();_fcRefresh();});
+  document.getElementById('fc-close-x').addEventListener('click',()=>{stopped=true;closeModal();_fcRefresh();});
 
   let done=0, found=0;
   for(let i=0;i<items.length;i++){
@@ -1495,10 +1613,176 @@ async function runFCCheckModal(items, mode){
   if(stEl) stEl.textContent=`Done — ${found}/${total} prices found`;
   const stopBtn=document.getElementById('btn-fc-stop');
   if(stopBtn){stopBtn.textContent='Close';stopBtn.className='btn btn-green';
-    stopBtn.onclick=()=>{closeModal();if(mode==='parts'){allParts=[];renderPartStock();}else{renderSalesDesk();}};
+    stopBtn.onclick=()=>{closeModal();_fcRefresh();};
   }
   const ringEl=document.querySelector('#fc-modal-body .ring');
   if(ringEl){ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';ringEl.textContent='✓';}
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── PRIORITY IMPORT — Excel (part_number + price) → Part Stock priority_price ─
+// ══════════════════════════════════════════════════════════════════════════════
+const _PN_HEADER_HINTS=['part number','part_number','partnumber','pn','p/n','מק"ט','מקט','catalog','item number','item no','cat no','cat#'];
+const _PRICE_HEADER_HINTS=['price','unit price','מחיר','cost','rate'];
+
+function _priorityFindCol(headers, hints){
+  const norm=headers.map(h=>String(h||'').trim().toLowerCase());
+  for(const hint of hints){
+    const idx=norm.findIndex(h=>h===hint);
+    if(idx>=0) return idx;
+  }
+  for(const hint of hints){
+    const idx=norm.findIndex(h=>h.includes(hint));
+    if(idx>=0) return idx;
+  }
+  return -1;
+}
+
+function openPriorityImportModal(){
+  showModal(`<div class="modal">
+    <div class="modal-head"><h3>📥 Priority Import</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" id="pi-modal-body">
+      <div class="drop-zone" id="pi-drop-zone" tabindex="0">
+        <span class="icon-big">📊</span>
+        <strong>Drop Excel file here</strong>
+        <p>.xlsx, .xls or .csv — expects a Part Number column and a Price column</p>
+        <input type="file" id="pi-file-input" accept=".xlsx,.xls,.csv" style="display:none">
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+  </div>`);
+
+  const dz=document.getElementById('pi-drop-zone');
+  const fi=document.getElementById('pi-file-input');
+  dz.addEventListener('click',()=>fi.click());
+  dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover');});
+  dz.addEventListener('dragleave',()=>dz.classList.remove('dragover'));
+  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');
+    if(e.dataTransfer.files[0]) handlePriorityFile(e.dataTransfer.files[0]);
+  });
+  fi.addEventListener('change',()=>{ if(fi.files[0]) handlePriorityFile(fi.files[0]); });
+}
+
+async function handlePriorityFile(file){
+  const body=document.getElementById('pi-modal-body');
+  const foot=document.querySelector('#modal-bg .modal-foot');
+  body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="pi-msg">Reading file…</span></div>`;
+  foot.innerHTML='';
+
+  try{
+    if(!window.XLSX) throw new Error('Excel library not loaded — please reload the page and try again.');
+    const ab=await file.arrayBuffer();
+    const wb=XLSX.read(ab,{type:'array'});
+    const sheet=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:''});
+    if(!rows.length) throw new Error('The file appears to be empty.');
+
+    const headers=rows[0];
+    let pnCol=_priorityFindCol(headers,_PN_HEADER_HINTS);
+    let prCol=_priorityFindCol(headers,_PRICE_HEADER_HINTS);
+    let dataRows=rows.slice(1);
+    if(pnCol<0 || prCol<0){
+      // Fall back to first two columns, treat row 1 as data (no recognizable header)
+      pnCol=0; prCol=1; dataRows=rows;
+    }
+
+    const el=document.getElementById('pi-msg'); if(el) el.textContent='Converting prices to USD…';
+    const parsed=[];
+    for(const r of dataRows){
+      const pn=String(r[pnCol]||'').trim();
+      const rawPrice=r[prCol];
+      if(!pn || rawPrice===''||rawPrice===undefined||rawPrice===null) continue;
+      const usd=await _convertToUSD(rawPrice);
+      if(usd===null) continue;
+      parsed.push({part_number:pn, priority_price:usd, _raw:String(rawPrice)});
+    }
+
+    if(!parsed.length){
+      body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No valid Part Number + Price rows were detected in this file.</p>`;
+      foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+      return;
+    }
+
+    showPriorityPreview(parsed, body, foot);
+  }catch(e){
+    body.innerHTML+=`<p style="color:red;margin-top:12px">Error: ${e.message}</p>`;
+    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+  }
+}
+
+function showPriorityPreview(rows, body, foot){
+  const modalEl=body.closest('.modal');
+  if(modalEl){ modalEl.style.width='min(94vw,700px)'; modalEl.style.maxWidth='700px'; }
+
+  const tBody=rows.map((r,i)=>`<tr data-i="${i}">
+    <td contenteditable="true" data-k="part_number" data-i="${i}" style="min-width:140px">${esc(r.part_number)}</td>
+    <td contenteditable="true" data-k="priority_price" data-i="${i}" style="min-width:90px">${esc(String(r.priority_price))}</td>
+    <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
+  </tr>`).join('');
+
+  body.innerHTML=`
+    <div class="ai-status" style="margin-bottom:10px">
+      <div style="width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1">✓</div>
+      <span>${rows.length} rows parsed (prices converted to $) — click any cell to edit before saving</span>
+    </div>
+    <div class="table-wrap" style="max-height:calc(85vh - 175px);overflow:auto"><table>
+      <thead><tr><th>Part Number</th><th>Priority Price ($)</th><th></th></tr></thead>
+      <tbody id="pi-preview-tbody">${tBody}</tbody>
+    </table></div>`;
+
+  foot.innerHTML=`
+    <button class="btn btn-ghost" id="pi-cancel">Cancel</button>
+    <button class="btn btn-green" id="pi-save">💾 Save to Part Stock (${rows.length} rows)</button>`;
+
+  document.getElementById('pi-cancel').addEventListener('click',closeModal);
+  document.getElementById('pi-save').addEventListener('click', async()=>{
+    const finalRows=[];
+    document.querySelectorAll('#pi-preview-tbody tr').forEach(tr=>{
+      const pn=tr.querySelector('[data-k="part_number"]')?.textContent.trim()||'';
+      const pr=parseFloat(tr.querySelector('[data-k="priority_price"]')?.textContent.trim())||0;
+      if(pn) finalRows.push({part_number:pn, priority_price:pr});
+    });
+    if(!finalRows.length){ toast('No rows to save','error'); return; }
+    const btn=document.getElementById('pi-save');
+    btn.disabled=true; btn.textContent='Saving…';
+    try{
+      const {updated, created}=await savePriorityImport(finalRows);
+      toast(`Priority Import: ${updated} updated, ${created} created`,'success');
+      closeModal();
+      allParts=[]; renderPartStock();
+    }catch(e){ toast('Save error: '+e.message,'error'); btn.disabled=false; btn.textContent=`💾 Save to Part Stock (${finalRows.length} rows)`; }
+  });
+}
+
+// Upsert priority prices into parts_cache. Existing part_number → update priority_price;
+// unknown part_number → create a new row with just part_number + priority_price.
+async function savePriorityImport(rows){
+  await loadParts();
+  let updated=0, created=0;
+  for(const r of rows){
+    const pn=r.part_number.trim();
+    if(!pn) continue;
+    const existing=allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
+    try{
+      if(existing){
+        await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),{
+          priority_price:r.priority_price, updatedAt:serverTimestamp()
+        });
+        existing.priority_price=r.priority_price;
+        updated++;
+      } else {
+        const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
+        await setDoc(doc(db,'companies',companyId,'parts_cache',key),{
+          part_number:pn, description:'', drawing_number:'', manufacturer:'',
+          unit:'', atlantium_pn:'', price:'', distributor:'', stock:'', price_description:'',
+          priority_price:r.priority_price, updatedAt:serverTimestamp()
+        },{merge:true});
+        allParts.push({_id:key, part_number:pn, priority_price:r.priority_price});
+        created++;
+      }
+    }catch(e){ console.warn('[PriorityImport] save error:',pn,e.message); }
+  }
+  return {updated, created};
 }
 
 // SALES DESK
@@ -1512,6 +1796,7 @@ async function renderSalesDesk(){
     const tbody=sdItems.map((r,i)=>`<tr data-i="${i}">
       <td style="text-align:center"><input type="checkbox" class="sd-check" data-i="${i}"></td>
       <td>${esc(r.part_number)}</td>
+      <td>${esc(r.drawing_number)}</td>
       <td class="wrap">${esc(r.description)}</td>
       <td><input type="number" class="sd-qty" data-i="${i}" value="${r.qty}" min="0.001" step="any"
            style="width:60px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px"></td>
@@ -1522,7 +1807,7 @@ async function renderSalesDesk(){
     </tr>`).join('');
 
     document.getElementById('sd-tbody').innerHTML=tbody||
-      `<tr class="empty-row"><td colspan="8">No parts added yet</td></tr>`;
+      `<tr class="empty-row"><td colspan="9">No parts added yet</td></tr>`;
     document.getElementById('sd-total').textContent='$'+partsTotal.toFixed(2);
 
     document.querySelectorAll('.sd-qty').forEach(inp=>inp.addEventListener('change',()=>{
@@ -1552,7 +1837,7 @@ async function renderSalesDesk(){
           <table style="width:100%">
             <thead><tr>
               <th style="width:28px"><input type="checkbox" id="sd-check-all" title="Select all"></th>
-              <th>Part #</th><th>Description</th><th>QTY</th>
+              <th>Part #</th><th>Drawing #</th><th>Description</th><th>QTY</th>
               <th>Units</th><th>Price</th><th>Total</th><th></th>
             </tr></thead>
             <tbody id="sd-tbody"></tbody>
@@ -1601,6 +1886,7 @@ async function renderSalesDesk(){
       const p=suggestions[+el.dataset.si];
       const price=parseFloat(p.price)||parseFloat(p.priority_price)||0;
       sdItems.push({part_number:p.part_number||'',description:p.description||'',
+        drawing_number:p.drawing_number||p.drawing_name||'',
         qty:1,unit:p.unit||p.units||'pcs',price,total:price});
       sdSearch.value=''; sdSuggest.style.display='none';
       renderSD();
@@ -1661,6 +1947,7 @@ async function renderSalesDesk(){
         const qty=parseFloat(p.qty)||1;
         sdItems.push({
           part_number:p.part_number||'', description:p.description||'',
+          drawing_number:p.drawing_number||p.drawing_name||dwg||'',
           qty, unit:p.unit||p.units||'pcs', price, total:price*qty
         });
       }
@@ -1677,15 +1964,15 @@ async function renderSalesDesk(){
   });
 }
 
-function openSDFileModal(){
+function openSDFileModal(queue=[]){
   showModal(`<div class="modal">
-    <div class="modal-head"><h3>Import BOM from File</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>Import BOM from File${queue.length?` — ${queue.length} more file(s) queued`:''}</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
     <div class="modal-body" id="sd-modal-body">
       <div class="drop-zone" id="sd-drop-zone" tabindex="0">
         <span class="icon-big">📄</span>
         <strong>Drop PDF or Image here</strong>
-        <p>Parts will be added to Sales Desk</p>
-        <input type="file" id="sd-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" style="display:none">
+        <p>Parts will be added to Sales Desk — you can select multiple files</p>
+        <input type="file" id="sd-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" multiple style="display:none">
       </div>
     </div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
@@ -1696,11 +1983,26 @@ function openSDFileModal(){
   dz.addEventListener('click',()=>fi.click());
   dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover');});
   dz.addEventListener('dragleave',()=>dz.classList.remove('dragover'));
-  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');handleSDFile(e.dataTransfer.files[0]);});
-  fi.addEventListener('change',()=>{ if(fi.files[0]) handleSDFile(fi.files[0]); });
+  dz.addEventListener('drop',e=>{
+    e.preventDefault();dz.classList.remove('dragover');
+    const files=[...e.dataTransfer.files];
+    if(files.length) handleSDFile(files[0], files.slice(1));
+  });
+  fi.addEventListener('change',()=>{
+    if(fi.files.length){
+      const files=[...fi.files];
+      handleSDFile(files[0], files.slice(1));
+    }
+  });
+
+  // Auto-continue processing a queued batch (multi-file upload)
+  if(queue.length){
+    const nextFile=queue[0], remaining=queue.slice(1);
+    handleSDFile(nextFile, remaining);
+  }
 }
 
-async function handleSDFile(file){
+async function handleSDFile(file, remainingQueue=[]){
   const isPDF=file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf');
   const isImg=file.type.startsWith('image/');
   if(!isPDF&&!isImg){ toast('Please upload a PDF or image','error'); return; }
@@ -1749,6 +2051,17 @@ async function handleSDFile(file){
 
     _normalizeBOMRows(extractedRows);
 
+    // Parse filename: "303-49-00251-00 REV 01 _approved.pdf"
+    // → drawingName="303-49-00251-00", revision="REV 01 _approved"
+    const _fileBase=file.name.replace(/\.[^.]+$/,'');
+    const _spaceIdx=_fileBase.indexOf(' ');
+    const effectiveDwgName=_spaceIdx>0 ? _fileBase.slice(0,_spaceIdx) : _fileBase;
+    const fileRevision=_spaceIdx>0 ? _fileBase.slice(_spaceIdx+1).trim() : '';
+    extractedRows.forEach(r=>{
+      if(!r.drawing_number) r.drawing_number=effectiveDwgName;
+      if(!r.revision) r.revision=fileRevision;
+    });
+
     setM('Done — review the table below',100);
     const _ringEl=body.querySelector('.ring');
     if(_ringEl){_ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';
@@ -1772,8 +2085,12 @@ async function handleSDFile(file){
 
     // Show editable preview — on Save: save to Part Stock + add to Sales Desk
     showBOMPreview(extractedRows, body, foot,
-      `💾 Save to Part Stock + Sales Desk (${extractedRows.length} rows)`,
+      `💾 Save to Part Stock + Sales Desk (${extractedRows.length} rows)${remainingQueue.length?` — ${remainingQueue.length} more queued`:''}`,
       async(updatedRows)=>{
+        updatedRows.forEach(r=>{
+          if(!r.drawing_number) r.drawing_number=effectiveDwgName;
+          if(!r.revision) r.revision=fileRevision;
+        });
         await saveBOMToPartStock(updatedRows);
         let added=0;
         for(const r of updatedRows){
@@ -1783,6 +2100,7 @@ async function handleSDFile(file){
           const qty=parseFloat(r.qty)||1;
           sdItems.push({
             part_number:r.part_number||r.item||'', description:r.description||'',
+            drawing_number:r.drawing_number||match?.drawing_number||match?.drawing_name||'',
             qty, unit:r.unit||match?.unit||match?.units||'pcs', price, total:price*qty
           });
           added++;
@@ -1790,6 +2108,9 @@ async function handleSDFile(file){
         toast(`Added ${added} parts to Sales Desk`,'success');
         closeModal();
         document.getElementById('sd-tbody')&&renderSalesDesk();
+        if(remainingQueue.length){
+          setTimeout(()=>openSDFileModal(remainingQueue), 250);
+        }
       }
     );
   } catch(e){
@@ -1805,10 +2126,14 @@ async function renderCustomers(){
   setActions(`<button class="btn btn-green" id="btn-new-cust">＋ New Customer</button>`);
   document.getElementById('btn-new-cust').addEventListener('click',()=>openCustomerModal());
 
-  let customers=[];
+  let customers=[], projects=[];
   try {
-    const snap=await getDocs(query(collection(db,'companies',companyId,'customers'),orderBy('name')));
-    customers=snap.docs.map(d=>({_id:d.id,...d.data()}));
+    const [cs,ps]=await Promise.all([
+      getDocs(query(collection(db,'companies',companyId,'customers'),orderBy('name'))),
+      getDocs(collection(db,'companies',companyId,'projects'))
+    ]);
+    customers=cs.docs.map(d=>({_id:d.id,...d.data()}));
+    projects=ps.docs.map(d=>({_id:d.id,...d.data()}));
   } catch(e){ setContent(`<p style="color:red;padding:20px">${e.message}</p>`); return; }
 
   if(!customers.length){
@@ -1821,19 +2146,31 @@ async function renderCustomers(){
   setContent(`
     <div class="toolbar"><span class="count-badge">${customers.length} customers</span></div>
     <div class="card-grid">
-    ${customers.map(c=>`
-      <div class="rfq-card">
-        <div class="rfq-card-icon">🏢</div>
-        <div class="rfq-card-body">
-          <h3>${esc(c.name)}</h3>
-          <p>${(c.contacts||[]).length} contact(s)</p>
-          ${(c.contacts||[]).slice(0,2).map(ct=>`<p style="margin-top:2px;font-size:10px">${esc(ct.name)}${ct.email?' · '+esc(ct.email):''}</p>`).join('')}
+    ${customers.map(c=>{
+      const custRfqs=projects.filter(p=>p.customer_id===c._id);
+      const iconHtml=c.icon_b64
+        ? `<img src="${c.icon_b64}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0" alt="">`
+        : `<div class="rfq-card-icon">🏢</div>`;
+      return `
+      <div class="rfq-card" style="flex-direction:column;align-items:stretch">
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          ${iconHtml}
+          <div class="rfq-card-body">
+            <h3>${esc(c.name)}</h3>
+            <p>${(c.contacts||[]).length} contact(s)</p>
+            ${(c.contacts||[]).slice(0,2).map(ct=>`<p style="margin-top:2px;font-size:10px">${esc(ct.name)}${ct.email?' · '+esc(ct.email):''}</p>`).join('')}
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;align-self:flex-start">
+            <button class="btn btn-ghost btn-sm edit-cust" data-id="${c._id}">✏️ Edit</button>
+            <button class="btn btn-red btn-sm del-cust" data-id="${c._id}" data-name="${esc(c.name)}">✕</button>
+          </div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;align-self:flex-start">
-          <button class="btn btn-ghost btn-sm edit-cust" data-id="${c._id}">✏️ Edit</button>
-          <button class="btn btn-red btn-sm del-cust" data-id="${c._id}" data-name="${esc(c.name)}">✕</button>
-        </div>
-      </div>`).join('')}
+        ${custRfqs.length?`<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">RFQs (${custRfqs.length})</div>
+          ${custRfqs.map(p=>`<div class="cust-rfq-link" data-id="${esc(p._id)}" data-name="${esc(p.name||p._id)}" style="font-size:11px;color:var(--blue-mid);cursor:pointer;padding:2px 0">📋 ${esc(p.name||p._id)}</div>`).join('')}
+        </div>`:''}
+      </div>`;
+    }).join('')}
     </div>`);
 
   document.querySelectorAll('.edit-cust').forEach(btn=>btn.addEventListener('click',()=>{
@@ -1841,6 +2178,9 @@ async function renderCustomers(){
   }));
   document.querySelectorAll('.del-cust').forEach(btn=>btn.addEventListener('click',()=>
     deleteCustomer(btn.dataset.id,btn.dataset.name)));
+  document.querySelectorAll('.cust-rfq-link').forEach(el=>el.addEventListener('click',()=>{
+    renderRFQDetail(el.dataset.id, el.dataset.name);
+  }));
 }
 
 function openCustomerModal(cust={}){
@@ -1863,6 +2203,16 @@ function openCustomerModal(cust={}){
         <label>Customer Name</label>
         <input class="form-input" id="cust-name-inp" placeholder="e.g. Elbit Systems" value="${esc(cust.name||'')}">
 
+      </div>
+      <div class="form-field">
+        <label>Customer Icon</label>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div id="cust-icon-preview" style="width:48px;height:48px;border-radius:8px;background:var(--blue-light);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0">
+            ${cust.icon_b64?`<img src="${cust.icon_b64}" style="width:100%;height:100%;object-fit:cover">`:`<span style="font-size:22px">🏢</span>`}
+          </div>
+          <input type="file" id="cust-icon-inp" accept="image/*" style="font-size:12px">
+          ${cust.icon_b64?`<button type="button" class="btn btn-ghost btn-sm" id="cust-icon-clear">Remove</button>`:''}
+        </div>
       </div>
       <div style="margin-top:16px">
         <label style="font-size:12px;font-weight:600;color:var(--blue-dark)">Contacts</label>
@@ -1891,6 +2241,24 @@ function openCustomerModal(cust={}){
   document.getElementById('modal-cancel').addEventListener('click',closeModal);
 
   let contactCount=contacts.length;
+  let _custIconB64=cust.icon_b64||'';
+
+  document.getElementById('cust-icon-inp').addEventListener('change',()=>{
+    const f=document.getElementById('cust-icon-inp').files[0];
+    if(!f) return;
+    const reader=new FileReader();
+    reader.onload=e=>{
+      _custIconB64=e.target.result;
+      const prev=document.getElementById('cust-icon-preview');
+      if(prev) prev.innerHTML=`<img src="${_custIconB64}" style="width:100%;height:100%;object-fit:cover">`;
+    };
+    reader.readAsDataURL(f);
+  });
+  document.getElementById('cust-icon-clear')?.addEventListener('click',()=>{
+    _custIconB64='';
+    const prev=document.getElementById('cust-icon-preview');
+    if(prev) prev.innerHTML=`<span style="font-size:22px">🏢</span>`;
+  });
 
   document.getElementById('btn-add-contact').addEventListener('click',()=>{
     const tb=document.getElementById('contacts-tbody');
@@ -1919,9 +2287,9 @@ function openCustomerModal(cust={}){
     try{
       const col=collection(db,'companies',companyId,'customers');
       if(isEdit){
-        await updateDoc(doc(col,cust._id),{name,contacts:custContacts,updatedAt:serverTimestamp()});
+        await updateDoc(doc(col,cust._id),{name,contacts:custContacts,icon_b64:_custIconB64,updatedAt:serverTimestamp()});
       } else {
-        await addDoc(col,{name,contacts:custContacts,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+        await addDoc(col,{name,contacts:custContacts,icon_b64:_custIconB64,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
       }
       toast(isEdit?`Updated "${name}"`:`Customer "${name}" created`,'success');
       closeModal(); renderCustomers();
