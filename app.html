@@ -702,7 +702,8 @@ async function renderRFQDetail(projectId, projectName){
 
   const BOM_COLS=[
     {k:'item',          l:'Item',        w:'45px'},
-    {k:'drawing_number',l:'Drawing #',   w:'100px'},
+    {k:'drawing_number',l:'Drawing #',   w:'110px'},
+    {k:'revision',      l:'Revision',    w:'90px'},
     {k:'part_number',   l:'Part #',      w:'130px'},
     {k:'atlantium_pn',  l:'Cust PN',     w:'100px'},
     {k:'description',   l:'Description', w:'210px',wrap:true},
@@ -720,7 +721,7 @@ async function renderRFQDetail(projectId, projectName){
     let header = '';
     if(row._dwgName && row._dwgName !== lastDwgName){
       lastDwgName = row._dwgName;
-      header = `<tr data-dwg="${esc(row._dwgName)}" class="dwg-grp-hdr" style="background:var(--blue-light)"><td colspan="9" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none"><span class="dwg-toggle" style="cursor:pointer;user-select:none;display:inline-block;width:14px;text-align:center;font-size:11px;margin-right:5px;color:var(--blue-mid)" title="Collapse/expand">▼</span>📄 ${esc(row._dwgName)}</td></tr>`;
+      header = `<tr data-dwg="${esc(row._dwgName)}" class="dwg-grp-hdr" style="background:var(--blue-light)"><td colspan="10" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none"><span class="dwg-toggle" style="cursor:pointer;user-select:none;display:inline-block;width:14px;text-align:center;font-size:11px;margin-right:5px;color:var(--blue-mid)" title="Collapse/expand">▼</span>📄 ${esc(row._dwgName)}</td></tr>`;
     }
     return header + `<tr data-dwg="${esc(row._dwgName)}">
       ${BOM_COLS.map(c=>{
@@ -745,7 +746,7 @@ async function renderRFQDetail(projectId, projectName){
     </div>`:''}
     <div class="table-wrap"><table id="bom-table">
       <thead><tr>${BOM_COLS.map(c=>`<th style="min-width:${c.w}">${c.l}</th>`).join('')}<th style="width:40px"></th></tr></thead>
-      <tbody id="bom-tbody">${rowsHtml||'<tr class="empty-row"><td colspan="9">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
+      <tbody id="bom-tbody">${rowsHtml||'<tr class="empty-row"><td colspan="10">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
     </table></div>
     <div style="margin-top:8px;font-size:11px;color:var(--muted)">${allRows.length} parts across ${drawings.length} drawing(s)</div>`);
 
@@ -929,11 +930,20 @@ async function handleFile(file, projectId, projectName, drawingName=''){
     }
 
     _normalizeBOMRows(extractedRows);
-    // Drawing name priority: user-typed → filename without extension
-    const effectiveDwgName = drawingName || file.name.replace(/\.[^.]+$/,'');
+    // Parse filename: "303-49-00251-00 REV 01 _approved.pdf"
+    // → drawingName="303-49-00251-00", revision="REV 01 _approved"
+    const _fileBase = file.name.replace(/\.[^.]+$/,'');
+    const _spaceIdx = _fileBase.indexOf(' ');
+    const effectiveDwgName = drawingName || (_spaceIdx>0 ? _fileBase.slice(0,_spaceIdx) : _fileBase);
+    const fileRevision = _spaceIdx>0 ? _fileBase.slice(_spaceIdx+1).trim() : '';
     showBOMPreview(extractedRows, body, foot,
       `💾 Save to Part Stock + RFQ (${extractedRows.length} rows)`,
       async(updatedRows)=>{
+        // Stamp drawing_number + revision into rows if missing
+        updatedRows.forEach(r=>{
+          if(!r.drawing_number) r.drawing_number=effectiveDwgName;
+          if(!r.revision) r.revision=fileRevision;
+        });
         await saveBOMToPartStock(updatedRows);
         await saveBOMToRFQ(updatedRows, projectId, projectName, effectiveDwgName);
       }
@@ -951,8 +961,8 @@ async function handleFile(file, projectId, projectName, drawingName=''){
 // showBOMPreview(rows, body, foot, btnLabel, saveCallback)
 // saveCallback(updatedRows) is called when user clicks Save
 function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
-  const PCOLS=['item','drawing_number','part_number','drawing_name','atlantium_pn','description','qty','unit','manufacturer'];
-  const PLABELS=['Item','Drawing #','Part #','Dwg Name','Cust PN','Description','QTY','Units','Manufacturer'];
+  const PCOLS=['item','drawing_number','revision','part_number','drawing_name','atlantium_pn','description','qty','unit','manufacturer'];
+  const PLABELS=['Item','Drawing #','Revision','Part #','Dwg Name','Cust PN','Description','QTY','Units','Manufacturer'];
 
   // Expand modal for comfortable editing
   const modalEl=body.closest('.modal');
@@ -1666,15 +1676,4 @@ function showSettingsModal(onSaved){
       </div>
       <div class="form-field" style="margin-top:12px">
         <label>Gemini API Key</label>
-        <input class="form-input" id="inp-gem-key" type="password" placeholder="AIza…" value="${esc(geminiKey)}">
-      </div>
-      <p style="font-size:11px;color:var(--muted);margin-top:10px">Keys are stored in your browser (localStorage) and never sent to our servers.</p>
-    </div>
-    <div class="modal-foot">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-green" id="btn-save-settings">Save</button>
-    </div>
-  </div>`);
-
-  document.getElementById('btn-save-settings').addEventListener('click',()=>{
-    ant
+     
