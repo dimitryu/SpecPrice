@@ -929,11 +929,13 @@ async function handleFile(file, projectId, projectName, drawingName=''){
     }
 
     _normalizeBOMRows(extractedRows);
+    // Drawing name priority: user-typed → filename without extension
+    const effectiveDwgName = drawingName || file.name.replace(/\.[^.]+$/,'');
     showBOMPreview(extractedRows, body, foot,
       `💾 Save to Part Stock + RFQ (${extractedRows.length} rows)`,
       async(updatedRows)=>{
         await saveBOMToPartStock(updatedRows);
-        await saveBOMToRFQ(updatedRows, projectId, projectName, drawingName);
+        await saveBOMToRFQ(updatedRows, projectId, projectName, effectiveDwgName);
       }
     );
   } catch(e){
@@ -996,9 +998,7 @@ async function saveBOMToRFQ(rows, projectId, projectName, drawingName=''){
   if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
   try {
     const col=collection(db,'companies',companyId,'projects',projectId,'drawings');
-    // Priority: user-typed name → drawing_name from AI rows → project name
-    const dwgNameFromRows=rows.find(r=>r.drawing_name)?.drawing_name||'';
-    const dwgName=drawingName||dwgNameFromRows||projectName;
+    const dwgName=drawingName||projectName;
     // Check if a drawing with this name already exists; update or create
     const existSnap=await getDocs(col);
     const existing=existSnap.docs.find(d=>(d.data().name||'')===(dwgName));
@@ -1676,4 +1676,5 @@ function showSettingsModal(onSaved){
     </div>
   </div>`);
 
-  document.getElementById('btn-save-settings').addEventListener('clic
+  document.getElementById('btn-save-settings').addEventListener('click',()=>{
+    ant
