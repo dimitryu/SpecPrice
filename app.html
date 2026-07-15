@@ -233,7 +233,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.6.1</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.6.4</div>
     </div>
   </aside>
   <div class="main">
@@ -277,7 +277,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.6.1';
+const APP_VER   = '1.6.4';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -427,6 +427,17 @@ function makeTableResizable(table){
             td.style.maxWidth=finalW+'px';
             td.style.lineHeight='1.35';
           });
+          // The mouseup that ends a drag almost never lands back on the thin
+          // resizer strip — it lands on the header cell itself, so the browser
+          // fires a native "click" on the th right after this handler returns,
+          // which would otherwise trigger a column sort and wipe the resize on
+          // re-render. Swallow that one trailing click.
+          const suppressClick=ce=>{
+            ce.stopPropagation(); ce.preventDefault();
+            document.removeEventListener('click',suppressClick,true);
+          };
+          document.addEventListener('click',suppressClick,true);
+          setTimeout(()=>document.removeEventListener('click',suppressClick,true),0);
         }
       };
       document.addEventListener('mousemove',move);
@@ -878,11 +889,11 @@ async function renderRFQDetail(projectId, projectName){
 // ══════════════════════════════════════════════════════════════════════════════
 // ADD DRAWING MODAL — PDF / Image → AI → BOM
 // ══════════════════════════════════════════════════════════════════════════════
-function openAddDrawingModal(projectId, projectName, queue=[]){
-  if(!anthKey && !geminiKey){ showSettingsModal(()=>openAddDrawingModal(projectId,projectName,queue)); return; }
+function openAddDrawingModal(projectId, projectName){
+  if(!anthKey && !geminiKey){ showSettingsModal(()=>openAddDrawingModal(projectId,projectName)); return; }
 
   showModal(`<div class="modal">
-    <div class="modal-head"><h3>Add Drawing to ${esc(projectName)}${queue.length?` — ${queue.length} more file(s) queued`:''}</h3><button class="close-modal" id="modal-close">✕</button></div>
+    <div class="modal-head"><h3>Add Drawing to ${esc(projectName)}</h3><button class="close-modal" id="modal-close">✕</button></div>
     <div class="modal-body" id="modal-body-inner">
       <div class="form-field" style="margin-bottom:14px">
         <label>Drawing Name / Title</label>
@@ -891,7 +902,7 @@ function openAddDrawingModal(projectId, projectName, queue=[]){
       <div class="drop-zone" id="drop-zone" tabindex="0">
         <span class="icon-big">📄</span>
         <strong>Drop PDF or Image here</strong>
-        <p>or click to browse — you can select multiple files (PDF, PNG, JPG, JPEG, WEBP, BMP)</p>
+        <p>or click to browse — you can select multiple files (PDF, PNG, JPG, JPEG, WEBP, BMP). All selected files are extracted together and shown in one combined review.</p>
         <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" multiple
                style="display:none">
       </div>
@@ -914,137 +925,132 @@ function openAddDrawingModal(projectId, projectName, queue=[]){
     const dwgName=document.getElementById('drawing-name-inp')?.value.trim()||'';
     const files=[...e.dataTransfer.files];
     if(!files.length) return;
-    handleFile(files[0],projectId,projectName,dwgName,files.slice(1));
+    handleFiles(files,projectId,projectName,dwgName);
   });
   fi.addEventListener('change', ()=>{
     if(fi.files.length){
       const dwgName=document.getElementById('drawing-name-inp')?.value.trim()||'';
-      const files=[...fi.files];
-      handleFile(files[0],projectId,projectName,dwgName,files.slice(1));
+      handleFiles([...fi.files],projectId,projectName,dwgName);
     }
   });
-
-  // Auto-continue processing a queued batch (multi-file upload)
-  if(queue.length){
-    const nextFile=queue[0], remaining=queue.slice(1);
-    handleFile(nextFile, projectId, projectName, '', remaining);
-  }
 }
 
-async function handleFile(file, projectId, projectName, drawingName='', remainingQueue=[]){
-  if(!file) return;
-  const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-  const isImg = file.type.startsWith('image/');
-  if(!isPDF && !isImg){ toast('Please upload a PDF or image file','error'); return; }
-
+// Extracts BOM rows from ALL selected files (one after another), then shows a single
+// combined preview for review. Each row keeps track of which file/drawing it came from
+// via drawing_number/revision (parsed from the filename), so on save the rows are
+// grouped back into per-drawing RFQ documents.
+async function handleFiles(files, projectId, projectName, drawingNameOverride=''){
+  if(!files || !files.length) return;
   const body = document.getElementById('modal-body-inner');
   const foot = document.getElementById('modal-foot');
-  body.innerHTML = `
-    <div class="ai-status"><div class="ring"></div><span id="ai-msg">${isPDF?'Extracting PDF text…':'Reading image…'}</span></div>
-    <div class="progress-bar"><div class="progress-fill" id="prog"></div></div>`;
-  foot.innerHTML = '';
+  const allRows = [];
+  const errors = [];
 
-  const setMsg = (m,pct) => {
-    const el=document.getElementById('ai-msg'); if(el)el.textContent=m;
-    const pb=document.getElementById('prog'); if(pb)pb.style.width=pct+'%';
-  };
+  for(let fidx=0; fidx<files.length; fidx++){
+    const file = files[fidx];
+    const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    const isImg = file.type.startsWith('image/');
+    if(!isPDF && !isImg){ errors.push(`"${file.name}" — not a PDF or image, skipped`); continue; }
 
-  try {
-    let extractedRows = [];
+    const filePrefix = files.length>1 ? `File ${fidx+1}/${files.length}: ${esc(file.name)} — ` : '';
+    body.innerHTML = `
+      <div class="ai-status"><div class="ring"></div><span id="ai-msg">${filePrefix}${isPDF?'Extracting PDF text…':'Reading image…'}</span></div>
+      <div class="progress-bar"><div class="progress-fill" id="prog"></div></div>`;
+    foot.innerHTML = '';
+    const setMsg = (m,pct) => {
+      const el=document.getElementById('ai-msg'); if(el)el.textContent=filePrefix+m;
+      const pb=document.getElementById('prog'); if(pb)pb.style.width=pct+'%';
+    };
 
-    let _pdfText='', _pdfTextLen=0, _pdfImages=[];
-    if(isPDF){
-      setMsg('Reading PDF pages…', 15);
-      const {pageTexts, pageImages} = await extractPDFPages(file);
-      _pdfImages = pageImages;
-      _pdfText = pageTexts.map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
-      _pdfTextLen = pageTexts.join('').trim().length;
+    try {
+      let extractedRows = [];
+      let _pdfText='', _pdfTextLen=0, _pdfImages=[];
+      if(isPDF){
+        setMsg('Reading PDF pages…', 15);
+        const {pageTexts, pageImages} = await extractPDFPages(file);
+        _pdfImages = pageImages;
+        _pdfText = pageTexts.map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
+        _pdfTextLen = pageTexts.join('').trim().length;
 
-      // Step 1: text-based AI extraction (if enough text)
-      if(_pdfTextLen > 50){
-        setMsg('Sending text to AI…', 45);
-        extractedRows = await aiExtractBOM(_pdfText, false, null, file.name);
-      }
-
-      // Step 2: vision fallback — render pages as PNG and send to AI (like Windows app)
-      if(!extractedRows.length && (anthKey||geminiKey)){
-        setMsg('Text extraction found nothing — trying page vision…', 60);
-        for(let pi=0; pi<_pdfImages.length; pi++){
-          const b64=_pdfImages[pi];
-          if(!b64) continue;
-          setMsg(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`, 60+Math.round(35*pi/_pdfImages.length));
-          const rows=await aiExtractBOM('',true,{b64,mimeType:'image/png'},file.name);
-          if(rows.length){ extractedRows=rows; break; }
+        if(_pdfTextLen > 50){
+          setMsg('Sending text to AI…', 45);
+          extractedRows = await aiExtractBOM(_pdfText, false, null, file.name);
         }
-      }
-    } else {
-      setMsg('Encoding image…', 20);
-      const {b64, mimeType} = await encodeImage(file);
-      setMsg('Sending to AI (vision)…', 50);
-      extractedRows = await aiExtractBOM('', true, {b64, mimeType}, file.name);
-    }
-
-    setMsg('Done — review the table below', 100);
-    const _ringEl=document.querySelector('.ai-status .ring');
-    if(_ringEl){_ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';
-      _ringEl.textContent='✓';}
-
-    if(!extractedRows.length){
-      const scannedWarn = isPDF && _pdfTextLen < 150;
-      const dbg=document.createElement('div');
-      dbg.innerHTML=`
-        <p style="color:var(--muted);margin-top:10px">No BOM rows detected.</p>
-        ${scannedWarn?`<p style="color:#C05621;font-size:12px;margin-top:6px;padding:7px 10px;background:#FEFCBF;border-radius:5px">
-          ⚠️ Scanned PDF — only ${_pdfTextLen} characters extracted. The vision attempt also returned no results.<br>
-          Try: take a screenshot of the BOM page and upload as PNG/JPG.</p>`:''}
-        <details style="margin-top:8px">
-          <summary style="cursor:pointer;font-size:11px;color:var(--blue-mid)">Show extracted text (${_pdfTextLen} chars)</summary>
-          <pre style="white-space:pre-wrap;font-size:10px;max-height:120px;overflow:auto;background:#f5f5f5;padding:8px;border-radius:5px;margin-top:5px">${esc(_pdfText.slice(0,600)||'(none)')}</pre>
-        </details>
-        <details style="margin-top:6px">
-          <summary style="cursor:pointer;font-size:11px;color:var(--blue-mid)">Show AI response (debug)</summary>
-          <pre style="white-space:pre-wrap;font-size:10px;max-height:120px;overflow:auto;background:#f5f5f5;padding:8px;border-radius:5px;margin-top:5px;word-break:break-all">${esc(_dbgLastAI.slice(0,3000)||'(empty)')}</pre>
-        </details>`;
-      body.appendChild(dbg);
-      foot.innerHTML=`<button class="btn btn-ghost" id="modal-cancel">Close</button>`;
-      document.getElementById('modal-cancel').addEventListener('click',closeModal);
-      return;
-    }
-
-    _normalizeBOMRows(extractedRows);
-    // Parse filename: "303-49-00251-00 REV 01 _approved.pdf"
-    // → drawingName="303-49-00251-00", revision="REV 01 _approved"
-    const _fileBase = file.name.replace(/\.[^.]+$/,'');
-    const _spaceIdx = _fileBase.indexOf(' ');
-    const effectiveDwgName = drawingName || (_spaceIdx>0 ? _fileBase.slice(0,_spaceIdx) : _fileBase);
-    const fileRevision = _spaceIdx>0 ? _fileBase.slice(_spaceIdx+1).trim() : '';
-    extractedRows.forEach(r=>{
-      if(!r.drawing_number) r.drawing_number=effectiveDwgName;
-      if(!r.revision) r.revision=fileRevision;
-    });
-    showBOMPreview(extractedRows, body, foot,
-      `💾 Save to Part Stock + RFQ (${extractedRows.length} rows)${remainingQueue.length?` — ${remainingQueue.length} more queued`:''}`,
-      async(updatedRows)=>{
-        // Stamp drawing_number + revision into rows if missing
-        updatedRows.forEach(r=>{
-          if(!r.drawing_number) r.drawing_number=effectiveDwgName;
-          if(!r.revision) r.revision=fileRevision;
-        });
-        await saveBOMToPartStock(updatedRows);
-        await saveBOMToRFQ(updatedRows, projectId, projectName, effectiveDwgName);
-        if(remainingQueue.length){
-          setTimeout(()=>openAddDrawingModal(projectId, projectName, remainingQueue), 250);
+        if(!extractedRows.length && (anthKey||geminiKey)){
+          setMsg('Text extraction found nothing — trying page vision…', 60);
+          for(let pi=0; pi<_pdfImages.length; pi++){
+            const b64=_pdfImages[pi];
+            if(!b64) continue;
+            setMsg(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`, 60+Math.round(35*pi/_pdfImages.length));
+            const rows=await aiExtractBOM('',true,{b64,mimeType:'image/png'},file.name);
+            if(rows.length){ extractedRows=rows; break; }
+          }
         }
+      } else {
+        setMsg('Encoding image…', 20);
+        const {b64, mimeType} = await encodeImage(file);
+        setMsg('Sending to AI (vision)…', 50);
+        extractedRows = await aiExtractBOM('', true, {b64, mimeType}, file.name);
       }
-    );
-  } catch(e){
-    const hint = e.message==='Failed to fetch'
-      ? 'Network error — check your internet connection. If the problem persists, the Anthropic API key may be invalid or expired.'
-      : e.message;
-    body.innerHTML += `<p style="color:red;margin-top:12px">Error: ${hint}</p>`;
+
+      _normalizeBOMRows(extractedRows);
+      // Parse filename: "303-49-00251-00 REV 01 _approved.pdf"
+      // → drawingName="303-49-00251-00", revision="REV 01 _approved"
+      const _fileBase = file.name.replace(/\.[^.]+$/,'');
+      const _spaceIdx = _fileBase.indexOf(' ');
+      const effectiveDwgName = (files.length===1 && drawingNameOverride)
+        ? drawingNameOverride
+        : (_spaceIdx>0 ? _fileBase.slice(0,_spaceIdx) : _fileBase);
+      const fileRevision = _spaceIdx>0 ? _fileBase.slice(_spaceIdx+1).trim() : '';
+      extractedRows.forEach(r=>{
+        if(!r.drawing_number) r.drawing_number=effectiveDwgName;
+        if(!r.revision) r.revision=fileRevision;
+      });
+
+      if(!extractedRows.length){
+        errors.push(`"${file.name}" — no BOM rows detected`);
+      } else {
+        allRows.push(...extractedRows);
+      }
+    } catch(e){
+      const hint = e.message==='Failed to fetch'
+        ? 'network error — check your internet connection or Anthropic/Gemini key'
+        : e.message;
+      errors.push(`"${file.name}" — ${hint}`);
+    }
+  }
+
+  if(errors.length) errors.forEach(msg=>toast(msg,'error'));
+
+  const _ringEl=document.querySelector('.ai-status .ring');
+  if(_ringEl){_ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';
+    _ringEl.textContent='✓';}
+
+  if(!allRows.length){
+    body.innerHTML = `<p style="color:var(--muted);margin-top:10px">No BOM rows were detected in ${files.length>1?`any of the ${files.length} files`:'this file'}.</p>`;
     foot.innerHTML = `<button class="btn btn-ghost" id="modal-cancel-err">Close</button>`;
     document.getElementById('modal-cancel-err')?.addEventListener('click',closeModal);
+    return;
   }
+
+  showBOMPreview(allRows, body, foot,
+    `💾 Save to Part Stock + RFQ (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
+    async(updatedRows)=>{
+      await saveBOMToPartStock(updatedRows);
+      // Group rows by drawing_number so each source file lands in its own RFQ drawing doc
+      const byDwg = {};
+      updatedRows.forEach(r=>{
+        const key = r.drawing_number || projectName;
+        (byDwg[key]=byDwg[key]||[]).push(r);
+      });
+      for(const dwgName in byDwg){
+        await saveBOMToRFQSilent(byDwg[dwgName], projectId, dwgName);
+      }
+      toast(`Saved ${updatedRows.length} BOM rows across ${Object.keys(byDwg).length} drawing(s)`,'success');
+      closeModal();
+      renderRFQDetail(projectId, projectName);
+    }
+  );
 }
 
 // showBOMPreview(rows, body, foot, btnLabel, saveCallback)
@@ -1092,28 +1098,21 @@ function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
   });
 }
 
-async function saveBOMToRFQ(rows, projectId, projectName, drawingName=''){
-  const btn=document.getElementById('btn-save-bom');
-  if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
-  try {
-    const col=collection(db,'companies',companyId,'projects',projectId,'drawings');
-    const dwgName=drawingName||projectName;
-    // Check if a drawing with this name already exists; update or create
-    const existSnap=await getDocs(col);
-    const existing=existSnap.docs.find(d=>(d.data().name||'')===(dwgName));
-    if(existing){
-      // Merge items into existing drawing
-      const oldItems=existing.data().items||[];
-      await updateDoc(existing.ref,{items:[...oldItems,...rows], updatedAt:serverTimestamp()});
-    } else {
-      await addDoc(col,{name:dwgName, items:rows, updatedAt:serverTimestamp()});
-    }
-    // Update project updatedAt
-    await updateDoc(doc(db,'companies',companyId,'projects',projectId),{updatedAt:serverTimestamp()});
-    toast(`Saved ${rows.length} BOM rows to drawing "${dwgName}"`,'success');
-    closeModal();
-    renderRFQDetail(projectId, projectName);
-  } catch(e){ toast('Save error: '+e.message,'error'); if(btn){btn.disabled=false;btn.textContent='Save to RFQ';} }
+// Writes rows into a single named drawing document under an RFQ (creating or
+// merging into an existing drawing of that name). No UI side-effects — callers
+// (which may invoke this once per drawing when saving a multi-file batch) are
+// responsible for toasts/closing the modal/re-rendering once all groups are saved.
+async function saveBOMToRFQSilent(rows, projectId, drawingName){
+  const col=collection(db,'companies',companyId,'projects',projectId,'drawings');
+  const existSnap=await getDocs(col);
+  const existing=existSnap.docs.find(d=>(d.data().name||'')===(drawingName));
+  if(existing){
+    const oldItems=existing.data().items||[];
+    await updateDoc(existing.ref,{items:[...oldItems,...rows], updatedAt:serverTimestamp()});
+  } else {
+    await addDoc(col,{name:drawingName, items:rows, updatedAt:serverTimestamp()});
+  }
+  await updateDoc(doc(db,'companies',companyId,'projects',projectId),{updatedAt:serverTimestamp()});
 }
 
 // ── BOM row normalization ─────────────────────────────────────────────────────
@@ -1677,20 +1676,72 @@ async function handlePriorityFile(file){
     const rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:''});
     if(!rows.length) throw new Error('The file appears to be empty.');
 
+    // Suggest column mapping (Part Number may be labeled "מק"ט", Price may be "מחיר ליחידה") —
+    // let the user confirm/adjust before importing, rather than guessing silently.
     const headers=rows[0];
     let pnCol=_priorityFindCol(headers,_PN_HEADER_HINTS);
     let prCol=_priorityFindCol(headers,_PRICE_HEADER_HINTS);
-    let dataRows=rows.slice(1);
-    if(pnCol<0 || prCol<0){
-      // Fall back to first two columns, treat row 1 as data (no recognizable header)
-      pnCol=0; prCol=1; dataRows=rows;
-    }
+    const headerDetected = pnCol>=0 || prCol>=0;
+    if(pnCol<0) pnCol=0;
+    if(prCol<0) prCol=(pnCol===1?0:1);
+    if(prCol===pnCol) prCol=(pnCol===0?1:0);
 
-    const el=document.getElementById('pi-msg'); if(el) el.textContent='Converting prices to USD…';
+    showPriorityColumnMap(rows, headers, pnCol, prCol, headerDetected, body, foot);
+  }catch(e){
+    body.innerHTML+=`<p style="color:red;margin-top:12px">Error: ${e.message}</p>`;
+    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+  }
+}
+
+// Suggest which column is Part Number (מק"ט) and which is Priority Price (מחיר ליחידה),
+// pre-selected from header detection, and let the user confirm or change before parsing.
+function showPriorityColumnMap(rows, headers, pnCol, prCol, headerDetected, body, foot){
+  const colLabel=(h,i)=>{ const t=String(h||'').trim(); return t?esc(t):`(Column ${i+1})`; };
+  const colOpts=(selected)=>headers.map((h,i)=>`<option value="${i}" ${i===selected?'selected':''}>${colLabel(h,i)}</option>`).join('');
+  const sampleRows=(headerDetected?rows.slice(1):rows).slice(0,3);
+
+  body.innerHTML=`
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">We suggest the following column mapping — confirm or change before importing:</p>
+    <div class="form-field">
+      <label>Part Number column (מק"ט)</label>
+      <select class="form-input" id="pi-pn-col">${colOpts(pnCol)}</select>
+    </div>
+    <div class="form-field" style="margin-top:10px">
+      <label>Priority Price column (מחיר ליחידה)</label>
+      <select class="form-input" id="pi-price-col">${colOpts(prCol)}</select>
+    </div>
+    <div class="form-field" style="margin-top:10px">
+      <label style="display:flex;align-items:center;gap:6px;text-transform:none;font-weight:400;font-size:12px">
+        <input type="checkbox" id="pi-has-header" ${headerDetected?'checked':''} style="width:auto">
+        First row is a header row (skip it)
+      </label>
+    </div>
+    ${sampleRows.length?`<div style="margin-top:12px">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Preview:</div>
+      <div class="table-wrap"><table style="font-size:11px">
+        <tbody>${sampleRows.map(r=>`<tr>${headers.map((_,i)=>`<td>${esc(String(r[i]??''))}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>
+    </div>`:''}`;
+
+  foot.innerHTML=`
+    <button class="btn btn-ghost" id="pi-map-cancel">Cancel</button>
+    <button class="btn btn-green" id="pi-map-continue">Continue →</button>`;
+
+  document.getElementById('pi-map-cancel').addEventListener('click',closeModal);
+  document.getElementById('pi-map-continue').addEventListener('click', async()=>{
+    const pnColSel=parseInt(document.getElementById('pi-pn-col').value);
+    const prColSel=parseInt(document.getElementById('pi-price-col').value);
+    const skipHeader=document.getElementById('pi-has-header').checked;
+    if(pnColSel===prColSel){ toast('Part Number and Price columns must be different','error'); return; }
+
+    const btn=document.getElementById('pi-map-continue');
+    btn.disabled=true; btn.textContent='Converting…';
+
+    const dataRows=skipHeader?rows.slice(1):rows;
     const parsed=[];
     for(const r of dataRows){
-      const pn=String(r[pnCol]||'').trim();
-      const rawPrice=r[prCol];
+      const pn=String(r[pnColSel]||'').trim();
+      const rawPrice=r[prColSel];
       if(!pn || rawPrice===''||rawPrice===undefined||rawPrice===null) continue;
       const usd=await _convertToUSD(rawPrice);
       if(usd===null) continue;
@@ -1698,16 +1749,13 @@ async function handlePriorityFile(file){
     }
 
     if(!parsed.length){
-      body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No valid Part Number + Price rows were detected in this file.</p>`;
+      body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No valid Part Number + Price rows were detected with this mapping.</p>`;
       foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
       return;
     }
 
     showPriorityPreview(parsed, body, foot);
-  }catch(e){
-    body.innerHTML+=`<p style="color:red;margin-top:12px">Error: ${e.message}</p>`;
-    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
-  }
+  });
 }
 
 function showPriorityPreview(rows, body, foot){
@@ -1964,14 +2012,14 @@ async function renderSalesDesk(){
   });
 }
 
-function openSDFileModal(queue=[]){
+function openSDFileModal(){
   showModal(`<div class="modal">
-    <div class="modal-head"><h3>Import BOM from File${queue.length?` — ${queue.length} more file(s) queued`:''}</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>Import BOM from File</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
     <div class="modal-body" id="sd-modal-body">
       <div class="drop-zone" id="sd-drop-zone" tabindex="0">
         <span class="icon-big">📄</span>
         <strong>Drop PDF or Image here</strong>
-        <p>Parts will be added to Sales Desk — you can select multiple files</p>
+        <p>Parts will be added to Sales Desk — you can select multiple files, extracted together into one review</p>
         <input type="file" id="sd-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" multiple style="display:none">
       </div>
     </div>
@@ -1986,137 +2034,126 @@ function openSDFileModal(queue=[]){
   dz.addEventListener('drop',e=>{
     e.preventDefault();dz.classList.remove('dragover');
     const files=[...e.dataTransfer.files];
-    if(files.length) handleSDFile(files[0], files.slice(1));
+    if(files.length) handleSDFiles(files);
   });
   fi.addEventListener('change',()=>{
-    if(fi.files.length){
-      const files=[...fi.files];
-      handleSDFile(files[0], files.slice(1));
-    }
+    if(fi.files.length) handleSDFiles([...fi.files]);
   });
-
-  // Auto-continue processing a queued batch (multi-file upload)
-  if(queue.length){
-    const nextFile=queue[0], remaining=queue.slice(1);
-    handleSDFile(nextFile, remaining);
-  }
 }
 
-async function handleSDFile(file, remainingQueue=[]){
-  const isPDF=file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf');
-  const isImg=file.type.startsWith('image/');
-  if(!isPDF&&!isImg){ toast('Please upload a PDF or image','error'); return; }
-
+// Extracts BOM rows from ALL selected files, then shows one combined preview
+// before adding everything to the Sales Desk in a single confirmation step.
+async function handleSDFiles(files){
+  if(!files || !files.length) return;
   const body=document.getElementById('sd-modal-body');
   const foot=document.querySelector('#modal-bg .modal-foot');
-  body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="sd-ai-msg">${isPDF?'Extracting PDF text…':'Reading image…'}</span></div>
-    <div class="progress-bar"><div class="progress-fill" id="sd-prog"></div></div>`;
-  const setM=(m,p)=>{
-    const e=document.getElementById('sd-ai-msg');if(e)e.textContent=m;
-    const b=document.getElementById('sd-prog');if(b)b.style.width=p+'%';
-  };
-  foot.innerHTML='';
+  const allRows=[];
+  const errors=[];
 
-  try {
-    let extractedRows=[];
-    let _pdfText='', _pdfTextLen=0, _pdfImages=[];
+  for(let fidx=0; fidx<files.length; fidx++){
+    const file=files[fidx];
+    const isPDF=file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf');
+    const isImg=file.type.startsWith('image/');
+    if(!isPDF&&!isImg){ errors.push(`"${file.name}" — not a PDF or image, skipped`); continue; }
 
-    if(isPDF){
-      setM('Reading PDF pages…',15);
-      const {pageTexts,pageImages}=await extractPDFPages(file);
-      _pdfImages=pageImages;
-      _pdfText=pageTexts.map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
-      _pdfTextLen=pageTexts.join('').trim().length;
+    const filePrefix = files.length>1 ? `File ${fidx+1}/${files.length}: ${esc(file.name)} — ` : '';
+    body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="sd-ai-msg">${filePrefix}${isPDF?'Extracting PDF text…':'Reading image…'}</span></div>
+      <div class="progress-bar"><div class="progress-fill" id="sd-prog"></div></div>`;
+    foot.innerHTML='';
+    const setM=(m,p)=>{
+      const e=document.getElementById('sd-ai-msg');if(e)e.textContent=filePrefix+m;
+      const b=document.getElementById('sd-prog');if(b)b.style.width=p+'%';
+    };
 
-      if(_pdfTextLen>50){
-        setM('Sending text to AI…',45);
-        extractedRows=await aiExtractBOM(_pdfText,false,null,file.name);
-      }
-      if(!extractedRows.length&&(anthKey||geminiKey)){
-        setM('Text extraction found nothing — trying page vision…',60);
-        for(let pi=0;pi<_pdfImages.length;pi++){
-          const b64=_pdfImages[pi];
-          if(!b64) continue;
-          setM(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`,60+Math.round(35*pi/_pdfImages.length));
-          const rows2=await aiExtractBOM('',true,{b64,mimeType:'image/png'},file.name);
-          if(rows2.length){extractedRows=rows2;break;}
+    try {
+      let extractedRows=[];
+      let _pdfText='', _pdfTextLen=0, _pdfImages=[];
+
+      if(isPDF){
+        setM('Reading PDF pages…',15);
+        const {pageTexts,pageImages}=await extractPDFPages(file);
+        _pdfImages=pageImages;
+        _pdfText=pageTexts.map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
+        _pdfTextLen=pageTexts.join('').trim().length;
+
+        if(_pdfTextLen>50){
+          setM('Sending text to AI…',45);
+          extractedRows=await aiExtractBOM(_pdfText,false,null,file.name);
         }
+        if(!extractedRows.length&&(anthKey||geminiKey)){
+          setM('Text extraction found nothing — trying page vision…',60);
+          for(let pi=0;pi<_pdfImages.length;pi++){
+            const b64=_pdfImages[pi];
+            if(!b64) continue;
+            setM(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`,60+Math.round(35*pi/_pdfImages.length));
+            const rows2=await aiExtractBOM('',true,{b64,mimeType:'image/png'},file.name);
+            if(rows2.length){extractedRows=rows2;break;}
+          }
+        }
+      } else {
+        setM('Encoding image…',20);
+        const {b64,mimeType}=await encodeImage(file);
+        setM('Sending to AI (vision)…',50);
+        extractedRows=await aiExtractBOM('',true,{b64,mimeType},file.name);
       }
-    } else {
-      setM('Encoding image…',20);
-      const {b64,mimeType}=await encodeImage(file);
-      setM('Sending to AI (vision)…',50);
-      extractedRows=await aiExtractBOM('',true,{b64,mimeType},file.name);
+
+      _normalizeBOMRows(extractedRows);
+      // Parse filename: "303-49-00251-00 REV 01 _approved.pdf"
+      // → drawingName="303-49-00251-00", revision="REV 01 _approved"
+      const _fileBase=file.name.replace(/\.[^.]+$/,'');
+      const _spaceIdx=_fileBase.indexOf(' ');
+      const effectiveDwgName=_spaceIdx>0 ? _fileBase.slice(0,_spaceIdx) : _fileBase;
+      const fileRevision=_spaceIdx>0 ? _fileBase.slice(_spaceIdx+1).trim() : '';
+      extractedRows.forEach(r=>{
+        if(!r.drawing_number) r.drawing_number=effectiveDwgName;
+        if(!r.revision) r.revision=fileRevision;
+      });
+
+      if(!extractedRows.length){
+        errors.push(`"${file.name}" — no BOM rows detected`);
+      } else {
+        allRows.push(...extractedRows);
+      }
+    } catch(e){
+      errors.push(`"${file.name}" — ${e.message}`);
     }
-
-    _normalizeBOMRows(extractedRows);
-
-    // Parse filename: "303-49-00251-00 REV 01 _approved.pdf"
-    // → drawingName="303-49-00251-00", revision="REV 01 _approved"
-    const _fileBase=file.name.replace(/\.[^.]+$/,'');
-    const _spaceIdx=_fileBase.indexOf(' ');
-    const effectiveDwgName=_spaceIdx>0 ? _fileBase.slice(0,_spaceIdx) : _fileBase;
-    const fileRevision=_spaceIdx>0 ? _fileBase.slice(_spaceIdx+1).trim() : '';
-    extractedRows.forEach(r=>{
-      if(!r.drawing_number) r.drawing_number=effectiveDwgName;
-      if(!r.revision) r.revision=fileRevision;
-    });
-
-    setM('Done — review the table below',100);
-    const _ringEl=body.querySelector('.ring');
-    if(_ringEl){_ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';
-      _ringEl.textContent='✓';}
-
-    if(!extractedRows.length){
-      const scannedWarn=isPDF&&_pdfTextLen<150;
-      const dbg=document.createElement('div');
-      dbg.innerHTML=`
-        <p style="color:var(--muted);margin-top:10px">No BOM rows detected.</p>
-        ${scannedWarn?`<p style="color:#C05621;font-size:12px;margin-top:6px;padding:7px 10px;background:#FEFCBF;border-radius:5px">
-          ⚠️ Scanned PDF — only ${_pdfTextLen} chars extracted. Try uploading a screenshot of the BOM as PNG/JPG.</p>`:''}
-        <details style="margin-top:8px">
-          <summary style="cursor:pointer;font-size:11px;color:var(--blue-mid)">Show AI response (debug)</summary>
-          <pre style="white-space:pre-wrap;font-size:10px;max-height:120px;overflow:auto;background:#f5f5f5;padding:8px;border-radius:5px;margin-top:5px;word-break:break-all">${esc(_dbgLastAI.slice(0,3000)||'(empty)')}</pre>
-        </details>`;
-      body.appendChild(dbg);
-      foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
-      return;
-    }
-
-    // Show editable preview — on Save: save to Part Stock + add to Sales Desk
-    showBOMPreview(extractedRows, body, foot,
-      `💾 Save to Part Stock + Sales Desk (${extractedRows.length} rows)${remainingQueue.length?` — ${remainingQueue.length} more queued`:''}`,
-      async(updatedRows)=>{
-        updatedRows.forEach(r=>{
-          if(!r.drawing_number) r.drawing_number=effectiveDwgName;
-          if(!r.revision) r.revision=fileRevision;
-        });
-        await saveBOMToPartStock(updatedRows);
-        let added=0;
-        for(const r of updatedRows){
-          const pn=(r.part_number||'').trim().toLowerCase();
-          const match=pn?allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
-          const price=match?(parseFloat(match.price)||parseFloat(match.priority_price)||0):0;
-          const qty=parseFloat(r.qty)||1;
-          sdItems.push({
-            part_number:r.part_number||r.item||'', description:r.description||'',
-            drawing_number:r.drawing_number||match?.drawing_number||match?.drawing_name||'',
-            qty, unit:r.unit||match?.unit||match?.units||'pcs', price, total:price*qty
-          });
-          added++;
-        }
-        toast(`Added ${added} parts to Sales Desk`,'success');
-        closeModal();
-        document.getElementById('sd-tbody')&&renderSalesDesk();
-        if(remainingQueue.length){
-          setTimeout(()=>openSDFileModal(remainingQueue), 250);
-        }
-      }
-    );
-  } catch(e){
-    body.innerHTML+=`<p style="color:red;margin-top:12px">${e.message}</p>`;
-    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
   }
+
+  if(errors.length) errors.forEach(msg=>toast(msg,'error'));
+
+  const _ringEl=body.querySelector('.ring');
+  if(_ringEl){_ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';
+    _ringEl.textContent='✓';}
+
+  if(!allRows.length){
+    body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No BOM rows were detected in ${files.length>1?`any of the ${files.length} files`:'this file'}.</p>`;
+    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+    return;
+  }
+
+  // Show editable preview — on Save: save to Part Stock + add to Sales Desk
+  showBOMPreview(allRows, body, foot,
+    `💾 Save to Part Stock + Sales Desk (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
+    async(updatedRows)=>{
+      await saveBOMToPartStock(updatedRows);
+      let added=0;
+      for(const r of updatedRows){
+        const pn=(r.part_number||'').trim().toLowerCase();
+        const match=pn?allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
+        const price=match?(parseFloat(match.price)||parseFloat(match.priority_price)||0):0;
+        const qty=parseFloat(r.qty)||1;
+        sdItems.push({
+          part_number:r.part_number||r.item||'', description:r.description||'',
+          drawing_number:r.drawing_number||match?.drawing_number||match?.drawing_name||'',
+          qty, unit:r.unit||match?.unit||match?.units||'pcs', price, total:price*qty
+        });
+        added++;
+      }
+      toast(`Added ${added} parts to Sales Desk`,'success');
+      closeModal();
+      document.getElementById('sd-tbody')&&renderSalesDesk();
+    }
+  );
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2348,4 +2385,3 @@ function showSettingsModal(onSaved){
 </script>
 </body>
 </html>
-      
