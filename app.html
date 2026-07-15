@@ -233,7 +233,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.6.0</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.6.1</div>
     </div>
   </aside>
   <div class="main">
@@ -277,7 +277,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.6.0';
+const APP_VER   = '1.6.1';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1553,12 +1553,12 @@ async function runFCCheckModal(items, mode){
           if(partId){
             try{
               await updateDoc(doc(db,'companies',companyId,'parts_cache',partId),{
-                price:res.price, distributor:res.distributor||'',
+                price:priceNum, distributor:res.distributor||'',
                 stock:res.stock||'', findchips_url:res.url||'',
                 updatedAt:serverTimestamp()
               });
               const ap=allParts.find(p=>p._id===partId);
-              if(ap){ap.price=res.price;ap.distributor=res.distributor||'';ap.stock=res.stock||'';ap.findchips_url=res.url||'';}
+              if(ap){ap.price=priceNum;ap.distributor=res.distributor||'';ap.stock=res.stock||'';ap.findchips_url=res.url||'';}
             }catch(e){console.warn('FC save error:',e.message);}
           }
         } else if(mode==='sd'){
@@ -1574,11 +1574,11 @@ async function runFCCheckModal(items, mode){
               const existing=allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
               if(existing){
                 await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),{
-                  price:res.price, distributor:res.distributor||'',
+                  price:priceNum, distributor:res.distributor||'',
                   stock:res.stock||'', findchips_url:res.url||'',
                   updatedAt:serverTimestamp()
                 });
-                existing.price=res.price; existing.distributor=res.distributor||'';
+                existing.price=priceNum; existing.distributor=res.distributor||'';
                 existing.stock=res.stock||''; existing.findchips_url=res.url||'';
               } else {
                 const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
@@ -1586,11 +1586,11 @@ async function runFCCheckModal(items, mode){
                 await setDoc(ref,{
                   part_number:pn, description:'', drawing_number:'', manufacturer:'',
                   unit:'', atlantium_pn:'',
-                  price:res.price, distributor:res.distributor||'', stock:res.stock||'',
+                  price:priceNum, distributor:res.distributor||'', stock:res.stock||'',
                   price_description:'', findchips_url:res.url||'',
                   updatedAt:serverTimestamp()
                 },{merge:true});
-                allParts.push({_id:key, part_number:pn, price:res.price,
+                allParts.push({_id:key, part_number:pn, price:priceNum,
                   distributor:res.distributor||'', stock:res.stock||'', findchips_url:res.url||''});
               }
             }
@@ -2348,3 +2348,4 @@ function showSettingsModal(onSaved){
 </script>
 </body>
 </html>
+      
