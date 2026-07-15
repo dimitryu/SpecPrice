@@ -232,7 +232,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.6</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.9</div>
     </div>
   </aside>
   <div class="main">
@@ -392,7 +392,7 @@ function route(v){
   else if(currentView==='rfq') renderRFQList();
   else if(currentView==='sales-desk') renderSalesDesk();
   else if(currentView==='customers') renderCustomers();
-  else if(currentView==='settings') renderSettings();
+  else if(currentView==='settings'){ setContent(''); showSettingsModal(); }
 }
 document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',()=>route(el.dataset.view)));
 
@@ -1701,7 +1701,11 @@ async function handleSDFile(file){
       if(_pdfTextLen>50){
         setM('Sending text to AI…',45);
         extractedRows=await aiExtractBOM(_pdfText,false,null,file.name);
-b64=_pdfImages[pi];
+      }
+      if(!extractedRows.length&&(anthKey||geminiKey)){
+        setM('Text extraction found nothing — trying page vision…',60);
+        for(let pi=0;pi<_pdfImages.length;pi++){
+          const b64=_pdfImages[pi];
           if(!b64) continue;
           setM(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`,60+Math.round(35*pi/_pdfImages.length));
           const rows2=await aiExtractBOM('',true,{b64,mimeType:'image/png'},file.name);
