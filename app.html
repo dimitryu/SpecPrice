@@ -723,7 +723,12 @@ async function renderRFQDetail(projectId, projectName){
       header = `<tr data-dwg="${esc(row._dwgName)}" class="dwg-grp-hdr" style="background:var(--blue-light)"><td colspan="9" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none"><span class="dwg-toggle" style="cursor:pointer;user-select:none;display:inline-block;width:14px;text-align:center;font-size:11px;margin-right:5px;color:var(--blue-mid)" title="Collapse/expand">▼</span>📄 ${esc(row._dwgName)}</td></tr>`;
     }
     return header + `<tr data-dwg="${esc(row._dwgName)}">
-      ${BOM_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${esc(row[c.k]||'')}</td>`).join('')}
+      ${BOM_COLS.map(c=>{
+        // Drawing # fallback: if empty, show the drawing container name
+        let val=row[c.k]||'';
+        if(c.k==='drawing_number'&&!val) val=row._dwgName||'';
+        return `<td${c.wrap?' class="wrap"':''}>${esc(val)}</td>`;
+      }).join('')}
       <td><button class="btn btn-red btn-sm del-row" data-dwgid="${esc(row._dwgId)}" data-idx="${row._idx}" data-fmt="${row._fmt}" title="Delete row">✕</button></td>
     </tr>`;
   }).join('');
@@ -991,7 +996,9 @@ async function saveBOMToRFQ(rows, projectId, projectName, drawingName=''){
   if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
   try {
     const col=collection(db,'companies',companyId,'projects',projectId,'drawings');
-    const dwgName=drawingName||projectName;
+    // Priority: user-typed name → drawing_name from AI rows → project name
+    const dwgNameFromRows=rows.find(r=>r.drawing_name)?.drawing_name||'';
+    const dwgName=drawingName||dwgNameFromRows||projectName;
     // Check if a drawing with this name already exists; update or create
     const existSnap=await getDocs(col);
     const existing=existSnap.docs.find(d=>(d.data().name||'')===(dwgName));
@@ -1669,17 +1676,4 @@ function showSettingsModal(onSaved){
     </div>
   </div>`);
 
-  document.getElementById('btn-save-settings').addEventListener('click',()=>{
-    anthKey=document.getElementById('inp-anth-key').value.trim();
-    geminiKey=document.getElementById('inp-gem-key').value.trim();
-    localStorage.setItem('anth_key',anthKey);
-    localStorage.setItem('gem_key',geminiKey);
-    toast('Settings saved','success');
-    closeModal();
-    if(onSaved) onSaved();
-  });
-}
-
-</script>
-</body>
-</html>
+  document.getElementById('btn-save-settings').addEventListener('clic
