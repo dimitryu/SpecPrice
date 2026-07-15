@@ -232,7 +232,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.5</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.6</div>
     </div>
   </aside>
   <div class="main">
@@ -276,7 +276,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.4.5';
+const APP_VER   = '1.4.6';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -864,24 +864,30 @@ async function handleFile(file, projectId, projectName, drawingName=''){
   try {
     let extractedRows = [];
 
-    let _pdfText='', _pdfTextLen=0;
+    let _pdfText='', _pdfTextLen=0, _pdfImages=[];
     if(isPDF){
-      setMsg('Extracting text from PDF…', 20);
-      _pdfText = await extractPDFText(file);
-      _pdfTextLen = _pdfText.replace(/--- Page \d+ ---/g,'').trim().length;
-      if(_pdfTextLen < 150 && geminiKey){
-        // Scanned / image-based PDF — send raw PDF bytes to Gemini Vision
-        setMsg('Scanned PDF detected — using vision analysis…', 35);
-        const b64=await fileToB64(file);
-        extractedRows = await aiExtractBOM('', true, {b64, mimeType:'application/pdf'}, file.name);
-        // If vision also fails, try text anyway as last resort
-        if(!extractedRows.length && _pdfText.trim().length>10){
-          setMsg('Retrying with text extraction…', 65);
-          extractedRows = await aiExtractBOM(_pdfText, false, null, file.name);
-        }
-      } else {
-        setMsg('Sending to AI for BOM analysis…', 50);
+      setMsg('Reading PDF pages…', 15);
+      const {pageTexts, pageImages} = await extractPDFPages(file);
+      _pdfImages = pageImages;
+      _pdfText = pageTexts.map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
+      _pdfTextLen = pageTexts.join('').trim().length;
+
+      // Step 1: text-based AI extraction (if enough text)
+      if(_pdfTextLen > 50){
+        setMsg('Sending text to AI…', 45);
         extractedRows = await aiExtractBOM(_pdfText, false, null, file.name);
+      }
+
+      // Step 2: vision fallback — render pages as PNG and send to AI (like Windows app)
+      if(!extractedRows.length && (anthKey||geminiKey)){
+        setMsg('Text extraction found nothing — trying page vision…', 60);
+        for(let pi=0; pi<_pdfImages.length; pi++){
+          const b64=_pdfImages[pi];
+          if(!b64) continue;
+          setMsg(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`, 60+Math.round(35*pi/_pdfImages.length));
+          const rows=await aiExtractBOM('',true,{b64,mimeType:'image/png'},file.name);
+          if(rows.length){ extractedRows=rows; break; }
+        }
       }
     } else {
       setMsg('Encoding image…', 20);
@@ -989,32 +995,37 @@ async function saveBOMToRFQ(rows, projectId, projectName, drawingName=''){
   } catch(e){ toast('Save error: '+e.message,'error'); if(btn){btn.disabled=false;btn.textContent='Save to RFQ';} }
 }
 
-// ── PDF text extraction ────────────────────────────────────────────────────────
-async function extractPDFText(file){
+// ── PDF extraction: text + render pages as PNG images (like Windows app) ────────
+async function extractPDFPages(file){
   if(!window.pdfjsLib) throw new Error('PDF.js not loaded — please reload the page and try again.');
-  // Lazy worker setup (script may load async after module init)
-  if(!pdfjsLib.GlobalWorkerOptions.workerSrc){
+  if(!pdfjsLib.GlobalWorkerOptions.workerSrc)
     pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-  }
   const ab = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({data:ab}).promise;
-  const parts=[];
+  const pageTexts=[], pageImages=[];
   for(let i=1;i<=pdf.numPages;i++){
     const page = await pdf.getPage(i);
+    // -- Text --
     const content = await page.getTextContent();
-    // Reconstruct rows by grouping items with similar Y position
-    const items = content.items.map(it=>({x:it.transform[4],y:it.transform[5],str:it.str}));
-    items.sort((a,b)=>b.y-a.y||a.x-b.x);
-    let lastY=null, line='';
-    for(const it of items){
-      if(lastY!==null && Math.abs(it.y-lastY)>4){ parts.push(line); line=''; }
-      line+=(line?' ':'')+it.str;
-      lastY=it.y;
+    const cells = content.items.map(it=>({x:it.transform[4],y:it.transform[5],str:it.str}));
+    cells.sort((a,b)=>b.y-a.y||a.x-b.x);
+    let lastY=null, line='', lines=[];
+    for(const it of cells){
+      if(lastY!==null && Math.abs(it.y-lastY)>4){lines.push(line);line='';}
+      line+=(line?' ':'')+it.str; lastY=it.y;
     }
-    if(line) parts.push(line);
-    parts.push(`--- Page ${i} ---`);
+    if(line) lines.push(line);
+    pageTexts.push(lines.join('\n'));
+    // -- Render page as PNG at 2.5x zoom (matches Windows app 3x approach) --
+    try{
+      const vp = page.getViewport({scale:2.5});
+      const canvas = document.createElement('canvas');
+      canvas.width=vp.width; canvas.height=vp.height;
+      await page.render({canvasContext:canvas.getContext('2d'), viewport:vp}).promise;
+      pageImages.push(canvas.toDataURL('image/png').split(',')[1]);
+    }catch(e){ pageImages.push(null); }
   }
-  return parts.join('\n');
+  return {pageTexts, pageImages};
 }
 
 // ── Image encoding ─────────────────────────────────────────────────────────────
@@ -1040,23 +1051,61 @@ function fileToB64(file){
 }
 
 // ── AI BOM extraction: Anthropic → Gemini fallback ────────────────────────────
-const _BOM_PROMPT = (isImage, filename) =>
-  `You are a BOM (Bill of Materials) extraction expert.
-Extract ALL parts from this ${isImage?'image':'document'} ("${filename}") and return them as a JSON array.
+// Text prompt — same as Windows app ai_extractor.py
+const _BOM_TEXT_PROMPT = (filename) =>
+  `You are an expert at extracting Bill of Materials (BOM) tables from engineering drawings.
 
-Each part object must have EXACTLY these fields (use "" if not found):
-- "item": row/item number (e.g. "1", "2", "A1")
-- "drawing_number": drawing number this BOM belongs to
-- "part_number": manufacturer or supplier part number
+TASK: Extract ALL rows from the BOM table in the text below. Do NOT stop early — even if there are 30+ rows.
+
+COLUMN MAPPING (column names may vary between drawings):
+- "item" → row number (1, 2, 3 ...) — look for: ITEM, #, NO., SEQ
+- "description" → component description — look for: DESCRIPTION, DESC, NAME
+- "atlantium_pn" → company internal part number — look for: ATLANTIUM PN, INTERNAL PN, CATALOG NO, CUST PN, CUSTOMER PN
+- "manufacturer" → maker name — look for: MANUFACTURER, MFG, MAKE, VENDOR
+- "part_number" → manufacturer part number — look for: MANUFACTURER PN, MFR PN, MFG PN, PART NUMBER, PART NO, PN, P/N
+- "drawing_number" → drawing number — look for: DWG NO, DRAWING NO, DRAWING #
+- "drawing_name" → drawing title or assembly name
+- "unit" → unit of measure — look for: UNIT, UOM, U/M — values like "pc", "m", "ft", "ea", "set", "kg"
+
+QTY RULE: If there are multiple quantity columns (e.g. for different product sizes), take the FIRST one only.
+
+RULES:
+1. Extract EVERY data row — include all items, do not truncate
+2. Skip header rows, total/summary rows, and blank rows
+3. If a column is missing, leave it as empty string ""
+4. Keep descriptions exactly as written
+
+Return ONLY a valid JSON array, no explanations.
+Example: [{"item":"1","atlantium_pn":"EL0015700","part_number":"VN01 036 0005 1 C","drawing_number":"601-1201-021","drawing_name":"Main Assembly","description":"MALE CRIMPING CONTACT PIN (2.5), UL","qty":"3","unit":"pc","manufacturer":"AMPHENOL"}]
+If no BOM is found, return: []
+
+PDF TEXT (file: ${filename}):`;
+
+// Vision prompt — matches Windows app extract_bom_from_page_image prompt
+const _BOM_VISION_PROMPT =
+  `You are an expert at reading engineering Bill of Materials (BOM) tables from images.
+
+Look at this PDF page image and extract ALL rows from the BOM / Assembly Parts List table.
+
+For each row extract:
+- "item": row/item number (1, 2, 3 ...)
+- "part_number": the manufacturer part number (alphanumeric code in PART NUMBER / PN / P/N column)
+- "drawing_number": drawing number (DWG NO, DRAWING NO)
 - "drawing_name": drawing title or assembly name
-- "atlantium_pn": customer internal part number
-- "description": full part description
-- "qty": quantity as a number string (e.g. "1", "10", "2.5")
-- "unit": unit of measure (pcs, m, cm, mm, set, kg, etc.)
-- "manufacturer": manufacturer or vendor name
+- "atlantium_pn": internal/customer part number if a separate column exists, else empty
+- "description": component description (DESCRIPTION / DESC column)
+- "qty": quantity as a number string
+- "unit": unit of measure (mm, ea, m, kg, pc, etc.)
+- "manufacturer": manufacturer name if shown, else empty string
 
-CRITICAL: Return ONLY a valid JSON array. No markdown, no explanation, no extra text.
-Example: [{"item":"1","drawing_number":"DWG-001","part_number":"ABC123","drawing_name":"Main Assembly","atlantium_pn":"","description":"Resistor 10K Ohm","qty":"5","unit":"pcs","manufacturer":"Vishay"}]
+RULES:
+1. Extract EVERY data row — do NOT stop early or truncate the list
+2. Skip header rows (ITEM, PART NUMBER, DESCRIPTION, QTY, UNIT) and blank rows
+3. Read part numbers character by character — they are precise: do NOT guess or correct them
+4. If a column is missing or empty for a row, use empty string ""
+
+Return ONLY a valid JSON array, no explanation.
+Example: [{"item":"1","part_number":"M27500-20SC2S23","drawing_number":"","drawing_name":"","description":"CABLE 20AWG TWISTED PAIR","qty":"10000","unit":"mm","manufacturer":"","atlantium_pn":""}]
 If no BOM is found, return: []`;
 
 let _dbgLastAI='';
@@ -1081,11 +1130,10 @@ async function aiExtractBOM(text, isImage, imgData, filename){
 }
 
 async function _anthropicBOM(text, isImage, imgData, filename){
-  const PROMPT = _BOM_PROMPT(isImage, filename);
   const messages = isImage ? [{role:'user',content:[
     {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
-    {type:'text',text:PROMPT}
-  ]}] : [{role:'user', content: PROMPT+'\n\nDOCUMENT TEXT:\n'+text.slice(0,30000)}];
+    {type:'text',text:_BOM_VISION_PROMPT}
+  ]}] : [{role:'user', content: _BOM_TEXT_PROMPT(filename)+'\n'+text.slice(0,30000)}];
   const resp = await fetch('https://api.anthropic.com/v1/messages',{
     method:'POST',
     headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
@@ -1099,10 +1147,9 @@ async function _anthropicBOM(text, isImage, imgData, filename){
 }
 
 async function _geminiBOM(text, isImage, imgData, filename){
-  const PROMPT = _BOM_PROMPT(isImage, filename);
   const parts = isImage
-    ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:PROMPT}]
-    : [{text: PROMPT+'\n\nDOCUMENT TEXT:\n'+text.slice(0,30000)}];
+    ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:_BOM_VISION_PROMPT}]
+    : [{text: _BOM_TEXT_PROMPT(filename)+'\n'+text.slice(0,30000)}];
   const resp = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
     {method:'POST',headers:{'content-type':'application/json'},
