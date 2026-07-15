@@ -232,7 +232,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.9</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.5.0</div>
     </div>
   </aside>
   <div class="main">
@@ -276,7 +276,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.4.9';
+const APP_VER   = '1.5.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1449,6 +1449,34 @@ async function runFCCheckModal(items, mode){
             sdItems[sdIdx].price=priceNum;
             sdItems[sdIdx].total=priceNum*(sdItems[sdIdx].qty||1);
           }
+          // Also save the result to Part Stock (parts_cache) — upsert by part_number
+          try{
+            const pn=(it.part_number||'').trim();
+            if(pn){
+              const existing=allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
+              if(existing){
+                await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),{
+                  price:res.price, distributor:res.distributor||'',
+                  stock:res.stock||'', findchips_url:res.url||'',
+                  updatedAt:serverTimestamp()
+                });
+                existing.price=res.price; existing.distributor=res.distributor||'';
+                existing.stock=res.stock||''; existing.findchips_url=res.url||'';
+              } else {
+                const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
+                const ref=doc(db,'companies',companyId,'parts_cache',key);
+                await setDoc(ref,{
+                  part_number:pn, description:'', drawing_number:'', manufacturer:'',
+                  unit:'', atlantium_pn:'',
+                  price:res.price, distributor:res.distributor||'', stock:res.stock||'',
+                  price_description:'', findchips_url:res.url||'',
+                  updatedAt:serverTimestamp()
+                },{merge:true});
+                allParts.push({_id:key, part_number:pn, price:res.price,
+                  distributor:res.distributor||'', stock:res.stock||'', findchips_url:res.url||''});
+              }
+            }
+          }catch(e){ console.warn('FC->PartStock save error:',e.message); }
         }
       }
     }catch(e){
