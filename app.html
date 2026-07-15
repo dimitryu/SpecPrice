@@ -232,7 +232,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.3</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.4</div>
     </div>
   </aside>
   <div class="main">
@@ -276,7 +276,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.4.3';
+const APP_VER   = '1.4.4';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -401,16 +401,32 @@ document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',(
 // ── Resizable columns ──────────────────────────────────────────────────────
 function makeTableResizable(table){
   if(!table) return;
-  table.querySelectorAll('thead th').forEach(th=>{
-    if(th.querySelector('.col-resizer')) return; // already added
+  table.querySelectorAll('thead th').forEach((th,ci)=>{
+    if(th.querySelector('.col-resizer')) return;
     const r=document.createElement('div');
     r.className='col-resizer';
     th.appendChild(r);
-    let x0=0,w0=0;
+    r.addEventListener('click',e=>{e.stopPropagation();e.preventDefault();});
+    let x0=0,w0=0,dragged=false;
     r.addEventListener('mousedown',e=>{
-      x0=e.clientX; w0=th.getBoundingClientRect().width;
-      const move=ev=>{const w=Math.max(28,w0+ev.clientX-x0);th.style.minWidth=w+'px';th.style.width=w+'px';};
-      const up=()=>{document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);};
+      x0=e.clientX; w0=th.getBoundingClientRect().width; dragged=false;
+      const move=ev=>{
+        dragged=true;
+        const w=Math.max(40,w0+ev.clientX-x0);
+        th.style.minWidth=w+'px'; th.style.width=w+'px';
+      };
+      const up=()=>{
+        document.removeEventListener('mousemove',move);
+        document.removeEventListener('mouseup',up);
+        if(dragged){
+          const finalW=th.offsetWidth;
+          table.querySelectorAll(`tbody tr > *:nth-child(${ci+1})`).forEach(td=>{
+            td.style.whiteSpace='normal';
+            td.style.maxWidth=finalW+'px';
+            td.style.lineHeight='1.35';
+          });
+        }
+      };
       document.addEventListener('mousemove',move);
       document.addEventListener('mouseup',up);
       e.preventDefault(); e.stopPropagation();
@@ -704,7 +720,7 @@ async function renderRFQDetail(projectId, projectName){
     let header = '';
     if(row._dwgName && row._dwgName !== lastDwgName){
       lastDwgName = row._dwgName;
-      header = `<tr data-dwg="${esc(row._dwgName)}" class="dwg-grp-hdr" style="background:var(--blue-light)"><td colspan="9" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none">📄 ${esc(row._dwgName)}</td></tr>`;
+      header = `<tr data-dwg="${esc(row._dwgName)}" class="dwg-grp-hdr" style="background:var(--blue-light)"><td colspan="9" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none"><span class="dwg-toggle" style="cursor:pointer;user-select:none;display:inline-block;width:14px;text-align:center;font-size:11px;margin-right:5px;color:var(--blue-mid)" title="Collapse/expand">▼</span>📄 ${esc(row._dwgName)}</td></tr>`;
     }
     return header + `<tr data-dwg="${esc(row._dwgName)}">
       ${BOM_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${esc(row[c.k]||'')}</td>`).join('')}
@@ -727,6 +743,19 @@ async function renderRFQDetail(projectId, projectName){
       <tbody id="bom-tbody">${rowsHtml||'<tr class="empty-row"><td colspan="9">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
     </table></div>
     <div style="margin-top:8px;font-size:11px;color:var(--muted)">${allRows.length} parts across ${drawings.length} drawing(s)</div>`);
+
+  // Drawing group collapse/expand
+  document.querySelectorAll('.dwg-grp-hdr').forEach(hdr=>{
+    hdr.querySelector('.dwg-toggle')?.addEventListener('click',e=>{
+      const dwg=hdr.dataset.dwg;
+      const arrow=e.currentTarget;
+      const collapsing=arrow.textContent.trim()==='▼';
+      arrow.textContent=collapsing?'▶':'▼';
+      document.querySelectorAll('#bom-tbody tr:not(.dwg-grp-hdr)').forEach(tr=>{
+        if(tr.dataset.dwg===dwg) tr.style.display=collapsing?'none':'';
+      });
+    });
+  });
 
   // Drawing filter
   document.getElementById('dwg-filter')?.addEventListener('change',e=>{
@@ -849,15 +878,16 @@ async function handleFile(file, projectId, projectName, drawingName=''){
 
     setMsg('Done — review the table below', 100);
     const _ringEl=document.querySelector('.ai-status .ring');
-    if(_ringEl){_ringEl.classList.add('done');_ringEl.style.animation='none';
-      _ringEl.style.borderColor='#1B6B3A';_ringEl.style.borderTopColor='#1B6B3A';}
+    if(_ringEl){_ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';
+      _ringEl.textContent='✓';}
 
     if(!extractedRows.length){
-      const noPartsP = document.createElement('p');
-      noPartsP.style.cssText = 'color:var(--muted);margin-top:12px';
-      noPartsP.textContent = 'No BOM rows detected. Try a clearer file.';
-      body.appendChild(noPartsP);
-      foot.innerHTML = `<button class="btn btn-ghost" id="modal-cancel">Close</button>`;
+      const dbg=document.createElement('div');
+      dbg.innerHTML=`<p style="color:var(--muted);margin-top:10px">No BOM rows detected.</p>
+        <details style="margin-top:8px"><summary style="cursor:pointer;font-size:11px;color:var(--blue-mid)">Show AI response (debug)</summary>
+        <pre style="white-space:pre-wrap;font-size:10px;max-height:140px;overflow:auto;background:#f5f5f5;padding:8px;border-radius:5px;margin-top:5px;word-break:break-all">${esc(_dbgLastAI.slice(0,3000)||'(empty)')}</pre></details>`;
+      body.appendChild(dbg);
+      foot.innerHTML=`<button class="btn btn-ghost" id="modal-cancel">Close</button>`;
       document.getElementById('modal-cancel').addEventListener('click',closeModal);
       return;
     }
@@ -884,7 +914,7 @@ function showBOMPreview(rows, projectId, projectName, drawingName, body, foot){
 
   body.innerHTML = `
     <div class="ai-status" style="margin-bottom:10px">
-      <div class="ring done" style="animation:none;border-color:#1B6B3A;border-top-color:#1B6B3A"></div>
+      <div style="width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1">✓</div>
       <span>${rows.length} rows extracted — you can edit cells before saving</span>
     </div>
     <div class="table-wrap" style="max-height:360px;overflow:auto"><table>
@@ -997,10 +1027,13 @@ CRITICAL: Return ONLY a valid JSON array. No markdown, no explanation, no extra 
 Example: [{"item":"1","drawing_number":"DWG-001","part_number":"ABC123","drawing_name":"Main Assembly","atlantium_pn":"","description":"Resistor 10K Ohm","qty":"5","unit":"pcs","manufacturer":"Vishay"}]
 If no BOM is found, return: []`;
 
+let _dbgLastAI='';
 function _parseAIJson(raw){
+  _dbgLastAI=raw;
   const m=raw.match(/\[[\s\S]*\]/);
-  if(!m) return [];
-  try { return JSON.parse(m[0]); } catch { return []; }
+  if(!m){console.warn('[AI] no JSON array. Raw:',raw.slice(0,300));return[];}
+  try{return JSON.parse(m[0]);}
+  catch(e){console.warn('[AI] parse error:',e.message,'at:',m[0].slice(0,200));return[];}
 }
 
 async function aiExtractBOM(text, isImage, imgData, filename){
@@ -1041,12 +1074,14 @@ async function _geminiBOM(text, isImage, imgData, filename){
   const resp = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
     {method:'POST',headers:{'content-type':'application/json'},
-     body:JSON.stringify({contents:[{parts}]})}
+     body:JSON.stringify({contents:[{parts}],generationConfig:{thinkingConfig:{thinkingBudget:0}}})}
   );
   if(!resp.ok){let m=`Gemini error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
   const data=await resp.json();
   const raw=(data.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
+  console.log('[Gemini] parts:',data.candidates?.[0]?.content?.parts?.length,'raw(200):',raw.slice(0,200));
+  _dbgLastAI=raw;
   return _parseAIJson(raw.trim());
 }
 
