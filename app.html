@@ -232,7 +232,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.4</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.4.5</div>
     </div>
   </aside>
   <div class="main">
@@ -276,7 +276,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.4.4';
+const APP_VER   = '1.4.5';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -864,11 +864,25 @@ async function handleFile(file, projectId, projectName, drawingName=''){
   try {
     let extractedRows = [];
 
+    let _pdfText='', _pdfTextLen=0;
     if(isPDF){
       setMsg('Extracting text from PDF…', 20);
-      const text = await extractPDFText(file);
-      setMsg('Sending to AI for BOM analysis…', 50);
-      extractedRows = await aiExtractBOM(text, false, null, file.name);
+      _pdfText = await extractPDFText(file);
+      _pdfTextLen = _pdfText.replace(/--- Page \d+ ---/g,'').trim().length;
+      if(_pdfTextLen < 150 && geminiKey){
+        // Scanned / image-based PDF — send raw PDF bytes to Gemini Vision
+        setMsg('Scanned PDF detected — using vision analysis…', 35);
+        const b64=await fileToB64(file);
+        extractedRows = await aiExtractBOM('', true, {b64, mimeType:'application/pdf'}, file.name);
+        // If vision also fails, try text anyway as last resort
+        if(!extractedRows.length && _pdfText.trim().length>10){
+          setMsg('Retrying with text extraction…', 65);
+          extractedRows = await aiExtractBOM(_pdfText, false, null, file.name);
+        }
+      } else {
+        setMsg('Sending to AI for BOM analysis…', 50);
+        extractedRows = await aiExtractBOM(_pdfText, false, null, file.name);
+      }
     } else {
       setMsg('Encoding image…', 20);
       const {b64, mimeType} = await encodeImage(file);
@@ -882,10 +896,21 @@ async function handleFile(file, projectId, projectName, drawingName=''){
       _ringEl.textContent='✓';}
 
     if(!extractedRows.length){
+      const scannedWarn = isPDF && _pdfTextLen < 150;
       const dbg=document.createElement('div');
-      dbg.innerHTML=`<p style="color:var(--muted);margin-top:10px">No BOM rows detected.</p>
-        <details style="margin-top:8px"><summary style="cursor:pointer;font-size:11px;color:var(--blue-mid)">Show AI response (debug)</summary>
-        <pre style="white-space:pre-wrap;font-size:10px;max-height:140px;overflow:auto;background:#f5f5f5;padding:8px;border-radius:5px;margin-top:5px;word-break:break-all">${esc(_dbgLastAI.slice(0,3000)||'(empty)')}</pre></details>`;
+      dbg.innerHTML=`
+        <p style="color:var(--muted);margin-top:10px">No BOM rows detected.</p>
+        ${scannedWarn?`<p style="color:#C05621;font-size:12px;margin-top:6px;padding:7px 10px;background:#FEFCBF;border-radius:5px">
+          ⚠️ Scanned PDF — only ${_pdfTextLen} characters extracted. The vision attempt also returned no results.<br>
+          Try: take a screenshot of the BOM page and upload as PNG/JPG.</p>`:''}
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;font-size:11px;color:var(--blue-mid)">Show extracted text (${_pdfTextLen} chars)</summary>
+          <pre style="white-space:pre-wrap;font-size:10px;max-height:120px;overflow:auto;background:#f5f5f5;padding:8px;border-radius:5px;margin-top:5px">${esc(_pdfText.slice(0,600)||'(none)')}</pre>
+        </details>
+        <details style="margin-top:6px">
+          <summary style="cursor:pointer;font-size:11px;color:var(--blue-mid)">Show AI response (debug)</summary>
+          <pre style="white-space:pre-wrap;font-size:10px;max-height:120px;overflow:auto;background:#f5f5f5;padding:8px;border-radius:5px;margin-top:5px;word-break:break-all">${esc(_dbgLastAI.slice(0,3000)||'(empty)')}</pre>
+        </details>`;
       body.appendChild(dbg);
       foot.innerHTML=`<button class="btn btn-ghost" id="modal-cancel">Close</button>`;
       document.getElementById('modal-cancel').addEventListener('click',closeModal);
@@ -997,11 +1022,18 @@ function encodeImage(file){
   return new Promise((res,rej)=>{
     const reader=new FileReader();
     reader.onload=e=>{
-      const url=e.target.result; // data:image/png;base64,...
-      const b64=url.split(',')[1];
-      const mimeType=url.split(';')[0].slice(5);
-      res({b64, mimeType});
+      const url=e.target.result;
+      res({b64:url.split(',')[1], mimeType:url.split(';')[0].slice(5)});
     };
+    reader.onerror=rej;
+    reader.readAsDataURL(file);
+  });
+}
+// ── Generic file → base64 (for PDF vision) ──────────────────────────────────
+function fileToB64(file){
+  return new Promise((res,rej)=>{
+    const reader=new FileReader();
+    reader.onload=e=>res(e.target.result.split(',')[1]);
     reader.onerror=rej;
     reader.readAsDataURL(file);
   });
