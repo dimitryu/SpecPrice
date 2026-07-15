@@ -276,7 +276,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.4.7';
+const APP_VER   = '1.4.8';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -478,7 +478,8 @@ async function renderPartStock(filter=''){
     if(fcPrice&&prPrice){fcC=fcPrice<=prPrice?'price-green':'price-red';prC=prPrice<=fcPrice?'price-green':'price-red';}
     const unit=esc(p.unit||p.units||'');
     const fcUrl=p.findchips_url||`https://www.findchips.com/search/${encodeURIComponent(p.part_number||'')}`;
-    return`<tr>
+    return`<tr data-id="${esc(p._id)}">
+      <td style="text-align:center"><input type="checkbox" class="ps-check" data-id="${esc(p._id)}"></td>
       <td>${esc(p.part_number)}</td><td>${esc(p.drawing_number)}</td>
       <td>${esc(p.drawing_name)}</td><td>${esc(p.atlantium_pn)}</td>
       <td class="wrap">${esc(p.description)}</td><td>${esc(p.manufacturer)}</td>
@@ -492,11 +493,15 @@ async function renderPartStock(filter=''){
   setContent(`
     <div class="toolbar">
       <input class="search-box" id="ps-search" placeholder="Search part number, description, manufacturer…" value="${esc(filter)}">
+      <button class="btn btn-blue" id="btn-ps-fc" style="white-space:nowrap;flex-shrink:0">🔍 Check FindChips</button>
       <span class="count-badge">${filtered.length} parts${filtered.length>2000?' (showing 2000)':''}</span>
     </div>
-    <div class="table-wrap"><table>
-      <thead><tr>${COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}">${c.l}${arrow(c.k)}</th>`).join('')}</tr></thead>
-      <tbody>${rows||'<tr class="empty-row"><td colspan="12">No parts found</td></tr>'}</tbody>
+    <div class="table-wrap"><table id="ps-table">
+      <thead><tr>
+        <th style="width:28px"><input type="checkbox" id="ps-check-all" title="Select all"></th>
+        ${COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}">${c.l}${arrow(c.k)}</th>`).join('')}
+      </tr></thead>
+      <tbody>${rows||'<tr class="empty-row"><td colspan="13">No parts found</td></tr>'}</tbody>
     </table></div>`);
 
   makeTableResizable(document.querySelector('.table-wrap table'));
@@ -508,6 +513,24 @@ async function renderPartStock(filter=''){
     if(sortCol===k)sortAsc=!sortAsc;else{sortCol=k;sortAsc=true;}
     renderPartStock(inp.value);
   }));
+
+  // Check-all toggle
+  document.getElementById('ps-check-all')?.addEventListener('change',e=>{
+    document.querySelectorAll('.ps-check').forEach(cb=>cb.checked=e.target.checked);
+  });
+
+  // FindChips button — check selected rows (or all if none selected)
+  document.getElementById('btn-ps-fc')?.addEventListener('click',()=>{
+    const checked=[...document.querySelectorAll('.ps-check:checked')].map(cb=>cb.dataset.id);
+    const targets = checked.length
+      ? sorted.filter(p=>checked.includes(p._id))
+      : sorted.slice(0,2000);
+    const items=targets.filter(p=>p.part_number).map(p=>({
+      _id:p._id, part_number:p.part_number, qty:parseInt(p.qty)||1
+    }));
+    if(!items.length){toast('No parts with part numbers','error');return;}
+    runFCCheckModal(items,'parts');
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1245,6 +1268,204 @@ async function _geminiBOM(text, isImage, imgData, filename){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ── FindChips price checker ───────────────────────────────────────────────────
+// JS port of core/findchips_scraper.py — same price-break logic
+
+const FC_PROXY = 'https://corsproxy.io/?url=';
+
+function _fcParsePriceBreaks(texts){
+  const breaks=[];
+  // Strategy A: "N+ $X.XX" pairs inline
+  for(const t of texts){
+    const re=/([\d,]+)\s*\+?\s*\$\s*([\d,]+\.\d+)/g; let m;
+    while((m=re.exec(t))!==null){
+      const qty=parseInt(m[1].replace(/,/g,''));
+      const price=parseFloat(m[2].replace(/,/g,''));
+      if(qty>0&&price>0) breaks.push([qty,price]);
+    }
+  }
+  // Strategy B: adjacent qty/price cells
+  if(!breaks.length){
+    for(let i=0;i<texts.length-1;i++){
+      const qm=texts[i].trim().match(/^([\d,]+)$/);
+      if(qm){
+        const nxt=texts[i+1];
+        const pm=nxt.match(/\$\s*([\d,]+\.\d+)/)||nxt.trim().match(/^(\d+\.\d{2,4})$/);
+        if(pm){
+          const qty=parseInt(qm[1].replace(/,/g,''));
+          const price=parseFloat(pm[1].replace(/,/g,''));
+          if(qty>0&&price>0){breaks.push([qty,price]);i++;}
+        }
+      }
+    }
+  }
+  // Strategy C: first dollar amount = unit price
+  if(!breaks.length){
+    for(const t of texts){
+      const m=t.match(/\$\s*([\d,]+\.\d+)/);
+      if(m){breaks.push([1,parseFloat(m[1].replace(/,/g,''))]);break;}
+      const m2=t.trim().match(/^(\d+\.\d{2,4})$/);
+      if(m2){breaks.push([1,parseFloat(m2[1])]);break;}
+    }
+  }
+  breaks.sort((a,b)=>a[0]-b[0]);
+  const seen=new Set(),result=[];
+  for(const [qty,price] of breaks){if(!seen.has(qty)){seen.add(qty);result.push([qty,price]);}}
+  return result;
+}
+
+function _fcNearestBreakPrice(breaks,targetQty){
+  if(!breaks.length) return '';
+  let [bestQty,bestPrice]=breaks[0];
+  let bestDist=Math.abs(targetQty-bestQty);
+  for(const [qty,price] of breaks.slice(1)){
+    const dist=Math.abs(targetQty-qty);
+    if(dist<bestDist||(dist===bestDist&&qty<bestQty)){bestDist=dist;bestQty=qty;bestPrice=price;}
+  }
+  return '$'+bestPrice.toFixed(4).replace(/\.?0+$/,'');
+}
+
+async function _fcFetchPart(partNumber, qty=0){
+  const pn=partNumber.trim();
+  if(!pn) return null;
+  const fcUrl=`https://www.findchips.com/search/${encodeURIComponent(pn)}`;
+  const resp=await fetch(FC_PROXY+encodeURIComponent(fcUrl),{signal:AbortSignal.timeout(22000)});
+  if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const html=await resp.text();
+  if(/no results were found|0 results|no parts found/i.test(html))
+    return{price:'Not found',distributor:'',stock:'',url:fcUrl};
+  const doc=new DOMParser().parseFromString(html,'text/html');
+  const offers=[];
+  for(const sec of doc.querySelectorAll('[class*="distributor-results"]')){
+    let dist='';
+    for(const sel of ['[class*="distributor-name"]','[class*="distributor-title"]','h2','h3','h4']){
+      const tag=sec.querySelector(sel);
+      if(tag){const t=tag.textContent.trim().replace(/\s+/g,' ');if(t.length>1&&t.length<60){dist=t;break;}}
+    }
+    for(const row of sec.querySelectorAll('tr')){
+      const cells=[...row.querySelectorAll('td')];
+      if(cells.length<3) continue;
+      const texts=cells.map(c=>c.textContent.trim().replace(/\s+/g,' '));
+      const brks=_fcParsePriceBreaks(texts);
+      if(!brks.length) continue;
+      const price=qty>0?_fcNearestBreakPrice(brks,qty):('$'+brks[0][1].toFixed(4).replace(/\.?0+$/,''));
+      let stock='';
+      for(const t of texts){
+        if(!t.includes('$')&&t.length<20){const m=t.match(/^([\d,]+)$/);if(m){stock=m[1];break;}}
+      }
+      offers.push({price,distributor:dist,stock,url:fcUrl});
+    }
+  }
+  if(!offers.length) return{price:'Not found',distributor:'',stock:'',url:fcUrl};
+  offers.sort((a,b)=>(parseFloat(a.price.replace(/[^0-9.]/g,''))||Infinity)-(parseFloat(b.price.replace(/[^0-9.]/g,''))||Infinity));
+  return{...offers[0],url:fcUrl};
+}
+
+// mode: 'parts' → save to Firestore allParts; 'sd' → update sdItems in memory
+async function runFCCheckModal(items, mode){
+  if(!items.length){toast('No parts to check','error');return;}
+  let stopped=false;
+  const total=items.length;
+
+  showModal(`<div class="modal" style="width:min(94vw,820px)">
+    <div class="modal-head"><h3>🔍 FindChips Price Check</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" id="fc-modal-body">
+      <div class="ai-status" style="margin-bottom:8px"><div class="ring"></div><span id="fc-status">Starting…</span></div>
+      <div class="progress-bar"><div class="progress-fill" id="fc-prog"></div></div>
+      <div style="max-height:340px;overflow:auto;margin-top:12px">
+        <table style="width:100%;font-size:12px" id="fc-res-table">
+          <thead><tr style="position:sticky;top:0;background:#fff">
+            <th>Part #</th><th>QTY</th><th>Price</th><th>Distributor</th><th>Stock</th><th>Status</th>
+          </tr></thead>
+          <tbody id="fc-res-tbody">
+            ${items.map((it,i)=>`<tr id="fc-row-${i}">
+              <td>${esc(it.part_number)}</td><td>${it.qty||1}</td>
+              <td id="fc-p-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-d-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-s-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-st-${i}"><span class="ring" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle"></span></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="btn-fc-stop">Stop</button>
+      <span id="fc-summary" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+  </div>`);
+
+  document.getElementById('btn-fc-stop').addEventListener('click',()=>{stopped=true;closeModal();});
+
+  let done=0, found=0;
+  for(let i=0;i<items.length;i++){
+    if(stopped) break;
+    const it=items[i];
+    const setStatus=(txt,color='var(--muted)')=>{
+      const el=document.getElementById(`fc-st-${i}`);
+      if(el) el.innerHTML=`<span style="color:${color};font-size:11px">${txt}</span>`;
+    };
+    const prog=document.getElementById('fc-prog');
+    if(prog) prog.style.width=Math.round(100*i/total)+'%';
+    const stEl=document.getElementById('fc-status');
+    if(stEl) stEl.textContent=`Checking ${i+1}/${total}: ${it.part_number}`;
+    setStatus('⏳');
+    try{
+      const res=await _fcFetchPart(it.part_number, parseInt(it.qty)||1);
+      if(!res||res.price==='Not found'){
+        setStatus('Not found','var(--muted)');
+        const pd=document.getElementById(`fc-p-${i}`); if(pd) pd.textContent='—';
+      } else {
+        found++;
+        const priceNum=parseFloat(res.price.replace(/[^0-9.]/g,''))||0;
+        const pd=document.getElementById(`fc-p-${i}`); if(pd){pd.textContent=res.price;pd.style.color='var(--green)';}
+        const dd=document.getElementById(`fc-d-${i}`); if(dd){dd.textContent=res.distributor||'';dd.style.color='var(--text)';}
+        const sd=document.getElementById(`fc-s-${i}`); if(sd){sd.textContent=res.stock||'';sd.style.color='var(--text)';}
+        setStatus('✓','var(--green)');
+        // Update data
+        if(mode==='parts'){
+          const partId=it._id;
+          if(partId){
+            try{
+              await updateDoc(doc(db,'companies',companyId,'parts_cache',partId),{
+                price:res.price, distributor:res.distributor||'',
+                stock:res.stock||'', findchips_url:res.url||'',
+                updatedAt:serverTimestamp()
+              });
+              const ap=allParts.find(p=>p._id===partId);
+              if(ap){ap.price=res.price;ap.distributor=res.distributor||'';ap.stock=res.stock||'';ap.findchips_url=res.url||'';}
+            }catch(e){console.warn('FC save error:',e.message);}
+          }
+        } else if(mode==='sd'){
+          const sdIdx=it._sdIdx;
+          if(sdIdx!==undefined&&sdItems[sdIdx]){
+            sdItems[sdIdx].price=priceNum;
+            sdItems[sdIdx].total=priceNum*(sdItems[sdIdx].qty||1);
+          }
+        }
+      }
+    }catch(e){
+      setStatus('Error','var(--red)');
+      console.warn('FC error',it.part_number,e.message);
+    }
+    done++;
+    const sumEl=document.getElementById('fc-summary');
+    if(sumEl) sumEl.textContent=`${done}/${total} checked, ${found} prices found`;
+    // Small delay to avoid hammering FindChips
+    if(i<items.length-1&&!stopped) await new Promise(r=>setTimeout(r,400));
+  }
+
+  const prog=document.getElementById('fc-prog'); if(prog) prog.style.width='100%';
+  const stEl=document.getElementById('fc-status');
+  if(stEl) stEl.textContent=`Done — ${found}/${total} prices found`;
+  const stopBtn=document.getElementById('btn-fc-stop');
+  if(stopBtn){stopBtn.textContent='Close';stopBtn.className='btn btn-green';
+    stopBtn.onclick=()=>{closeModal();if(mode==='parts'){allParts=[];renderPartStock();}else{renderSalesDesk();}};
+  }
+  const ringEl=document.querySelector('#fc-modal-body .ring');
+  if(ringEl){ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';ringEl.textContent='✓';}
+}
+
 // SALES DESK
 // ══════════════════════════════════════════════════════════════════════════════
 async function renderSalesDesk(){
@@ -1253,7 +1474,8 @@ async function renderSalesDesk(){
 
   const renderSD=()=>{
     const partsTotal=sdItems.reduce((s,r)=>s+r.total,0);
-    const tbody=sdItems.map((r,i)=>`<tr>
+    const tbody=sdItems.map((r,i)=>`<tr data-i="${i}">
+      <td style="text-align:center"><input type="checkbox" class="sd-check" data-i="${i}"></td>
       <td>${esc(r.part_number)}</td>
       <td class="wrap">${esc(r.description)}</td>
       <td><input type="number" class="sd-qty" data-i="${i}" value="${r.qty}" min="0.001" step="any"
@@ -1265,7 +1487,7 @@ async function renderSalesDesk(){
     </tr>`).join('');
 
     document.getElementById('sd-tbody').innerHTML=tbody||
-      `<tr class="empty-row"><td colspan="7">No parts added yet</td></tr>`;
+      `<tr class="empty-row"><td colspan="8">No parts added yet</td></tr>`;
     document.getElementById('sd-total').textContent='$'+partsTotal.toFixed(2);
 
     document.querySelectorAll('.sd-qty').forEach(inp=>inp.addEventListener('change',()=>{
@@ -1288,11 +1510,13 @@ async function renderSalesDesk(){
           </div>
           <button class="btn btn-blue" id="btn-sd-file">📎 From File (BOM)</button>
           <button class="btn btn-ghost" id="btn-sd-bydwg">📋 By Drawing #</button>
+          <button class="btn btn-blue" id="btn-sd-fc" style="white-space:nowrap">🔍 FindChips</button>
           <button class="btn btn-ghost" id="btn-sd-clear">Clear All</button>
         </div>
         <div class="sd-scroll">
           <table style="width:100%">
             <thead><tr>
+              <th style="width:28px"><input type="checkbox" id="sd-check-all" title="Select all"></th>
               <th>Part #</th><th>Description</th><th>QTY</th>
               <th>Units</th><th>Price</th><th>Total</th><th></th>
             </tr></thead>
@@ -1353,6 +1577,27 @@ async function renderSalesDesk(){
 
   document.getElementById('btn-sd-clear').addEventListener('click',()=>{sdItems=[];renderSD();});
   document.getElementById('btn-sd-print').addEventListener('click',()=>window.print());
+
+  // SD check-all toggle
+  document.addEventListener('change',e=>{
+    if(e.target.id==='sd-check-all'){
+      document.querySelectorAll('.sd-check').forEach(cb=>cb.checked=e.target.checked);
+    }
+  });
+
+  // SD FindChips button
+  document.getElementById('btn-sd-fc').addEventListener('click',()=>{
+    const checked=[...document.querySelectorAll('.sd-check:checked')].map(cb=>Number(cb.dataset.i));
+    const targets = checked.length
+      ? sdItems.filter((_,i)=>checked.includes(i))
+      : sdItems;
+    const items=targets.filter(r=>r.part_number).map(r=>{
+      const sdIdx=sdItems.indexOf(r);
+      return{part_number:r.part_number, qty:Math.round(Number(r.qty))||1, _sdIdx:sdIdx};
+    });
+    if(!items.length){toast('No parts to check','error');return;}
+    runFCCheckModal(items,'sd');
+  });
 
   // By Drawing # — pick a drawing number, add all matching parts from Part Stock
   document.getElementById('btn-sd-bydwg').addEventListener('click',()=>{
@@ -1453,227 +1698,4 @@ async function handleSDFile(file){
       if(!extractedRows.length&&(anthKey||geminiKey)){
         setM('Text extraction found nothing — trying page vision…',60);
         for(let pi=0;pi<_pdfImages.length;pi++){
-          const b64=_pdfImages[pi];
-          if(!b64) continue;
-          setM(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`,60+Math.round(35*pi/_pdfImages.length));
-          const rows2=await aiExtractBOM('',true,{b64,mimeType:'image/png'},file.name);
-          if(rows2.length){extractedRows=rows2;break;}
-        }
-      }
-    } else {
-      setM('Encoding image…',20);
-      const {b64,mimeType}=await encodeImage(file);
-      setM('Sending to AI (vision)…',50);
-      extractedRows=await aiExtractBOM('',true,{b64,mimeType},file.name);
-    }
-
-    _normalizeBOMRows(extractedRows);
-
-    setM('Done — review the table below',100);
-    const _ringEl=body.querySelector('.ring');
-    if(_ringEl){_ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';
-      _ringEl.textContent='✓';}
-
-    if(!extractedRows.length){
-      const scannedWarn=isPDF&&_pdfTextLen<150;
-      const dbg=document.createElement('div');
-      dbg.innerHTML=`
-        <p style="color:var(--muted);margin-top:10px">No BOM rows detected.</p>
-        ${scannedWarn?`<p style="color:#C05621;font-size:12px;margin-top:6px;padding:7px 10px;background:#FEFCBF;border-radius:5px">
-          ⚠️ Scanned PDF — only ${_pdfTextLen} chars extracted. Try uploading a screenshot of the BOM as PNG/JPG.</p>`:''}
-        <details style="margin-top:8px">
-          <summary style="cursor:pointer;font-size:11px;color:var(--blue-mid)">Show AI response (debug)</summary>
-          <pre style="white-space:pre-wrap;font-size:10px;max-height:120px;overflow:auto;background:#f5f5f5;padding:8px;border-radius:5px;margin-top:5px;word-break:break-all">${esc(_dbgLastAI.slice(0,3000)||'(empty)')}</pre>
-        </details>`;
-      body.appendChild(dbg);
-      foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
-      return;
-    }
-
-    // Show editable preview — on Save: save to Part Stock + add to Sales Desk
-    showBOMPreview(extractedRows, body, foot,
-      `💾 Save to Part Stock + Sales Desk (${extractedRows.length} rows)`,
-      async(updatedRows)=>{
-        await saveBOMToPartStock(updatedRows);
-        let added=0;
-        for(const r of updatedRows){
-          const pn=(r.part_number||'').trim().toLowerCase();
-          const match=pn?allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
-          const price=match?(parseFloat(match.price)||parseFloat(match.priority_price)||0):0;
-          const qty=parseFloat(r.qty)||1;
-          sdItems.push({
-            part_number:r.part_number||r.item||'', description:r.description||'',
-            qty, unit:r.unit||match?.unit||match?.units||'pcs', price, total:price*qty
-          });
-          added++;
-        }
-        toast(`Added ${added} parts to Sales Desk`,'success');
-        closeModal();
-        document.getElementById('sd-tbody')&&renderSalesDesk();
-      }
-    );
-  } catch(e){
-    body.innerHTML+=`<p style="color:red;margin-top:12px">${e.message}</p>`;
-    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// CUSTOMERS
-// ══════════════════════════════════════════════════════════════════════════════
-async function renderCustomers(){
-  setActions(`<button class="btn btn-green" id="btn-new-cust">＋ New Customer</button>`);
-  document.getElementById('btn-new-cust').addEventListener('click',()=>openCustomerModal());
-
-  let customers=[];
-  try {
-    const snap=await getDocs(query(collection(db,'companies',companyId,'customers'),orderBy('name')));
-    customers=snap.docs.map(d=>({_id:d.id,...d.data()}));
-  } catch(e){ setContent(`<p style="color:red;padding:20px">${e.message}</p>`); return; }
-
-  if(!customers.length){
-    setContent(`<div style="text-align:center;padding:80px;color:var(--muted)">
-      <div style="font-size:48px;margin-bottom:12px">👥</div>
-      <div>No customers yet. Click <strong>＋ New Customer</strong> to add one.</div></div>`);
-    return;
-  }
-
-  setContent(`
-    <div class="toolbar"><span class="count-badge">${customers.length} customers</span></div>
-    <div class="card-grid">
-    ${customers.map(c=>`
-      <div class="rfq-card">
-        <div class="rfq-card-icon">🏢</div>
-        <div class="rfq-card-body">
-          <h3>${esc(c.name)}</h3>
-          <p>${(c.contacts||[]).length} contact(s)</p>
-          ${(c.contacts||[]).slice(0,2).map(ct=>`<p style="margin-top:2px;font-size:10px">${esc(ct.name)}${ct.email?' · '+esc(ct.email):''}</p>`).join('')}
-        </div>
-        <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;align-self:flex-start">
-          <button class="btn btn-ghost btn-sm edit-cust" data-id="${c._id}">✏️ Edit</button>
-          <button class="btn btn-red btn-sm del-cust" data-id="${c._id}" data-name="${esc(c.name)}">✕</button>
-        </div>
-      </div>`).join('')}
-    </div>`);
-
-  document.querySelectorAll('.edit-cust').forEach(btn=>btn.addEventListener('click',()=>{
-    const c=customers.find(x=>x._id===btn.dataset.id); if(c) openCustomerModal(c);
-  }));
-  document.querySelectorAll('.del-cust').forEach(btn=>btn.addEventListener('click',()=>
-    deleteCustomer(btn.dataset.id,btn.dataset.name)));
-}
-
-function openCustomerModal(cust={}){
-  const isEdit=!!cust._id;
-  const contacts=(cust.contacts||[{name:'',email:'',phone:''}]);
-
-  function contactRow(c={},i){
-    return `<tr>
-      <td><input class="form-input" style="padding:4px 7px;font-size:12px" placeholder="Full name" value="${esc(c.name||'')}" data-f="name" data-ci="${i}"></td>
-      <td><input class="form-input" style="padding:4px 7px;font-size:12px" placeholder="email@…" value="${esc(c.email||'')}" data-f="email" data-ci="${i}"></td>
-      <td><input class="form-input" style="padding:4px 7px;font-size:12px" placeholder="+972…" value="${esc(c.phone||'')}" data-f="phone" data-ci="${i}"></td>
-      <td><button class="btn btn-red btn-sm del-contact" style="padding:3px 6px">✕</button></td>
-    </tr>`;
-  }
-
-  showModal(`<div class="modal">
-    <div class="modal-head"><h3>${isEdit?'Edit':'New'} Customer</h3><button class="close-modal" id="modal-close">✕</button></div>
-    <div class="modal-body">
-      <div class="form-field">
-        <label>Customer Name</label>
-        <input class="form-input" id="cust-name-inp" placeholder="e.g. Elbit Systems" value="${esc(cust.name||'')}">
-      
-      </div>
-      <div style="margin-top:16px">
-        <label style="font-size:12px;font-weight:600;color:var(--blue-dark)">Contacts</label>
-        <table style="width:100%;margin-top:8px;font-size:12px">
-          <thead><tr style="color:var(--muted)">
-            <th style="padding:4px 6px;text-align:left">Name</th>
-            <th style="padding:4px 6px;text-align:left">Email</th>
-            <th style="padding:4px 6px;text-align:left">Phone</th>
-            <th style="width:30px"></th>
-          </tr></thead>
-          <tbody id="contacts-tbody">
-            ${contacts.map((c,i)=>contactRow(c,i)).join('')}
-          </tbody>
-        </table>
-        <button class="btn btn-ghost btn-sm" id="btn-add-contact" style="margin-top:8px">＋ Add Contact</button>
-      </div>
-    </div>
-    <div class="modal-foot" id="modal-foot-cust">
-      <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
-      ${isEdit?`<button class="btn btn-red btn-sm" id="btn-del-cust">Delete</button>`:''}
-      <button class="btn btn-green" id="btn-save-cust">${isEdit?'Save Changes':'Create Customer'}</button>
-    </div>
-  </div>`);
-
-  document.getElementById('modal-close').addEventListener('click',closeModal);
-  document.getElementById('modal-cancel').addEventListener('click',closeModal);
-
-  let contactCount=contacts.length;
-
-  document.getElementById('btn-add-contact').addEventListener('click',()=>{
-    const tb=document.getElementById('contacts-tbody');
-    const row=document.createElement('tr');
-    row.innerHTML=contactRow({},contactCount++).replace(/^<tr>/,'').replace(/<\/tr>$/,'');
-    const tr=document.createElement('tr');
-    tr.innerHTML=contactRow({name:'',email:'',phone:''},contactCount-1);
-    tb.appendChild(tr);
-    tr.querySelector('.del-contact').addEventListener('click',()=>tr.remove());
-  });
-
-  document.querySelectorAll('.del-contact').forEach(btn=>
-    btn.addEventListener('click',()=>btn.closest('tr').remove()));
-
-  document.getElementById('btn-save-cust').addEventListener('click',async()=>{
-    const name=document.getElementById('cust-name-inp').value.trim();
-    if(!name){ toast('Customer name is required','error'); return; }
-    const rows=[...document.querySelectorAll('#contacts-tbody tr')];
-    const custContacts=rows.map(tr=>({
-      name:(tr.querySelector('[data-f="name"]')?.value||'').trim(),
-      email:(tr.querySelector('[data-f="email"]')?.value||'').trim(),
-      phone:(tr.querySelector('[data-f="phone"]')?.value||'').trim()
-    })).filter(c=>c.name||c.email||c.phone);
-    const btn=document.getElementById('btn-save-cust');
-    btn.disabled=true; btn.textContent='Saving…';
-    try{
-      const col=collection(db,'companies',companyId,'customers');
-      if(isEdit){
-        await updateDoc(doc(col,cust._id),{name,contacts:custContacts,updatedAt:serverTimestamp()});
-      } else {
-        await addDoc(col,{name,contacts:custContacts,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
-      }
-      toast(isEdit?`Updated "${name}"`:`Customer "${name}" created`,'success');
-      closeModal(); renderCustomers();
-    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent=isEdit?'Save Changes':'Create Customer'; }
-  });
-
-  if(isEdit){
-    document.getElementById('btn-del-cust')?.addEventListener('click',()=>{
-      closeModal(); deleteCustomer(cust._id,cust.name);
-    });
-  }
-}
-
-async function deleteCustomer(id,name){
-  if(!confirm(`Delete customer "${name}"?`)) return;
-  try{
-    await deleteDoc(doc(db,'companies',companyId,'customers',id));
-    toast(`Deleted "${name}"`,'success'); renderCustomers();
-  }catch(e){ toast('Error: '+e.message,'error'); }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// SETTINGS MODAL
-// ══════════════════════════════════════════════════════════════════════════════
-function showSettingsModal(onSaved){
-  showModal(`<div class="modal modal-sm">
-    <div class="modal-head"><h3>⚙️ Settings</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">
-      <div class="form-field">
-        <label>Anthropic API Key</label>
-        <input class="form-input" id="inp-anth-key" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
-      </div>
-      <div class="form-field" style="margin-top:12px">
-        <label>Gemini API Key</label>
-     
+          const 
