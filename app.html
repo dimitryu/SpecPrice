@@ -286,9 +286,9 @@
     <div class="sb-brand"><span>⚡ SpecPrice</span></div>
     <div class="sb-company" id="sb-company">—</div>
     <nav>
-      <div class="nav-item" data-view="part-stock"><span class="icon">📦</span>Part Stock</div>
       <div class="nav-item active" data-view="rfq"><span class="icon">📋</span>RFQ</div>
       <div class="nav-item" data-view="sales-desk"><span class="icon">💰</span>Sales Desk</div>
+      <div class="nav-item" data-view="part-stock"><span class="icon">📦</span>Part Stock</div>
       <div class="nav-item" data-view="customers"><span class="icon">👥</span>Customers</div>
       <div class="nav-item" data-view="settings"><span class="icon">⚙️</span>Settings</div>
       <div class="nav-item" data-view="admin" id="nav-admin" style="display:none"><span class="icon">👑</span>Admin</div>
@@ -299,7 +299,7 @@
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.8</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.9</div>
     </div>
   </aside>
   <div class="main">
@@ -363,7 +363,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.8';
+const APP_VER   = '1.8.9';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
