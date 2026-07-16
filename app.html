@@ -82,6 +82,16 @@
     .search-box:focus { border-color:var(--blue-mid); box-shadow:0 0 0 3px rgba(46,117,182,.1); }
     .count-badge { font-size:11px; color:var(--muted); white-space:nowrap; }
 
+    /* ── Search clear (✕) button ── */
+    .search-wrap { position:relative; flex:1; min-width:200px; }
+    .search-wrap .search-box { width:100%; min-width:0; padding-right:28px; }
+    .search-clear { position:absolute; right:4px; top:50%; transform:translateY(-50%);
+                     background:none; border:none; color:var(--muted); cursor:pointer;
+                     font-size:13px; padding:4px 6px; border-radius:4px; line-height:1;
+                     display:none; align-items:center; justify-content:center; }
+    .search-clear:hover { background:var(--blue-light); color:var(--text); }
+    .search-clear.show { display:flex; }
+
     /* ── Tables ── */
     .table-wrap { overflow:auto; border-radius:8px; border:1px solid var(--border); background:#fff;
                   scrollbar-width:auto; }
@@ -228,6 +238,35 @@
       .main { overflow:visible; }
       table { font-size:11px; }
     }
+
+    /* ── Responsive layout (tablet / phone) ── */
+    #mobile-menu-btn { display:none; background:var(--blue-light); color:var(--blue-dark);
+                        border:1px solid var(--border); border-radius:6px; width:32px; height:32px;
+                        font-size:16px; cursor:pointer; flex-shrink:0; align-items:center; justify-content:center; }
+    #sidebar-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:140; }
+    #sidebar-backdrop.show { display:block; }
+
+    @media (max-width: 900px) {
+      .sd-split { grid-template-columns: 1fr; height:auto; }
+      .sd-panel { max-height:60vh; }
+    }
+
+    @media (max-width: 720px) {
+      #mobile-menu-btn { display:inline-flex; }
+      aside { position:fixed; top:0; left:0; bottom:0; z-index:150; width:min(80vw,260px);
+              transform:translateX(-100%); transition:transform .2s ease; box-shadow:4px 0 24px rgba(0,0,0,.35); }
+      aside.open { transform:translateX(0); }
+      .topbar { padding:0 10px; gap:8px; }
+      .topbar h2 { font-size:13px; }
+      #topbar-actions { flex-wrap:wrap; gap:6px; justify-content:flex-end; }
+      #content { padding:10px; }
+      .modal-body, .modal-head, .modal-foot { padding-left:14px; padding-right:14px; }
+      .modal, .modal-sm { width:96vw; max-width:96vw; }
+      table { font-size:11.5px; }
+      .btn { padding:6px 10px; font-size:11px; }
+      .search-box, .search-wrap { min-width:140px; }
+      .card-grid { grid-template-columns:1fr; }
+    }
   </style>
 </head>
 <body>
@@ -235,6 +274,7 @@
 <div id="splash"><h1>⚡ SpecPrice</h1><div class="ring" id="splash-ring"></div><p id="splash-msg" style="color:#90A4AE;font-size:12px;margin-top:12px;text-align:center;max-width:320px;line-height:1.5">Connecting…</p></div>
 
 <div id="shell" style="display:none">
+  <div id="sidebar-backdrop"></div>
   <aside>
     <div class="sb-brand"><span>⚡ SpecPrice</span></div>
     <div class="sb-company" id="sb-company">—</div>
@@ -251,11 +291,12 @@
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.3</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.4</div>
     </div>
   </aside>
   <div class="main">
     <div class="topbar">
+      <button id="mobile-menu-btn" title="Menu">☰</button>
       <h2 id="page-title">Part Stock</h2>
       <div id="topbar-actions" style="display:flex;gap:8px"></div>
     </div>
@@ -313,7 +354,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.3';
+const APP_VER   = '1.8.4';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -434,6 +475,17 @@ function route(v){
 }
 document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',()=>route(el.dataset.view)));
 
+// ── Mobile sidebar (hamburger menu on narrow screens) ─────────────────────────
+const _asideEl=document.querySelector('aside');
+const _sidebarBackdrop=document.getElementById('sidebar-backdrop');
+function openMobileSidebar(){ _asideEl?.classList.add('open'); _sidebarBackdrop?.classList.add('show'); }
+function closeMobileSidebar(){ _asideEl?.classList.remove('open'); _sidebarBackdrop?.classList.remove('show'); }
+document.getElementById('mobile-menu-btn')?.addEventListener('click',()=>{
+  _asideEl?.classList.contains('open') ? closeMobileSidebar() : openMobileSidebar();
+});
+_sidebarBackdrop?.addEventListener('click',closeMobileSidebar);
+document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',closeMobileSidebar));
+
 // ══════════════════════════════════════════════════════════════════════════════
 // PART STOCK
 // ══════════════════════════════════════════════════════════════════════════════
@@ -541,6 +593,22 @@ function wireScrollButtons(wrapEl, leftBtnId, rightBtnId){
   if(!wrap||!leftBtn||!rightBtn) return;
   leftBtn.addEventListener('click',()=>wrap.scrollBy({left:-220,behavior:'smooth'}));
   rightBtn.addEventListener('click',()=>wrap.scrollBy({left:220,behavior:'smooth'}));
+}
+// Wires a "✕" clear button next to a search input (both passed by id): shows the
+// button only while the input has text, and clicking it empties the input, fires a
+// synthetic 'input' event (so the existing debounced filter/search listener re-runs),
+// and refocuses the field.
+function wireSearchClear(inputId, clearId){
+  const inp=document.getElementById(inputId), clearBtn=document.getElementById(clearId);
+  if(!inp||!clearBtn) return;
+  const sync=()=>clearBtn.classList.toggle('show', !!inp.value);
+  sync();
+  inp.addEventListener('input', sync);
+  clearBtn.addEventListener('click', ()=>{
+    inp.value='';
+    inp.dispatchEvent(new Event('input',{bubbles:true}));
+    inp.focus();
+  });
 }
 
 // ── Boolean search (AND / OR / NOT / parentheses / "quoted phrases") ──────────
@@ -689,7 +757,10 @@ async function renderPartStock(filter=''){
 
   setContent(`
     <div class="toolbar">
-      <input class="search-box" id="ps-search" placeholder='Search — supports AND / OR / NOT / "phrase" / (...)' value="${esc(filter)}">
+      <div class="search-wrap">
+        <input class="search-box" id="ps-search" placeholder='Search — supports AND / OR / NOT / "phrase" / (...)' value="${esc(filter)}">
+        <button type="button" class="search-clear" id="ps-search-clear" title="Clear">✕</button>
+      </div>
       <button class="tbl-scroll-btn" id="ps-scroll-left" title="Scroll left">◀</button>
       <button class="tbl-scroll-btn" id="ps-scroll-right" title="Scroll right">▶</button>
       <select class="search-box" id="ps-page-size" style="flex:0 0 auto;min-width:auto;width:auto;padding:7px 9px">${pageSizeOpts}</select>
@@ -707,6 +778,7 @@ async function renderPartStock(filter=''){
     ${_buildPager(psPage,totalPages,'ps')}`);
 
   const inp=document.getElementById('ps-search');
+  wireSearchClear('ps-search','ps-search-clear');
   makeTableResizable(document.querySelector('#ps-table'));
   makeColumnsReorderable(document.querySelector('#ps-table'),'partstock',COLS,()=>renderPartStock(inp.value));
   wireScrollButtons('#ps-table-wrap','ps-scroll-left','ps-scroll-right');
@@ -1020,7 +1092,10 @@ async function renderRFQDetail(projectId, projectName, searchQ=''){
   const filterOpts = uniqueDwgs.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
   setContent(`
     <div class="toolbar" style="margin-bottom:10px">
-      <input class="search-box" id="bom-search" placeholder='Search — supports AND / OR / NOT / "phrase" / (...)' value="${esc(searchQ)}">
+      <div class="search-wrap">
+        <input class="search-box" id="bom-search" placeholder='Search — supports AND / OR / NOT / "phrase" / (...)' value="${esc(searchQ)}">
+        <button type="button" class="search-clear" id="bom-search-clear" title="Clear">✕</button>
+      </div>
       <button class="tbl-scroll-btn" id="bom-scroll-left" title="Scroll left">◀</button>
       <button class="tbl-scroll-btn" id="bom-scroll-right" title="Scroll right">▶</button>
       ${uniqueDwgs.length>1?`
@@ -1079,6 +1154,7 @@ async function renderRFQDetail(projectId, projectName, searchQ=''){
 
   // Boolean search box — re-renders BOM view filtered
   const bomSearchInp=document.getElementById('bom-search');
+  wireSearchClear('bom-search','bom-search-clear');
   bomSearchInp?.addEventListener('input',debounce(()=>{
     const v=bomSearchInp.value, s=bomSearchInp.selectionStart;
     renderRFQDetail(projectId, projectName, v).then(()=>{
@@ -2883,7 +2959,10 @@ function openPartPickerModal(onAdd){
         <select id="pp-value" class="search-box" style="flex:0 0 auto;min-width:220px">
           <option value="">All</option>
         </select>
-        <input class="search-box" id="pp-search" placeholder='Search part number / description — AND/OR/NOT/"phrase"'>
+        <div class="search-wrap">
+          <input class="search-box" id="pp-search" placeholder='Search part number / description — AND/OR/NOT/"phrase"'>
+          <button type="button" class="search-clear" id="pp-search-clear" title="Clear">✕</button>
+        </div>
       </div>
       <div class="table-wrap" style="max-height:50vh" id="pp-table-wrap">
         <table id="pp-table">
@@ -2912,6 +2991,7 @@ function openPartPickerModal(onAdd){
   const fieldSel=document.getElementById('pp-field');
   const valueSel=document.getElementById('pp-value');
   const searchInp=document.getElementById('pp-search');
+  wireSearchClear('pp-search','pp-search-clear');
 
   const reloadValueOptions=()=>{
     const field=fieldSel.value;
