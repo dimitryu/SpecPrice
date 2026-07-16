@@ -299,7 +299,7 @@
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.9</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.10</div>
     </div>
   </aside>
   <div class="main">
@@ -363,7 +363,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.9';
+const APP_VER   = '1.8.10';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -930,6 +930,19 @@ async function renderRFQList(){
   if(_rfqCustFilter && !customers.includes(_rfqCustFilter)) _rfqCustFilter='';
   const filtered = _rfqCustFilter ? projects.filter(p=>p.customer_name===_rfqCustFilter) : projects;
 
+  // Group RFQs by customer (alphabetical order; RFQs without a customer form a
+  // "No Customer" group shown last). Order of RFQs within each group is preserved
+  // from `filtered` (already sorted by updatedAt desc from the query above).
+  const groupsMap={};
+  filtered.forEach(p=>{
+    const key=p.customer_name||'';
+    (groupsMap[key]=groupsMap[key]||[]).push(p);
+  });
+  const groupKeys=Object.keys(groupsMap).sort((a,b)=>{
+    if(!a) return 1; if(!b) return -1;
+    return a.localeCompare(b);
+  });
+
   setContent(`
     <div class="toolbar">
       ${customers.length>1?`
@@ -940,18 +953,26 @@ async function renderRFQList(){
       </select>`:''}
       <span class="count-badge">${filtered.length} RFQs</span>
     </div>
-    <div class="card-grid" id="rfq-grid">
-    ${filtered.map(p=>`
-      <div class="rfq-card" data-id="${esc(p._id)}">
-        <div class="rfq-card-icon">📋</div>
-        <div class="rfq-card-body">
-          <h3>${esc(p.name||p._id)}</h3>
-          <p>${p.customer_name?esc(p.customer_name)+' · ':''}${fmtDate(p.updatedAt)||'—'}</p>
+    ${groupKeys.map(key=>`
+      <div class="rfq-group">
+        <div style="display:flex;align-items:center;gap:8px;margin:16px 0 8px;padding-bottom:6px;border-bottom:1.5px solid var(--border)">
+          <h3 style="font-size:13px;font-weight:700;color:var(--blue-dark);text-transform:uppercase;letter-spacing:.4px;margin:0">${key?esc(key):'No Customer'}</h3>
+          <span class="count-badge">${groupsMap[key].length}</span>
         </div>
-        <button class="btn btn-red btn-sm del-rfq" data-id="${esc(p._id)}" data-name="${esc(p.name||p._id)}"
-          title="Delete" style="flex-shrink:0;align-self:center">✕</button>
+        <div class="card-grid">
+        ${groupsMap[key].map(p=>`
+          <div class="rfq-card" data-id="${esc(p._id)}">
+            <div class="rfq-card-icon">📋</div>
+            <div class="rfq-card-body">
+              <h3>${esc(p.name||p._id)}</h3>
+              <p>${fmtDate(p.updatedAt)||'—'}</p>
+            </div>
+            <button class="btn btn-red btn-sm del-rfq" data-id="${esc(p._id)}" data-name="${esc(p.name||p._id)}"
+              title="Delete" style="flex-shrink:0;align-self:center">✕</button>
+          </div>`).join('')}
+        </div>
       </div>`).join('')}
-    </div>`);
+    `);
 
   document.getElementById('rfq-cust-filter')?.addEventListener('change',e=>{
     _rfqCustFilter=e.target.value;
