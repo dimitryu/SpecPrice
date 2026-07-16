@@ -286,19 +286,20 @@
     <div class="sb-brand"><span>⚡ SpecPrice</span></div>
     <div class="sb-company" id="sb-company">—</div>
     <nav>
-      <div class="nav-item active" data-view="part-stock"><span class="icon">📦</span>Part Stock</div>
-      <div class="nav-item" data-view="rfq"><span class="icon">📋</span>RFQ</div>
+      <div class="nav-item" data-view="part-stock"><span class="icon">📦</span>Part Stock</div>
+      <div class="nav-item active" data-view="rfq"><span class="icon">📋</span>RFQ</div>
       <div class="nav-item" data-view="sales-desk"><span class="icon">💰</span>Sales Desk</div>
       <div class="nav-item" data-view="customers"><span class="icon">👥</span>Customers</div>
       <div class="nav-item" data-view="settings"><span class="icon">⚙️</span>Settings</div>
+      <div class="nav-item" data-view="admin" id="nav-admin" style="display:none"><span class="icon">👑</span>Admin</div>
     </nav>
     <div class="sb-foot">
-      <img src="https://robotics.radion.co.il/wp-content/uploads/2024/11/cropped-Radion-Logo.png" alt="Radion"
+      <img id="sb-logo" src="https://robotics.radion.co.il/wp-content/uploads/2024/11/cropped-Radion-Logo.png" alt="Logo"
            style="width:100%;max-height:48px;object-fit:contain;display:block;margin-bottom:8px"
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.7</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.8</div>
     </div>
   </aside>
   <div class="main">
@@ -338,7 +339,8 @@ let companyId   = '';
 let companyName = '';
 let allParts    = [];
 let anthKey     = '';
-let currentView = 'part-stock';
+let currentView = 'rfq';
+let currentUserRole = '';
 let sortCol     = 'part_number';
 let sortAsc     = true;
 let psPage      = 1;
@@ -361,7 +363,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.7';
+const APP_VER   = '1.8.8';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -399,7 +401,7 @@ onAuthStateChanged(auth, async user => {
   } catch(e) { splashErr('Company load error: ' + e.message); return; }
   document.getElementById('splash').style.display = 'none';
   document.getElementById('shell').style.display = 'flex';
-  route('part-stock');
+  route('rfq');
 });
 document.getElementById('logout-btn').addEventListener('click',
   () => signOut(auth).then(() => location.href = 'index.html'));
@@ -408,7 +410,13 @@ document.getElementById('logout-btn').addEventListener('click',
 async function initCompany(user) {
   try {
     const uSnap = await getDoc(doc(db,'users',user.uid));
-    companyId = (uSnap.data()||{}).company_id || '';
+    const uData = uSnap.data() || {};
+    companyId = uData.company_id || '';
+    currentUserRole = uData.role || '';
+    if (currentUserRole === 'admin') {
+      const navAdmin = document.getElementById('nav-admin');
+      if (navAdmin) navAdmin.style.display = 'flex';
+    }
     if (!companyId) {
       const snap = await getDocs(collection(db,'companies'));
       if (snap.size === 1) companyId = snap.docs[0].id;
@@ -422,6 +430,10 @@ async function initCompany(user) {
       geminiKey = cData.gemini_key || '';
       _sdLaborRateMin = parseFloat(cData.labor_rate_min) || 0.5;
       document.getElementById('sb-company').textContent = companyName;
+      if (cData.logo_b64) {
+        const logoEl = document.getElementById('sb-logo');
+        if (logoEl) logoEl.src = cData.logo_b64;
+      }
     }
   } catch(e) { console.error('initCompany', e); }
 }
@@ -471,7 +483,7 @@ function setActions(html){document.getElementById('topbar-actions').innerHTML=ht
 function route(v){
   currentView=v||'part-stock';
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.view===currentView));
-  const TITLES={'part-stock':'📦 Part Stock','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','customers':'👥 Customers','settings':'⚙️ Settings'};
+  const TITLES={'part-stock':'📦 Part Stock','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','customers':'👥 Customers','settings':'⚙️ Settings','admin':'👑 Admin'};
   document.getElementById('page-title').textContent=TITLES[currentView]||'';
   setActions('');
   if(currentView==='part-stock') renderPartStock();
@@ -479,6 +491,10 @@ function route(v){
   else if(currentView==='sales-desk') renderSalesDesk();
   else if(currentView==='customers') renderCustomers();
   else if(currentView==='settings'){ renderSettingsPage(); }
+  else if(currentView==='admin'){
+    if(currentUserRole!=='admin'){ route('rfq'); return; }
+    renderAdminPage();
+  }
 }
 document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',()=>route(el.dataset.view)));
 
@@ -1135,6 +1151,7 @@ async function renderRFQDetail(projectId, projectName, searchQ=''){
   const filterOpts = uniqueDwgs.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
   setContent(`
     <div class="toolbar" style="margin-bottom:10px">
+      <button class="btn btn-ghost btn-sm" id="btn-collapse-all" style="white-space:nowrap;flex-shrink:0">▶ Collapse All</button>
       <div class="search-wrap">
         <input class="search-box" id="bom-search" placeholder='Search — supports AND / OR / NOT / "phrase" / (...)' value="${esc(searchQ)}">
         <button type="button" class="search-clear" id="bom-search-clear" title="Clear">✕</button>
@@ -1147,7 +1164,6 @@ async function renderRFQDetail(projectId, projectName, searchQ=''){
         <option value="">All Drawings (${uniqueDwgs.length})</option>
         ${filterOpts}
       </select>`:''}
-      <button class="btn btn-ghost btn-sm" id="btn-collapse-all" style="white-space:nowrap;flex-shrink:0">▶ Collapse All</button>
       <span class="count-badge" id="bom-flt-count">${allRowsFiltered.length} parts</span>
     </div>
     <div class="table-wrap" id="bom-table-wrap"><table id="bom-table">
@@ -3587,6 +3603,301 @@ function showSettingsModal(onSaved){
       closeModal();
       if(onSaved) onSaved();
     }catch(e){ toast('Error saving: '+e.message,'error'); btn.disabled=false; btn.textContent='Save'; }
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ADMIN (Users / Companies / Branding) — only visible to users with role:'admin'
+// on their users/{uid} Firestore doc. Ported from the Windows desktop app's
+// AdminPanel (ui/admin_panel.py).
+// ══════════════════════════════════════════════════════════════════════════════
+const ROLES=[['admin','Admin'],['agent','Agent'],['viewer','Viewer']];
+let _adminTab='users';
+
+async function renderAdminPage(){
+  setActions('');
+  setContent(`
+    <div class="toolbar" style="gap:6px">
+      <button class="btn ${_adminTab==='users'?'btn-blue':'btn-ghost'} btn-sm" id="adm-tab-users">👥 Users</button>
+      <button class="btn ${_adminTab==='companies'?'btn-blue':'btn-ghost'} btn-sm" id="adm-tab-companies">🏢 Companies</button>
+      <button class="btn ${_adminTab==='branding'?'btn-blue':'btn-ghost'} btn-sm" id="adm-tab-branding">🎨 Branding</button>
+    </div>
+    <div id="adm-body" style="margin-top:14px"></div>`);
+  document.getElementById('adm-tab-users').addEventListener('click',()=>{_adminTab='users';renderAdminPage();});
+  document.getElementById('adm-tab-companies').addEventListener('click',()=>{_adminTab='companies';renderAdminPage();});
+  document.getElementById('adm-tab-branding').addEventListener('click',()=>{_adminTab='branding';renderAdminPage();});
+  if(_adminTab==='users') await renderAdminUsers();
+  else if(_adminTab==='companies') await renderAdminCompanies();
+  else if(_adminTab==='branding') await renderAdminBranding();
+}
+
+// ── Users tab ─────────────────────────────────────────────────────────────────
+async function renderAdminUsers(){
+  const body=document.getElementById('adm-body');
+  body.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)"><div class="ring" style="margin:0 auto"></div></div>`;
+  let users=[],companies=[];
+  try{
+    const [uSnap,cSnap]=await Promise.all([getDocs(collection(db,'users')),getDocs(collection(db,'companies'))]);
+    users=uSnap.docs.map(d=>({_id:d.id,...d.data()}));
+    companies=cSnap.docs.map(d=>({_id:d.id,...d.data()}));
+  }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${e.message}</p>`; return; }
+  const compName=id=>companies.find(c=>c._id===id)?.name||id||'—';
+  body.innerHTML=`
+    <div class="toolbar"><span class="count-badge">${users.length} users</span>
+      <button class="btn btn-green btn-sm" id="btn-invite-user" style="margin-left:auto">＋ Invite User</button></div>
+    <div class="table-wrap"><table id="adm-users-table">
+      <thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Role</th><th></th></tr></thead>
+      <tbody>${users.map(u=>`<tr data-id="${esc(u._id)}">
+        <td>${esc(u.displayName||'')}</td>
+        <td>${esc(u.email||'')}</td>
+        <td>${esc(compName(u.company_id))}</td>
+        <td>${esc(u.role||'')}</td>
+        <td style="text-align:right"><button class="btn btn-ghost btn-sm adm-edit-user" data-id="${esc(u._id)}">✏️ Edit</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  document.getElementById('btn-invite-user').addEventListener('click',()=>openInviteUserModal(companies));
+  document.querySelectorAll('.adm-edit-user').forEach(btn=>btn.addEventListener('click',()=>{
+    const u=users.find(x=>x._id===btn.dataset.id); if(u) openEditUserModal(u,companies);
+  }));
+}
+
+function openInviteUserModal(companies){
+  showModal(`<div class="modal modal-sm">
+    <div class="modal-head"><h3>Invite User</h3><button class="close-modal" id="modal-close">✕</button></div>
+    <div class="modal-body">
+      <div class="form-field"><label>Full Name</label><input class="form-input" id="inv-name-inp" placeholder="e.g. Israel Israeli"></div>
+      <div class="form-field" style="margin-top:10px"><label>Email</label><input class="form-input" id="inv-email-inp" type="email" placeholder="user@company.com"></div>
+      <div class="form-field" style="margin-top:10px"><label>Password</label><input class="form-input" id="inv-pass-inp" type="password" placeholder="Min. 6 characters"></div>
+      <div class="form-field" style="margin-top:10px"><label>Company</label>
+        <select class="form-input" id="inv-company-sel">${companies.map(c=>`<option value="${esc(c._id)}">${esc(c.name||c._id)}</option>`).join('')}</select>
+      </div>
+      <div class="form-field" style="margin-top:10px"><label>Role</label>
+        <select class="form-input" id="inv-role-sel">${ROLES.map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+      <button class="btn btn-green" id="btn-invite-confirm">＋ Create User</button>
+    </div>
+  </div>`);
+  document.getElementById('modal-close').addEventListener('click',closeModal);
+  document.getElementById('modal-cancel').addEventListener('click',closeModal);
+  document.getElementById('btn-invite-confirm').addEventListener('click',async()=>{
+    const name=document.getElementById('inv-name-inp').value.trim();
+    const email=document.getElementById('inv-email-inp').value.trim().toLowerCase();
+    const pass=document.getElementById('inv-pass-inp').value;
+    const companyIdSel=document.getElementById('inv-company-sel').value;
+    const role=document.getElementById('inv-role-sel').value;
+    if(!name||!email){ toast('Name and email are required','error'); return; }
+    if(pass.length<6){ toast('Password must be at least 6 characters','error'); return; }
+    const btn=document.getElementById('btn-invite-confirm');
+    btn.disabled=true; btn.textContent='Creating…';
+    try{
+      await adminCreateUser(email,pass,name,companyIdSel,role);
+      toast(`User "${name}" created`,'success');
+      closeModal(); renderAdminPage();
+    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='＋ Create User'; }
+  });
+}
+
+// Creates a new Firebase Auth account via the raw Identity Toolkit REST endpoint
+// (NOT the client SDK's createUserWithEmailAndPassword, which would sign the
+// currently-signed-in admin OUT of their own session and INTO the new account).
+// A plain fetch() call never touches the SDK's in-memory auth state, so the
+// admin's session stays untouched. The new user's Firestore profile doc is then
+// written using the admin's own, still-active session/permissions.
+async function adminCreateUser(email,password,displayName,companyIdVal,role){
+  const resp=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FB.options.apiKey}`,{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email,password,returnSecureToken:true})
+  });
+  const data=await resp.json();
+  if(data.error) throw new Error(data.error.message==='EMAIL_EXISTS'?'A user with this email already exists':(data.error.message||'Failed to create user'));
+  const uid=data.localId;
+  await setDoc(doc(db,'users',uid),{
+    email, displayName, company_id:companyIdVal, role,
+    createdAt:serverTimestamp(), updatedAt:serverTimestamp()
+  });
+  return uid;
+}
+
+function openEditUserModal(u,companies){
+  showModal(`<div class="modal modal-sm">
+    <div class="modal-head"><h3>Edit User</h3><button class="close-modal" id="modal-close">✕</button></div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:12px">${esc(u.displayName||'')} · ${esc(u.email||'')}</p>
+      <div class="form-field"><label>Company</label>
+        <select class="form-input" id="edu-company-sel">${companies.map(c=>`<option value="${esc(c._id)}" ${c._id===u.company_id?'selected':''}>${esc(c.name||c._id)}</option>`).join('')}</select>
+      </div>
+      <div class="form-field" style="margin-top:10px"><label>Role</label>
+        <select class="form-input" id="edu-role-sel">${ROLES.map(([v,l])=>`<option value="${v}" ${v===u.role?'selected':''}>${l}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+      <button class="btn btn-green" id="btn-edu-save">💾 Save</button>
+    </div>
+  </div>`);
+  document.getElementById('modal-close').addEventListener('click',closeModal);
+  document.getElementById('modal-cancel').addEventListener('click',closeModal);
+  document.getElementById('btn-edu-save').addEventListener('click',async()=>{
+    const companyIdVal=document.getElementById('edu-company-sel').value;
+    const role=document.getElementById('edu-role-sel').value;
+    const btn=document.getElementById('btn-edu-save');
+    btn.disabled=true; btn.textContent='Saving…';
+    try{
+      await updateDoc(doc(db,'users',u._id),{company_id:companyIdVal,role,updatedAt:serverTimestamp()});
+      toast('User updated','success');
+      closeModal(); renderAdminPage();
+    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='💾 Save'; }
+  });
+}
+
+// ── Companies tab ─────────────────────────────────────────────────────────────
+async function renderAdminCompanies(){
+  const body=document.getElementById('adm-body');
+  body.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)"><div class="ring" style="margin:0 auto"></div></div>`;
+  let companies=[];
+  try{
+    const cSnap=await getDocs(collection(db,'companies'));
+    companies=cSnap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${e.message}</p>`; return; }
+  body.innerHTML=`
+    <div class="toolbar"><span class="count-badge">${companies.length} companies</span>
+      <button class="btn btn-green btn-sm" id="btn-new-company" style="margin-left:auto">＋ New Company</button>
+      <button class="btn btn-red btn-sm" id="btn-clean-legacy">🗑 Clean Legacy Data</button></div>
+    <div class="table-wrap"><table id="adm-companies-table">
+      <thead><tr><th>Name</th><th>ID</th></tr></thead>
+      <tbody>${companies.map(c=>`<tr><td>${esc(c.name||'')}</td><td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(c._id)}</td></tr>`).join('')}</tbody>
+    </table></div>`;
+  document.getElementById('btn-new-company').addEventListener('click',()=>openNewCompanyModal());
+  document.getElementById('btn-clean-legacy').addEventListener('click',()=>cleanLegacyData());
+}
+
+function openNewCompanyModal(){
+  showModal(`<div class="modal modal-sm">
+    <div class="modal-head"><h3>New Company</h3><button class="close-modal" id="modal-close">✕</button></div>
+    <div class="modal-body">
+      <div class="form-field"><label>Company Name</label><input class="form-input" id="nc-name-inp" placeholder="e.g. Acme Ltd."></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+      <button class="btn btn-green" id="btn-nc-save">＋ Create</button>
+    </div>
+  </div>`);
+  document.getElementById('modal-close').addEventListener('click',closeModal);
+  document.getElementById('modal-cancel').addEventListener('click',closeModal);
+  document.getElementById('btn-nc-save').addEventListener('click',async()=>{
+    const name=document.getElementById('nc-name-inp').value.trim();
+    if(!name){ toast('Company name is required','error'); return; }
+    const btn=document.getElementById('btn-nc-save');
+    btn.disabled=true; btn.textContent='Creating…';
+    try{
+      await addDoc(collection(db,'companies'),{name,logo_b64:'',createdAt:serverTimestamp()});
+      toast(`Company "${name}" created`,'success');
+      closeModal(); renderAdminPage();
+    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='＋ Create'; }
+  });
+}
+
+// Deletes legacy pre-company-namespace root-level collections (customers/projects
+// [+nested drawings]/parts_cache) — mirrors the Windows app's delete_root_data().
+async function cleanLegacyData(){
+  if(!confirm('Delete all legacy root-level data (pre-company customers/projects/drawings/parts_cache)? This cannot be undone.')) return;
+  try{
+    const results={customers:0,projects:0,drawings:0,parts_cache:0,errors:[]};
+    for(const coll of ['customers','projects','parts_cache']){
+      const snap=await getDocs(collection(db,coll));
+      for(const d of snap.docs){
+        try{
+          if(coll==='projects'){
+            const drSnap=await getDocs(collection(db,'projects',d.id,'drawings'));
+            for(const dr of drSnap.docs){ await deleteDoc(doc(db,'projects',d.id,'drawings',dr.id)); results.drawings++; }
+          }
+          await deleteDoc(doc(db,coll,d.id)); results[coll]++;
+        }catch(e){ results.errors.push(e.message); }
+      }
+    }
+    toast(`Cleaned: ${results.customers} customers, ${results.projects} projects, ${results.drawings} drawings, ${results.parts_cache} parts`,'success');
+    renderAdminPage();
+  }catch(e){ toast('Error: '+e.message,'error'); }
+}
+
+// ── Branding tab ──────────────────────────────────────────────────────────────
+async function renderAdminBranding(){
+  const body=document.getElementById('adm-body');
+  body.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)"><div class="ring" style="margin:0 auto"></div></div>`;
+  let companies=[];
+  try{
+    const cSnap=await getDocs(collection(db,'companies'));
+    companies=cSnap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${e.message}</p>`; return; }
+  body.innerHTML=`
+    <div class="form-field" style="max-width:320px">
+      <label>Company</label>
+      <select class="form-input" id="brd-company-sel">${companies.map(c=>`<option value="${esc(c._id)}" ${c._id===companyId?'selected':''}>${esc(c.name||c._id)}</option>`).join('')}</select>
+    </div>
+    <div class="sd-panel" style="padding:20px 22px;max-width:400px;margin-top:14px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:12px">Logo</h3>
+      <div style="display:flex;align-items:center;gap:14px">
+        <div id="brd-logo-preview" style="width:80px;height:80px;border-radius:8px;background:var(--blue-light);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0"></div>
+        <div>
+          <input type="file" id="brd-logo-inp" accept="image/*" style="font-size:12px">
+          <button type="button" class="btn btn-ghost btn-sm" id="brd-logo-clear" style="margin-top:8px">Remove Logo</button>
+        </div>
+      </div>
+      <button class="btn btn-green" id="btn-brd-save" style="margin-top:16px">💾 Save Branding</button>
+    </div>`;
+
+  let _brdLogoB64='';
+  const sel=document.getElementById('brd-company-sel');
+  const loadPreview=()=>{
+    const c=companies.find(x=>x._id===sel.value);
+    _brdLogoB64=c?.logo_b64||'';
+    const prev=document.getElementById('brd-logo-preview');
+    prev.innerHTML=_brdLogoB64?`<img src="${_brdLogoB64}" style="width:100%;height:100%;object-fit:contain">`:`<span style="font-size:28px">🏢</span>`;
+  };
+  loadPreview();
+  sel.addEventListener('change',loadPreview);
+
+  document.getElementById('brd-logo-inp').addEventListener('change',()=>{
+    const f=document.getElementById('brd-logo-inp').files[0];
+    if(!f) return;
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const img=new Image();
+      img.onload=()=>{
+        const maxDim=256;
+        const scale=Math.min(1,maxDim/Math.max(img.width,img.height));
+        const w=Math.round(img.width*scale), h=Math.round(img.height*scale);
+        const canvas=document.createElement('canvas');
+        canvas.width=w; canvas.height=h;
+        canvas.getContext('2d').drawImage(img,0,0,w,h);
+        _brdLogoB64=canvas.toDataURL('image/png');
+        document.getElementById('brd-logo-preview').innerHTML=`<img src="${_brdLogoB64}" style="width:100%;height:100%;object-fit:contain">`;
+      };
+      img.src=e.target.result;
+    };
+    reader.readAsDataURL(f);
+  });
+  document.getElementById('brd-logo-clear').addEventListener('click',()=>{
+    _brdLogoB64='';
+    document.getElementById('brd-logo-preview').innerHTML=`<span style="font-size:28px">🏢</span>`;
+  });
+
+  document.getElementById('btn-brd-save').addEventListener('click',async()=>{
+    const btn=document.getElementById('btn-brd-save');
+    btn.disabled=true; btn.textContent='Saving…';
+    try{
+      await setDoc(doc(db,'companies',sel.value),{logo_b64:_brdLogoB64},{merge:true});
+      if(sel.value===companyId){
+        const logoEl=document.getElementById('sb-logo');
+        if(logoEl) logoEl.src=_brdLogoB64||'https://robotics.radion.co.il/wp-content/uploads/2024/11/cropped-Radion-Logo.png';
+      }
+      toast('Branding saved','success');
+      const c=companies.find(x=>x._id===sel.value); if(c) c.logo_b64=_brdLogoB64;
+    }catch(e){ toast('Error: '+e.message,'error'); }
+    btn.disabled=false; btn.textContent='💾 Save Branding';
   });
 }
 
