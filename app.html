@@ -251,7 +251,7 @@
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.0</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.1</div>
     </div>
   </aside>
   <div class="main">
@@ -313,7 +313,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.0';
+const APP_VER   = '1.8.1';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -372,6 +372,7 @@ async function initCompany(user) {
       companyName = cData.name || companyId;
       anthKey   = cData.anthropic_key || '';
       geminiKey = cData.gemini_key || '';
+      _sdLaborRateHour = parseFloat(cData.labor_rate_hour) || 30;
       document.getElementById('sb-company').textContent = companyName;
     }
   } catch(e) { console.error('initCompany', e); }
@@ -2628,12 +2629,13 @@ async function _sdAutoMatchLabor(){
 }
 let _sdFilterQ='';
 let _sdProfitPct=40;
-const _SD_LABOR_RATE_USD_PER_MIN=0.5; // mirrors Windows: Labor Cost = Σ(labor_total min) × $0.50/min
+let _sdLaborRateHour=30; // USD/hour — user-editable in Settings; mirrors Windows' $0.50/min default (=$30/hr)
+function _sdLaborRatePerMin(){ return (parseFloat(_sdLaborRateHour)||0)/60; }
 
 function _sdComputeSummary(){
   let partsTotal=0, laborMinutes=0;
   for(const r of sdItems){ partsTotal+=r.total||0; laborMinutes+=r.labor_total||0; }
-  const laborCost=laborMinutes*_SD_LABOR_RATE_USD_PER_MIN;
+  const laborCost=laborMinutes*_sdLaborRatePerMin();
   const subtotal=partsTotal+laborCost;
   const final=subtotal*(1+_sdProfitPct/100);
   return {partsTotal, laborCost, subtotal, final};
@@ -2697,13 +2699,11 @@ async function renderSalesDesk(){
         <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap">
           <button class="btn btn-blue" id="btn-sd-addpick">📦 Add from Part Stock</button>
           <button class="btn btn-blue" id="btn-sd-file">📎 From File (BOM)</button>
-          <button class="btn btn-ghost" id="btn-sd-bydwg">📋 By Drawing #</button>
-          <button class="btn btn-blue" id="btn-sd-fc" style="white-space:nowrap">🔍 FindChips</button>
-          <button class="btn btn-ghost" id="btn-sd-routings" title="Manage the operations used to auto-calculate Labor Time">⚙️ Routings</button>
-          <button class="btn btn-ghost" id="btn-sd-clear">Clear All</button>
+          <button class="btn btn-blue" id="btn-sd-bydwg">📋 By Drawing #</button>
+          <button class="btn btn-green" id="btn-sd-fc" style="white-space:nowrap">🔍 FindChips</button>
+          <button class="btn btn-red" id="btn-sd-clear">Clear All</button>
         </div>
-        <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap;align-items:center">
-          <input class="search-box" id="sd-filter" placeholder='Filter items — AND / OR / NOT / "phrase" / (...)' style="min-width:0;flex:1" value="${esc(_sdFilterQ)}">
+        <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap;align-items:center;justify-content:flex-end">
           <button class="tbl-scroll-btn" id="sd-scroll-left" title="Scroll left">◀</button>
           <button class="tbl-scroll-btn" id="sd-scroll-right" title="Scroll right">▶</button>
           <span class="count-badge" id="sd-flt-count" style="white-space:nowrap">${sdItems.length} parts</span>
@@ -2725,7 +2725,7 @@ async function renderSalesDesk(){
           <div class="sd-panel-title">Cost Summary</div>
           <div style="padding:6px 0">
             <div class="summary-row"><span>Parts Total</span><span id="sd-parts-total">$0.00</span></div>
-            <div class="summary-row"><span title="Auto-calculated: Σ(Labor Total min) × $0.50/min">Labor Cost</span><span id="sd-labor-total">$0.00</span></div>
+            <div class="summary-row"><span id="sd-labor-cost-label" title="Auto-calculated: Σ(Labor Total min) × hourly rate ÷ 60 — set the rate in Settings">Labor Cost</span><span id="sd-labor-total">$0.00</span></div>
             <div class="summary-row"><span>Subtotal</span><span id="sd-subtotal">$0.00</span></div>
             <div class="summary-row">
               <span>Profit %</span>
@@ -2745,15 +2745,6 @@ async function renderSalesDesk(){
   renderSD();
   makeColumnsReorderable(document.getElementById('sd-table'),'salesdesk',SD_COLS,()=>renderSalesDesk());
   wireScrollButtons('#sd-table-wrap','sd-scroll-left','sd-scroll-right');
-
-  const sdFilterInp=document.getElementById('sd-filter');
-  sdFilterInp.addEventListener('input',debounce(()=>{
-    const s=sdFilterInp.selectionStart;
-    _sdFilterQ=sdFilterInp.value;
-    renderSD();
-    const ni=document.getElementById('sd-filter');
-    if(ni){ni.focus();ni.setSelectionRange(s,s);}
-  },220));
 
   document.getElementById('sd-profit-pct').addEventListener('input',debounce(e=>{
     _sdProfitPct=parseFloat(e.target.value)||0;
@@ -2783,7 +2774,6 @@ async function renderSalesDesk(){
     });
   });
 
-  document.getElementById('btn-sd-routings').addEventListener('click',()=>openRoutingsModal());
   document.getElementById('btn-sd-clear').addEventListener('click',()=>{sdItems=[];_sdFilterQ='';renderSD();});
   document.getElementById('btn-sd-export').addEventListener('click',()=>exportSalesDeskExcel());
 
@@ -3366,6 +3356,18 @@ function showSettingsModal(onSaved){
         <input class="form-input" id="inp-gem-key" type="password" placeholder="AIza…" value="${esc(geminiKey)}">
       </div>
       <p style="font-size:11px;color:var(--muted);margin-top:10px">Keys are stored in your browser (localStorage) and never sent to our servers.</p>
+      <div style="border-top:1px solid var(--border);margin:16px 0 14px"></div>
+      <div class="form-field">
+        <label>Labor Rate ($ / hour)</label>
+        <input class="form-input" id="inp-labor-rate" type="number" min="0" step="any"
+          placeholder="30" value="${esc(_sdLaborRateHour)}">
+        <p style="font-size:11px;color:var(--muted);margin-top:5px">Used to calculate Labor Cost in Sales Desk (Labor Total minutes × this rate ÷ 60). Shared across the company.</p>
+      </div>
+      <div class="form-field" style="margin-top:14px">
+        <label>Manufacturing Routings</label>
+        <button class="btn btn-ghost" id="btn-open-routings" style="width:100%;justify-content:center" type="button">⚙️ Manage Routings</button>
+        <p style="font-size:11px;color:var(--muted);margin-top:5px">Operations used to auto-calculate Labor Time on Sales Desk BOM rows.</p>
+      </div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
@@ -3373,14 +3375,22 @@ function showSettingsModal(onSaved){
     </div>
   </div>`);
 
-  document.getElementById('btn-save-settings').addEventListener('click',()=>{
+  document.getElementById('btn-open-routings').addEventListener('click',()=>openRoutingsModal());
+
+  document.getElementById('btn-save-settings').addEventListener('click',async()=>{
     anthKey=document.getElementById('inp-anth-key').value.trim();
     geminiKey=document.getElementById('inp-gem-key').value.trim();
+    _sdLaborRateHour=parseFloat(document.getElementById('inp-labor-rate').value)||0;
     localStorage.setItem('anth_key',anthKey);
     localStorage.setItem('gem_key',geminiKey);
-    toast('Settings saved','success');
-    closeModal();
-    if(onSaved) onSaved();
+    const btn=document.getElementById('btn-save-settings');
+    btn.disabled=true; btn.textContent='Saving…';
+    try{
+      if(companyId) await setDoc(doc(db,'companies',companyId),{labor_rate_hour:_sdLaborRateHour},{merge:true});
+      toast('Settings saved','success');
+      closeModal();
+      if(onSaved) onSaved();
+    }catch(e){ toast('Error saving: '+e.message,'error'); btn.disabled=false; btn.textContent='Save'; }
   });
 }
 
