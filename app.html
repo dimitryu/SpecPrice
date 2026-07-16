@@ -93,6 +93,10 @@
                        border-radius:6px; width:28px; height:28px; cursor:pointer; font-size:13px;
                        flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; }
     .tbl-scroll-btn:hover { background:var(--blue-mid); color:#fff; }
+    .pager { display:flex; align-items:center; gap:5px; margin-top:10px; flex-wrap:wrap; }
+    .pager-btn { min-width:28px; padding:0 6px; }
+    .pager-btn.pager-active { background:var(--blue-mid); color:#fff; }
+    .pager-ellipsis { color:var(--muted); padding:0 3px; font-size:12px; }
     table { width:100%; border-collapse:collapse; font-size:12.5px; }
     thead th { position:sticky; top:0; z-index:2; background:var(--blue-mid); color:#fff;
                font-weight:600; padding:7px 9px; text-align:left; white-space:nowrap;
@@ -232,12 +236,7 @@
 
 <div id="shell" style="display:none">
   <aside>
-    <div class="sb-brand" style="display:flex;align-items:center;gap:8px">
-      <img src="https://robotics.radion.co.il/wp-content/uploads/2024/11/cropped-Radion-Logo.png" alt="Radion"
-           style="height:26px;max-width:120px;object-fit:contain;flex-shrink:0"
-           onerror="this.style.display='none'">
-      <span>⚡ SpecPrice</span>
-    </div>
+    <div class="sb-brand"><span>⚡ SpecPrice</span></div>
     <div class="sb-company" id="sb-company">—</div>
     <nav>
       <div class="nav-item active" data-view="part-stock"><span class="icon">📦</span>Part Stock</div>
@@ -247,9 +246,12 @@
       <div class="nav-item" data-view="settings"><span class="icon">⚙️</span>Settings</div>
     </nav>
     <div class="sb-foot">
+      <img src="https://robotics.radion.co.il/wp-content/uploads/2024/11/cropped-Radion-Logo.png" alt="Radion"
+           style="width:100%;max-height:48px;object-fit:contain;display:block;margin-bottom:8px"
+           onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.7.0</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.7.2</div>
     </div>
   </aside>
   <div class="main">
@@ -291,9 +293,27 @@ let anthKey     = '';
 let currentView = 'part-stock';
 let sortCol     = 'part_number';
 let sortAsc     = true;
+let psPage      = 1;
+let psPageSize  = parseInt(localStorage.getItem('psPageSize'))||20;
+
+// Builds a windowed pager control ("‹ 1 … 4 5 6 … 12 ›") for Part Stock (or any paginated table)
+function _buildPager(page,totalPages,idPrefix){
+  if(totalPages<=1) return '';
+  const pages=[]; const w=2;
+  pages.push(1);
+  if(page-w>2) pages.push('…');
+  for(let p=Math.max(2,page-w); p<=Math.min(totalPages-1,page+w); p++) pages.push(p);
+  if(page+w<totalPages-1) pages.push('…');
+  if(totalPages>1) pages.push(totalPages);
+  return `<div class="pager" id="${idPrefix}-pager">
+    <button class="tbl-scroll-btn pager-btn" data-page="${page-1}" ${page<=1?'disabled':''}>‹</button>
+    ${pages.map(p=>p==='…'?`<span class="pager-ellipsis">…</span>`:`<button class="tbl-scroll-btn pager-btn${p===page?' pager-active':''}" data-page="${p}">${p}</button>`).join('')}
+    <button class="tbl-scroll-btn pager-btn" data-page="${page+1}" ${page>=totalPages?'disabled':''}>›</button>
+  </div>`;
+}
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.7.0';
+const APP_VER   = '1.7.2';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -638,35 +658,50 @@ async function renderPartStock(filter=''){
         p.manufacturer,p.distributor,p.qty,p.unit,p.units].map(v=>String(v||'')).join(' | ').toLowerCase()))
     : allParts;
 
+  // Sort ALWAYS runs over the full filtered set (all matching parts across every page),
+  // never just the rows currently visible on screen.
   const sorted=[...filtered].sort((a,b)=>{
     let va=String(a[sortCol]||'').toLowerCase(), vb=String(b[sortCol]||'').toLowerCase();
     if(['price','priority_price'].includes(sortCol)){va=parseFloat(a[sortCol])||0;vb=parseFloat(b[sortCol])||0;}
     return sortAsc?(va<vb?-1:va>vb?1:0):(va<vb?1:va>vb?-1:0);
   });
 
+  // Pagination is applied last, purely for display — search filtering and sorting above
+  // already operated across the entire dataset.
+  const totalItems=sorted.length;
+  const totalPages=Math.max(1,Math.ceil(totalItems/psPageSize));
+  if(psPage>totalPages) psPage=totalPages;
+  if(psPage<1) psPage=1;
+  const pageStart=(psPage-1)*psPageSize;
+  const pageRows=sorted.slice(pageStart,pageStart+psPageSize);
+
   const COLS=loadColOrder('partstock',_PS_DEFAULT_COLS);
   const arrow=k=>k===sortCol?(sortAsc?' ▲':' ▼'):'';
-  const rows=sorted.slice(0,2000).map(p=>`<tr data-id="${esc(p._id)}">
+  const rows=pageRows.map(p=>`<tr data-id="${esc(p._id)}">
       <td style="text-align:center"><input type="checkbox" class="ps-check" data-id="${esc(p._id)}"></td>
       ${COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${_psCellHTML(c.k,p)}</td>`).join('')}
     </tr>`).join('');
+
+  const pageSizeOpts=[10,20,50,100,200,500].map(n=>`<option value="${n}" ${n===psPageSize?'selected':''}>${n}/page</option>`).join('');
 
   setContent(`
     <div class="toolbar">
       <input class="search-box" id="ps-search" placeholder='Search — supports AND / OR / NOT / "phrase" / (...)' value="${esc(filter)}">
       <button class="tbl-scroll-btn" id="ps-scroll-left" title="Scroll left">◀</button>
       <button class="tbl-scroll-btn" id="ps-scroll-right" title="Scroll right">▶</button>
+      <select class="search-box" id="ps-page-size" style="flex:0 0 auto;min-width:auto;width:auto;padding:7px 9px">${pageSizeOpts}</select>
       <button class="btn btn-blue" id="btn-ps-fc" style="white-space:nowrap;flex-shrink:0">🔍 Check FindChips</button>
       <button class="btn btn-ghost" id="btn-ps-priority" style="white-space:nowrap;flex-shrink:0">📥 Priority Import</button>
-      <span class="count-badge">${filtered.length} parts${filtered.length>2000?' (showing 2000)':''}</span>
+      <span class="count-badge">${totalItems} parts — page ${psPage}/${totalPages}</span>
     </div>
     <div class="table-wrap" id="ps-table-wrap"><table id="ps-table">
       <thead><tr>
         <th style="width:28px"><input type="checkbox" id="ps-check-all" title="Select all"></th>
         ${COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}" title="Drag to reorder">${c.l}${arrow(c.k)}</th>`).join('')}
       </tr></thead>
-      <tbody>${rows||'<tr class="empty-row"><td colspan="14">No parts found</td></tr>'}</tbody>
-    </table></div>`);
+      <tbody>${rows||`<tr class="empty-row"><td colspan="${COLS.length+1}">No parts found</td></tr>`}</tbody>
+    </table></div>
+    ${_buildPager(psPage,totalPages,'ps')}`);
 
   const inp=document.getElementById('ps-search');
   makeTableResizable(document.querySelector('#ps-table'));
@@ -674,6 +709,7 @@ async function renderPartStock(filter=''){
   wireScrollButtons('#ps-table-wrap','ps-scroll-left','ps-scroll-right');
   inp.addEventListener('input',debounce(()=>{
     const v=inp.value, s=inp.selectionStart;
+    psPage=1;
     renderPartStock(v).then(()=>{
       const ni=document.getElementById('ps-search');
       if(ni){ni.focus();ni.setSelectionRange(s,s);}
@@ -683,15 +719,31 @@ async function renderPartStock(filter=''){
   document.querySelectorAll('thead th[data-col]').forEach(th=>th.addEventListener('click',()=>{
     const k=th.dataset.col;
     if(sortCol===k)sortAsc=!sortAsc;else{sortCol=k;sortAsc=true;}
+    psPage=1;
     renderPartStock(inp.value);
   }));
 
-  // Check-all toggle
+  document.getElementById('ps-page-size')?.addEventListener('change',e=>{
+    psPageSize=parseInt(e.target.value)||20;
+    localStorage.setItem('psPageSize',String(psPageSize));
+    psPage=1;
+    renderPartStock(inp.value);
+  });
+  document.querySelectorAll('#ps-pager .pager-btn').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const p=parseInt(btn.dataset.page);
+      if(!p||p<1||p>totalPages||p===psPage) return;
+      psPage=p;
+      renderPartStock(inp.value);
+    });
+  });
+
+  // Check-all toggle (current page only)
   document.getElementById('ps-check-all')?.addEventListener('change',e=>{
     document.querySelectorAll('.ps-check').forEach(cb=>cb.checked=e.target.checked);
   });
 
-  // FindChips button — check selected rows (or all if none selected)
+  // FindChips button — check selected rows (or all matching rows across every page if none selected)
   document.getElementById('btn-ps-fc')?.addEventListener('click',()=>{
     const checked=[...document.querySelectorAll('.ps-check:checked')].map(cb=>cb.dataset.id);
     const targets = checked.length
@@ -1546,12 +1598,25 @@ const _currencyRateCache = {};
 // Detect a 3-letter currency code (or symbol) from a raw price string; defaults to USD
 function _detectCurrency(raw){
   const s=String(raw||'').trim();
-  if(/₪|\bILS\b|\bNIS\b|שקל/i.test(s)) return 'ILS';
+  if(/₪|\bILS\b|\bNIS\b|שקל|^ש"?ח?$/i.test(s)) return 'ILS';
   if(/€|\bEUR\b/i.test(s)) return 'EUR';
   if(/£|\bGBP\b/i.test(s)) return 'GBP';
   if(/¥|\bJPY\b/i.test(s)) return 'JPY';
   if(/\bCHF\b/i.test(s)) return 'CHF';
   return 'USD';
+}
+// Maps a short currency-column value (e.g. Priority ERP's "מטבע שורה" column, which uses
+// values like "ש" for shekel, or plain "EUR"/"GBP"/"USD") to our 3-letter codes.
+function _normalizeCurrencyCode(raw){
+  const s=String(raw||'').trim();
+  if(!s) return '';
+  if(/^ש"?ח?$/.test(s) || /^(ILS|NIS)$/i.test(s)) return 'ILS';
+  if(/^EUR$/i.test(s)) return 'EUR';
+  if(/^GBP$/i.test(s)) return 'GBP';
+  if(/^JPY$/i.test(s)) return 'JPY';
+  if(/^CHF$/i.test(s)) return 'CHF';
+  if(/^USD$/i.test(s)) return 'USD';
+  return _detectCurrency(s);
 }
 
 async function _fetchCurrencyRate(code){
@@ -1575,14 +1640,17 @@ async function _fetchCurrencyRate(code){
 }
 
 // Parses a raw price (may include a currency symbol/code) and converts to a plain USD number.
+// If currencyOverride is given (e.g. from a separate "Currency" column, common in Priority ERP
+// exports where the amount itself is a bare number and the currency lives in its own column),
+// that takes precedence over symbol-sniffing the price string.
 // Returns null if the value can't be parsed at all. Falls back to the raw number (unconverted)
 // if a live rate can't be fetched, so an import never blocks on network issues.
-async function _convertToUSD(raw){
+async function _convertToUSD(raw, currencyOverride=''){
   const s=String(raw||'').trim();
   if(!s) return null;
   const num=parseFloat(s.replace(/[^\d.\-]/g,''));
   if(isNaN(num)) return null;
-  const cur=_detectCurrency(s);
+  const cur=currencyOverride ? (_normalizeCurrencyCode(currencyOverride)||_detectCurrency(s)) : _detectCurrency(s);
   if(cur==='USD') return num;
   const rate=await _fetchCurrencyRate(cur);
   if(!rate){ console.warn('[Currency] no rate for',cur,'- keeping original value'); return num; }
@@ -1833,6 +1901,7 @@ async function runFCCheckModal(items, mode){
 // ══════════════════════════════════════════════════════════════════════════════
 const _PN_HEADER_HINTS=['part number','part_number','partnumber','pn','p/n','מק"ט','מקט','catalog','item number','item no','cat no','cat#'];
 const _PRICE_HEADER_HINTS=['price','unit price','מחיר','cost','rate'];
+const _CURRENCY_HEADER_HINTS=['currency','curr','מטבע'];
 
 function _priorityFindCol(headers, hints){
   const norm=headers.map(h=>String(h||'').trim().toLowerCase());
@@ -1845,6 +1914,28 @@ function _priorityFindCol(headers, hints){
     if(idx>=0) return idx;
   }
   return -1;
+}
+
+// Parses one worksheet into {rows, headers}. Header list is padded out to the widest row in
+// the sheet (Excel pivot-table exports, trailing unlabeled columns, etc. can make row 0
+// shorter than later data rows) so every real data column gets its own selectable option in
+// the mapping dropdowns.
+function _priorityParseSheet(sheet){
+  const rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:''});
+  const maxCols = rows.reduce((m,r)=>Math.max(m, r.length), 0);
+  const headers = Array.from({length:maxCols}, (_,i)=>rows[0][i] ?? '');
+  return {rows, headers};
+}
+// Higher score = more likely to be the real Part Number / Price data table, as opposed to
+// e.g. a PivotTable summary sheet (common in Priority ERP exports) that only has a single
+// "Row Labels" column and none of our real data.
+function _priorityScoreSheet(headers){
+  let score=0;
+  if(_priorityFindCol(headers,_PN_HEADER_HINTS)>=0) score+=10;
+  if(_priorityFindCol(headers,_PRICE_HEADER_HINTS)>=0) score+=10;
+  if(_priorityFindCol(headers,_CURRENCY_HEADER_HINTS)>=0) score+=2;
+  score += Math.min(headers.length,20)*0.1;
+  return score;
 }
 
 function openPriorityImportModal(){
@@ -1882,50 +1973,68 @@ async function handlePriorityFile(file){
     if(!window.XLSX) throw new Error('Excel library not loaded — please reload the page and try again.');
     const ab=await file.arrayBuffer();
     const wb=XLSX.read(ab,{type:'array'});
-    const sheet=wb.Sheets[wb.SheetNames[0]];
-    const rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:''});
-    if(!rows.length) throw new Error('The file appears to be empty.');
+    if(!wb.SheetNames.length) throw new Error('No sheets found in this file.');
 
-    // Header row may have fewer cells than some data rows actually contain (Excel
-    // pivot-table exports, trailing unlabeled columns, etc). Pad the header list out
-    // to the widest row in the file so every real data column gets its own selectable
-    // option in the mapping dropdowns below — otherwise the Price dropdown could end
-    // up with no valid option and silently collapse to the same column as Part Number.
-    const maxCols = rows.reduce((m,r)=>Math.max(m, r.length), 0);
-    const headers = Array.from({length:maxCols}, (_,i)=>rows[0][i] ?? '');
+    // Parse EVERY sheet and score it, so multi-sheet workbooks (Priority ERP exports commonly
+    // bundle a PivotTable summary sheet — useless here, just "Row Labels" — alongside a
+    // "DataSheet" with the real Part Number / Price / Currency columns) default to whichever
+    // sheet actually looks like tabular data, instead of blindly using the first sheet.
+    const sheetsData = wb.SheetNames.map(name=>{
+      const {rows, headers} = _priorityParseSheet(wb.Sheets[name]);
+      return {name, rows, headers, score:_priorityScoreSheet(headers)};
+    }).filter(s=>s.rows.length>0);
+    if(!sheetsData.length) throw new Error('The file appears to be empty.');
+    sheetsData.sort((a,b)=>b.score-a.score);
 
-    // Suggest column mapping (Part Number may be labeled "מק"ט", Price may be "מחיר ליחידה") —
-    // let the user confirm/adjust before importing, rather than guessing silently.
-    let pnCol=_priorityFindCol(headers,_PN_HEADER_HINTS);
-    let prCol=_priorityFindCol(headers,_PRICE_HEADER_HINTS);
-    const headerDetected = pnCol>=0 || prCol>=0;
-    if(pnCol<0) pnCol=0;
-    if(prCol<0) prCol=(pnCol===1?0:1);
-    if(prCol===pnCol) prCol=(pnCol===0 && maxCols>1)?1:(pnCol>0?0:1);
-
-    showPriorityColumnMap(rows, headers, pnCol, prCol, headerDetected, body, foot);
+    renderPrioritySheetMapping(sheetsData, sheetsData[0].name, body, foot);
   }catch(e){
     body.innerHTML+=`<p style="color:red;margin-top:12px">Error: ${e.message}</p>`;
     foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
   }
 }
 
-// Suggest which column is Part Number (מק"ט) and which is Priority Price (מחיר ליחידה),
-// pre-selected from header detection, and let the user confirm or change before parsing.
-function showPriorityColumnMap(rows, headers, pnCol, prCol, headerDetected, body, foot){
+// Suggest which column is Part Number (מק"ט), which is Priority Price (מחיר ליחידה), and
+// (optionally) which column holds the currency code — Priority ERP exports often keep the
+// amount as a bare number with the currency in its own column (e.g. "מטבע שורה": EUR/GBP/ש).
+// Also lets the user switch sheets when the workbook has more than one. All pre-selected from
+// header detection, but always confirmed by the user before parsing.
+function renderPrioritySheetMapping(sheetsData, activeSheetName, body, foot){
+  const active = sheetsData.find(s=>s.name===activeSheetName) || sheetsData[0];
+  const {rows, headers} = active;
+
+  let pnCol=_priorityFindCol(headers,_PN_HEADER_HINTS);
+  let prCol=_priorityFindCol(headers,_PRICE_HEADER_HINTS);
+  let curCol=_priorityFindCol(headers,_CURRENCY_HEADER_HINTS);
+  const headerDetected = pnCol>=0 || prCol>=0;
+  if(pnCol<0) pnCol=0;
+  if(prCol<0) prCol=(pnCol===1?0:1);
+  if(prCol===pnCol) prCol=(pnCol===0 && headers.length>1)?1:(pnCol>0?0:1);
+
   const colLabel=(h,i)=>{ const t=String(h||'').trim(); return t?esc(t):`(Column ${i+1})`; };
   const colOpts=(selected)=>headers.map((h,i)=>`<option value="${i}" ${i===selected?'selected':''}>${colLabel(h,i)}</option>`).join('');
+  const curOpts=(selected)=>`<option value="-1" ${selected<0?'selected':''}>— None (detect from price text, default USD) —</option>`+
+    headers.map((h,i)=>`<option value="${i}" ${i===selected?'selected':''}>${colLabel(h,i)}</option>`).join('');
   const sampleRows=(headerDetected?rows.slice(1):rows).slice(0,3);
 
   body.innerHTML=`
     <p style="font-size:12px;color:var(--muted);margin-bottom:12px">We suggest the following column mapping — confirm or change before importing:</p>
-    <div class="form-field">
+    ${sheetsData.length>1?`<div class="form-field">
+      <label>Sheet</label>
+      <select class="form-input" id="pi-sheet-sel">
+        ${sheetsData.map(s=>`<option value="${esc(s.name)}" ${s.name===active.name?'selected':''}>${esc(s.name)} (${s.rows.length} rows, ${s.headers.length} cols)</option>`).join('')}
+      </select>
+    </div>`:''}
+    <div class="form-field" style="margin-top:10px">
       <label>Part Number column (מק"ט)</label>
       <select class="form-input" id="pi-pn-col">${colOpts(pnCol)}</select>
     </div>
     <div class="form-field" style="margin-top:10px">
       <label>Priority Price column (מחיר ליחידה)</label>
       <select class="form-input" id="pi-price-col">${colOpts(prCol)}</select>
+    </div>
+    <div class="form-field" style="margin-top:10px">
+      <label>Currency column (optional)</label>
+      <select class="form-input" id="pi-cur-col">${curOpts(curCol)}</select>
     </div>
     <div class="form-field" style="margin-top:10px">
       <label style="display:flex;align-items:center;gap:6px;text-transform:none;font-weight:400;font-size:12px">
@@ -1944,10 +2053,14 @@ function showPriorityColumnMap(rows, headers, pnCol, prCol, headerDetected, body
     <button class="btn btn-ghost" id="pi-map-cancel">Cancel</button>
     <button class="btn btn-green" id="pi-map-continue">Continue →</button>`;
 
+  document.getElementById('pi-sheet-sel')?.addEventListener('change',e=>{
+    renderPrioritySheetMapping(sheetsData, e.target.value, body, foot);
+  });
   document.getElementById('pi-map-cancel').addEventListener('click',closeModal);
   document.getElementById('pi-map-continue').addEventListener('click', async()=>{
     const pnColSel=parseInt(document.getElementById('pi-pn-col').value);
     const prColSel=parseInt(document.getElementById('pi-price-col').value);
+    const curColSel=parseInt(document.getElementById('pi-cur-col').value);
     const skipHeader=document.getElementById('pi-has-header').checked;
     if(pnColSel===prColSel){ toast('Part Number and Price columns must be different','error'); return; }
 
@@ -1960,7 +2073,8 @@ function showPriorityColumnMap(rows, headers, pnCol, prCol, headerDetected, body
       const pn=String(r[pnColSel]||'').trim();
       const rawPrice=r[prColSel];
       if(!pn || rawPrice===''||rawPrice===undefined||rawPrice===null) continue;
-      const usd=await _convertToUSD(rawPrice);
+      const rawCur = curColSel>=0 ? r[curColSel] : '';
+      const usd=await _convertToUSD(rawPrice, rawCur);
       if(usd===null) continue;
       parsed.push({part_number:pn, priority_price:usd, _raw:String(rawPrice)});
     }
