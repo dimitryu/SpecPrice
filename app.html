@@ -291,7 +291,6 @@
       <div class="nav-item" data-view="part-stock"><span class="icon">📦</span>Part Stock</div>
       <div class="nav-item" data-view="customers"><span class="icon">👥</span>Customers</div>
       <div class="nav-item" data-view="settings" id="nav-settings" style="display:none"><span class="icon">⚙️</span>Settings</div>
-      <div class="nav-item" data-view="admin" id="nav-admin" style="display:none"><span class="icon">👑</span>Admin</div>
     </nav>
     <div class="sb-foot">
       <img id="sb-logo" src="https://robotics.radion.co.il/wp-content/uploads/2024/11/cropped-Radion-Logo.png" alt="Logo"
@@ -299,7 +298,7 @@
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.12</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.13</div>
     </div>
   </aside>
   <div class="main">
@@ -363,7 +362,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.12';
+const APP_VER   = '1.8.13';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -414,8 +413,6 @@ async function initCompany(user) {
     companyId = uData.company_id || '';
     currentUserRole = uData.role || '';
     if (currentUserRole === 'admin') {
-      const navAdmin = document.getElementById('nav-admin');
-      if (navAdmin) navAdmin.style.display = 'flex';
       const navSettings = document.getElementById('nav-settings');
       if (navSettings) navSettings.style.display = 'flex';
     }
@@ -485,7 +482,7 @@ function setActions(html){document.getElementById('topbar-actions').innerHTML=ht
 function route(v){
   currentView=v||'part-stock';
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.view===currentView));
-  const TITLES={'part-stock':'📦 Part Stock','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','customers':'👥 Customers','settings':'⚙️ Settings','admin':'👑 Admin'};
+  const TITLES={'part-stock':'📦 Part Stock','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','customers':'👥 Customers','settings':'⚙️ Settings'};
   document.getElementById('page-title').textContent=TITLES[currentView]||'';
   setActions('');
   if(currentView==='part-stock') renderPartStock();
@@ -495,10 +492,6 @@ function route(v){
   else if(currentView==='settings'){
     if(currentUserRole!=='admin'){ route('rfq'); return; }
     renderSettingsPage();
-  }
-  else if(currentView==='admin'){
-    if(currentUserRole!=='admin'){ route('rfq'); return; }
-    renderAdminPage();
   }
 }
 document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',()=>route(el.dataset.view)));
@@ -3602,35 +3595,45 @@ async function deleteCustomer(id,name){
 function renderSettingsPage(){
   setActions('');
   setContent(`
-    <div style="max-width:520px">
-      <div class="sd-panel" style="padding:20px 22px">
-        <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">AI API Keys</h3>
-        <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Used for extracting BOMs from PDF/image drawings.</p>
-        <div class="form-field">
-          <label>Anthropic API Key</label>
-          <input class="form-input" id="inp-anth-key" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
-        </div>
-        <div class="form-field" style="margin-top:12px">
-          <label>Gemini API Key</label>
-          <input class="form-input" id="inp-gem-key" type="password" placeholder="AIza…" value="${esc(geminiKey)}">
-        </div>
-        <p style="font-size:11px;color:var(--muted);margin-top:10px">Keys are stored in your browser (localStorage) and never sent to our servers.</p>
-        <div style="border-top:1px solid var(--border);margin:20px 0 16px"></div>
-        <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Sales Desk</h3>
-        <div class="form-field" style="margin-top:10px">
-          <label>Labor Rate ($ / minute)</label>
-          <input class="form-input" id="inp-labor-rate" type="number" min="0" step="any"
-            placeholder="0.5" value="${esc(_sdLaborRateMin)}">
-          <p style="font-size:11px;color:var(--muted);margin-top:5px">Used to calculate Labor Cost in Sales Desk (Labor Total minutes × this rate). Shared across the company.</p>
-        </div>
-        <div class="form-field" style="margin-top:14px">
-          <label>Manufacturing Routings</label>
-          <button class="btn btn-ghost" id="btn-open-routings" type="button">⚙️ Manage Routings</button>
-          <p style="font-size:11px;color:var(--muted);margin-top:5px">Operations used to auto-calculate Labor Time on Sales Desk BOM rows.</p>
-        </div>
-        <div style="border-top:1px solid var(--border);margin:20px 0 16px"></div>
-        <button class="btn btn-green" id="btn-save-settings">💾 Save Settings</button>
+    <div class="sd-panel" style="padding:20px 22px;max-width:520px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">AI API Keys</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Used for extracting BOMs from PDF/image drawings.</p>
+      <div class="form-field">
+        <label>Anthropic API Key</label>
+        <input class="form-input" id="inp-anth-key" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
       </div>
+      <div class="form-field" style="margin-top:12px">
+        <label>Gemini API Key</label>
+        <input class="form-input" id="inp-gem-key" type="password" placeholder="AIza…" value="${esc(geminiKey)}">
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-top:10px">Keys are stored in your browser (localStorage) and never sent to our servers.</p>
+      <div style="border-top:1px solid var(--border);margin:20px 0 16px"></div>
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Sales Desk</h3>
+      <div class="form-field" style="margin-top:10px">
+        <label>Labor Rate ($ / minute)</label>
+        <input class="form-input" id="inp-labor-rate" type="number" min="0" step="any"
+          placeholder="0.5" value="${esc(_sdLaborRateMin)}">
+        <p style="font-size:11px;color:var(--muted);margin-top:5px">Used to calculate Labor Cost in Sales Desk (Labor Total minutes × this rate). Shared across the company.</p>
+      </div>
+      <div class="form-field" style="margin-top:14px">
+        <label>Manufacturing Routings</label>
+        <button class="btn btn-ghost" id="btn-open-routings" type="button">⚙️ Manage Routings</button>
+        <p style="font-size:11px;color:var(--muted);margin-top:5px">Operations used to auto-calculate Labor Time on Sales Desk BOM rows.</p>
+      </div>
+      <div style="border-top:1px solid var(--border);margin:20px 0 16px"></div>
+      <button class="btn btn-green" id="btn-save-settings">💾 Save Settings</button>
+    </div>
+
+    <div class="sd-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Users</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Manage user accounts, companies, and roles.</p>
+      <div id="stg-users-body"></div>
+    </div>
+
+    <div class="sd-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Companies</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Manage companies and per-company branding (logo).</p>
+      <div id="stg-companies-body"></div>
     </div>`);
 
   document.getElementById('btn-open-routings').addEventListener('click',()=>openRoutingsModal());
@@ -3649,6 +3652,9 @@ function renderSettingsPage(){
     }catch(e){ toast('Error saving: '+e.message,'error'); }
     btn.disabled=false; btn.textContent='💾 Save Settings';
   });
+
+  renderSettingsUsersSection();
+  renderSettingsCompaniesSection();
 }
 
 function showSettingsModal(onSaved){
@@ -3703,33 +3709,16 @@ function showSettingsModal(onSaved){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ADMIN (Users / Companies / Branding) — only visible to users with role:'admin'
-// on their users/{uid} Firestore doc. Ported from the Windows desktop app's
-// AdminPanel (ui/admin_panel.py).
+// USERS / COMPANIES / BRANDING — rendered inside the Settings page (which is
+// itself only reachable by users with role:'admin' on their users/{uid} doc).
+// Ported from the Windows desktop app's AdminPanel (ui/admin_panel.py).
 // ══════════════════════════════════════════════════════════════════════════════
 const ROLES=[['admin','Admin'],['agent','Agent'],['viewer','Viewer']];
-let _adminTab='users';
 
-async function renderAdminPage(){
-  setActions('');
-  setContent(`
-    <div class="toolbar" style="gap:6px">
-      <button class="btn ${_adminTab==='users'?'btn-blue':'btn-ghost'} btn-sm" id="adm-tab-users">👥 Users</button>
-      <button class="btn ${_adminTab==='companies'?'btn-blue':'btn-ghost'} btn-sm" id="adm-tab-companies">🏢 Companies</button>
-      <button class="btn ${_adminTab==='branding'?'btn-blue':'btn-ghost'} btn-sm" id="adm-tab-branding">🎨 Branding</button>
-    </div>
-    <div id="adm-body" style="margin-top:14px"></div>`);
-  document.getElementById('adm-tab-users').addEventListener('click',()=>{_adminTab='users';renderAdminPage();});
-  document.getElementById('adm-tab-companies').addEventListener('click',()=>{_adminTab='companies';renderAdminPage();});
-  document.getElementById('adm-tab-branding').addEventListener('click',()=>{_adminTab='branding';renderAdminPage();});
-  if(_adminTab==='users') await renderAdminUsers();
-  else if(_adminTab==='companies') await renderAdminCompanies();
-  else if(_adminTab==='branding') await renderAdminBranding();
-}
-
-// ── Users tab ─────────────────────────────────────────────────────────────────
-async function renderAdminUsers(){
-  const body=document.getElementById('adm-body');
+// ── Users section ─────────────────────────────────────────────────────────────
+async function renderSettingsUsersSection(){
+  const body=document.getElementById('stg-users-body');
+  if(!body) return;
   body.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)"><div class="ring" style="margin:0 auto"></div></div>`;
   let users=[],companies=[];
   try{
@@ -3741,18 +3730,18 @@ async function renderAdminUsers(){
   body.innerHTML=`
     <div class="toolbar"><span class="count-badge">${users.length} users</span>
       <button class="btn btn-green btn-sm" id="btn-invite-user" style="margin-left:auto">＋ Invite User</button></div>
-    <div class="table-wrap"><table id="adm-users-table">
+    <div class="table-wrap"><table id="stg-users-table">
       <thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Role</th><th></th></tr></thead>
       <tbody>${users.map(u=>`<tr data-id="${esc(u._id)}">
         <td>${esc(u.displayName||'')}</td>
         <td>${esc(u.email||'')}</td>
         <td>${esc(compName(u.company_id))}</td>
         <td>${esc(u.role||'')}</td>
-        <td style="text-align:right"><button class="btn btn-ghost btn-sm adm-edit-user" data-id="${esc(u._id)}">✏️ Edit</button></td>
+        <td style="text-align:right"><button class="btn btn-ghost btn-sm stg-edit-user" data-id="${esc(u._id)}">✏️ Edit</button></td>
       </tr>`).join('')}</tbody>
     </table></div>`;
   document.getElementById('btn-invite-user').addEventListener('click',()=>openInviteUserModal(companies));
-  document.querySelectorAll('.adm-edit-user').forEach(btn=>btn.addEventListener('click',()=>{
+  document.querySelectorAll('.stg-edit-user').forEach(btn=>btn.addEventListener('click',()=>{
     const u=users.find(x=>x._id===btn.dataset.id); if(u) openEditUserModal(u,companies);
   }));
 }
@@ -3791,7 +3780,7 @@ function openInviteUserModal(companies){
     try{
       await adminCreateUser(email,pass,name,companyIdSel,role);
       toast(`User "${name}" created`,'success');
-      closeModal(); renderAdminPage();
+      closeModal(); renderSettingsUsersSection();
     }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='＋ Create User'; }
   });
 }
@@ -3844,30 +3833,9 @@ function openEditUserModal(u,companies){
     try{
       await updateDoc(doc(db,'users',u._id),{company_id:companyIdVal,role,updatedAt:serverTimestamp()});
       toast('User updated','success');
-      closeModal(); renderAdminPage();
+      closeModal(); renderSettingsUsersSection();
     }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='💾 Save'; }
   });
-}
-
-// ── Companies tab ─────────────────────────────────────────────────────────────
-async function renderAdminCompanies(){
-  const body=document.getElementById('adm-body');
-  body.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)"><div class="ring" style="margin:0 auto"></div></div>`;
-  let companies=[];
-  try{
-    const cSnap=await getDocs(collection(db,'companies'));
-    companies=cSnap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
-  }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${e.message}</p>`; return; }
-  body.innerHTML=`
-    <div class="toolbar"><span class="count-badge">${companies.length} companies</span>
-      <button class="btn btn-green btn-sm" id="btn-new-company" style="margin-left:auto">＋ New Company</button>
-      <button class="btn btn-red btn-sm" id="btn-clean-legacy">🗑 Clean Legacy Data</button></div>
-    <div class="table-wrap"><table id="adm-companies-table">
-      <thead><tr><th>Name</th><th>ID</th></tr></thead>
-      <tbody>${companies.map(c=>`<tr><td>${esc(c.name||'')}</td><td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(c._id)}</td></tr>`).join('')}</tbody>
-    </table></div>`;
-  document.getElementById('btn-new-company').addEventListener('click',()=>openNewCompanyModal());
-  document.getElementById('btn-clean-legacy').addEventListener('click',()=>cleanLegacyData());
 }
 
 function openNewCompanyModal(){
@@ -3891,7 +3859,7 @@ function openNewCompanyModal(){
     try{
       await addDoc(collection(db,'companies'),{name,logo_b64:'',createdAt:serverTimestamp()});
       toast(`Company "${name}" created`,'success');
-      closeModal(); renderAdminPage();
+      closeModal(); renderSettingsCompaniesSection();
     }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='＋ Create'; }
   });
 }
@@ -3915,13 +3883,14 @@ async function cleanLegacyData(){
       }
     }
     toast(`Cleaned: ${results.customers} customers, ${results.projects} projects, ${results.drawings} drawings, ${results.parts_cache} parts`,'success');
-    renderAdminPage();
+    renderSettingsCompaniesSection();
   }catch(e){ toast('Error: '+e.message,'error'); }
 }
 
-// ── Branding tab ──────────────────────────────────────────────────────────────
-async function renderAdminBranding(){
-  const body=document.getElementById('adm-body');
+// ── Companies section (list + New Company + Clean Legacy Data + Branding) ─────
+async function renderSettingsCompaniesSection(){
+  const body=document.getElementById('stg-companies-body');
+  if(!body) return;
   body.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)"><div class="ring" style="margin:0 auto"></div></div>`;
   let companies=[];
   try{
@@ -3929,21 +3898,30 @@ async function renderAdminBranding(){
     companies=cSnap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${e.message}</p>`; return; }
   body.innerHTML=`
+    <div class="toolbar"><span class="count-badge">${companies.length} companies</span>
+      <button class="btn btn-green btn-sm" id="btn-new-company" style="margin-left:auto">＋ New Company</button>
+      <button class="btn btn-red btn-sm" id="btn-clean-legacy">🗑 Clean Legacy Data</button></div>
+    <div class="table-wrap"><table id="stg-companies-table">
+      <thead><tr><th>Name</th><th>ID</th></tr></thead>
+      <tbody>${companies.map(c=>`<tr><td>${esc(c.name||'')}</td><td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(c._id)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <div style="border-top:1px solid var(--border);margin:18px 0 14px"></div>
+    <h4 style="font-size:12px;font-weight:700;color:var(--blue-dark);margin-bottom:10px;text-transform:uppercase;letter-spacing:.4px">Branding</h4>
     <div class="form-field" style="max-width:320px">
       <label>Company</label>
       <select class="form-input" id="brd-company-sel">${companies.map(c=>`<option value="${esc(c._id)}" ${c._id===companyId?'selected':''}>${esc(c.name||c._id)}</option>`).join('')}</select>
     </div>
-    <div class="sd-panel" style="padding:20px 22px;max-width:400px;margin-top:14px">
-      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:12px">Logo</h3>
-      <div style="display:flex;align-items:center;gap:14px">
-        <div id="brd-logo-preview" style="width:80px;height:80px;border-radius:8px;background:var(--blue-light);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0"></div>
-        <div>
-          <input type="file" id="brd-logo-inp" accept="image/*" style="font-size:12px">
-          <button type="button" class="btn btn-ghost btn-sm" id="brd-logo-clear" style="margin-top:8px">Remove Logo</button>
-        </div>
+    <div style="display:flex;align-items:center;gap:14px;margin-top:12px">
+      <div id="brd-logo-preview" style="width:80px;height:80px;border-radius:8px;background:var(--blue-light);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0"></div>
+      <div>
+        <input type="file" id="brd-logo-inp" accept="image/*" style="font-size:12px">
+        <button type="button" class="btn btn-ghost btn-sm" id="brd-logo-clear" style="margin-top:8px">Remove Logo</button>
       </div>
-      <button class="btn btn-green" id="btn-brd-save" style="margin-top:16px">💾 Save Branding</button>
-    </div>`;
+    </div>
+    <button class="btn btn-green" id="btn-brd-save" style="margin-top:16px">💾 Save Branding</button>`;
+
+  document.getElementById('btn-new-company').addEventListener('click',()=>openNewCompanyModal());
+  document.getElementById('btn-clean-legacy').addEventListener('click',()=>cleanLegacyData());
 
   let _brdLogoB64='';
   const sel=document.getElementById('brd-company-sel');
