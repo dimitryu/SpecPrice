@@ -251,7 +251,7 @@
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.7.2</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.0</div>
     </div>
   </aside>
   <div class="main">
@@ -294,7 +294,7 @@ let currentView = 'part-stock';
 let sortCol     = 'part_number';
 let sortAsc     = true;
 let psPage      = 1;
-let psPageSize  = parseInt(localStorage.getItem('psPageSize'))||20;
+let psPageSize  = (()=>{ const v=localStorage.getItem('psPageSize'); return v==='all' ? 'all' : (parseInt(v)||20); })();
 
 // Builds a windowed pager control ("‹ 1 … 4 5 6 … 12 ›") for Part Stock (or any paginated table)
 function _buildPager(page,totalPages,idPrefix){
@@ -313,7 +313,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.7.2';
+const APP_VER   = '1.8.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -669,11 +669,12 @@ async function renderPartStock(filter=''){
   // Pagination is applied last, purely for display — search filtering and sorting above
   // already operated across the entire dataset.
   const totalItems=sorted.length;
-  const totalPages=Math.max(1,Math.ceil(totalItems/psPageSize));
+  const effPageSize = psPageSize==='all' ? Math.max(totalItems,1) : psPageSize;
+  const totalPages = psPageSize==='all' ? 1 : Math.max(1,Math.ceil(totalItems/psPageSize));
   if(psPage>totalPages) psPage=totalPages;
   if(psPage<1) psPage=1;
-  const pageStart=(psPage-1)*psPageSize;
-  const pageRows=sorted.slice(pageStart,pageStart+psPageSize);
+  const pageStart=(psPage-1)*effPageSize;
+  const pageRows=sorted.slice(pageStart,pageStart+effPageSize);
 
   const COLS=loadColOrder('partstock',_PS_DEFAULT_COLS);
   const arrow=k=>k===sortCol?(sortAsc?' ▲':' ▼'):'';
@@ -682,7 +683,8 @@ async function renderPartStock(filter=''){
       ${COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${_psCellHTML(c.k,p)}</td>`).join('')}
     </tr>`).join('');
 
-  const pageSizeOpts=[10,20,50,100,200,500].map(n=>`<option value="${n}" ${n===psPageSize?'selected':''}>${n}/page</option>`).join('');
+  const pageSizeOpts=[10,20,50,100,200,500].map(n=>`<option value="${n}" ${n===psPageSize?'selected':''}>${n}/page</option>`).join('')
+    +`<option value="all" ${psPageSize==='all'?'selected':''}>All</option>`;
 
   setContent(`
     <div class="toolbar">
@@ -724,7 +726,8 @@ async function renderPartStock(filter=''){
   }));
 
   document.getElementById('ps-page-size')?.addEventListener('change',e=>{
-    psPageSize=parseInt(e.target.value)||20;
+    const v=e.target.value;
+    psPageSize = v==='all' ? 'all' : (parseInt(v)||20);
     localStorage.setItem('psPageSize',String(psPageSize));
     psPage=1;
     renderPartStock(inp.value);
@@ -765,6 +768,7 @@ async function renderPartStock(filter=''){
 // ══════════════════════════════════════════════════════════════════════════════
 // RFQ LIST
 // ══════════════════════════════════════════════════════════════════════════════
+let _rfqCustFilter='';
 async function renderRFQList(){
   setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading RFQs…</div>`);
   setActions(`<button class="btn btn-green" id="btn-new-rfq">＋ New RFQ</button>`);
@@ -790,10 +794,22 @@ async function renderRFQList(){
     return;
   }
 
+  const customers=[...new Set(projects.map(p=>p.customer_name).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  if(_rfqCustFilter && !customers.includes(_rfqCustFilter)) _rfqCustFilter='';
+  const filtered = _rfqCustFilter ? projects.filter(p=>p.customer_name===_rfqCustFilter) : projects;
+
   setContent(`
-    <div class="toolbar"><span class="count-badge">${projects.length} RFQs</span></div>
+    <div class="toolbar">
+      ${customers.length>1?`
+      <label style="font-size:12px;color:var(--muted);white-space:nowrap">Filter by Customer:</label>
+      <select id="rfq-cust-filter" class="search-box" style="flex:0 0 auto;max-width:280px;padding:5px 9px">
+        <option value="">All Customers (${customers.length})</option>
+        ${customers.map(c=>`<option value="${esc(c)}" ${c===_rfqCustFilter?'selected':''}>${esc(c)}</option>`).join('')}
+      </select>`:''}
+      <span class="count-badge">${filtered.length} RFQs</span>
+    </div>
     <div class="card-grid" id="rfq-grid">
-    ${projects.map(p=>`
+    ${filtered.map(p=>`
       <div class="rfq-card" data-id="${esc(p._id)}">
         <div class="rfq-card-icon">📋</div>
         <div class="rfq-card-body">
@@ -805,6 +821,10 @@ async function renderRFQList(){
       </div>`).join('')}
     </div>`);
 
+  document.getElementById('rfq-cust-filter')?.addEventListener('change',e=>{
+    _rfqCustFilter=e.target.value;
+    renderRFQList();
+  });
   document.querySelectorAll('.rfq-card').forEach(el=>{
     el.addEventListener('click',e=>{if(!e.target.classList.contains('del-rfq')) renderRFQDetail(el.dataset.id, el.querySelector('h3').textContent);});
   });
@@ -2164,6 +2184,366 @@ async function savePriorityImport(rows){
   return {updated, created};
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// ── MANUFACTURING ROUTINGS + LABOR-TIME MATCHING ──────────────────────────────
+// Ported from the Windows app's ui/manufacturing_routings_dialog.py (_LABOR_RULES,
+// _AUTO_FILL_MAP) and ui/sales_desk_dialog.py (_match_labor_time). A "routing" is
+// {operation_code, operation_name, operation_duration (minutes), description_options}
+// stored in companies/{cid}/routings. Given a BOM line description, we try (in order):
+//   0. Any routing's own description_options (comma-separated keyword phrases) —
+//      ALL matching rows are summed (multi-step processes).
+//   1. Hard-coded description-keyword → operation-name-keyword rules below.
+//   2. Word-overlap scoring fallback between the description and operation names.
+//   3. (web-only addition) a single batched AI call for whatever is still unmatched.
+const _LABOR_RULES=[
+  [["heat shrink","heatshrink","shrink tub","shrinking tube","ht-shr",
+    "cbl,shrink","sleeve adhesive","atum ","black shrink",
+    "shrink clear","shrink wht","scl heat shrink"],
+   ["כיווץ בידוד","shrink","כיווץ ב"]],
+  [["transition boot","straight boot","boot shrink","shrink boot",
+    "boot dia","heat shrink boot"," boot ","boot y"],
+   ["כיווץ בוט","בוט","boot"]],
+  [["splice"],
+   ["ספלייס","splice"]],
+  [["rj45","rj11","rj-45","cat6 rj","cat6a rj","plug rj",
+    "con rj","conn rj","modular plug"],
+   ["חיווט rj","rj"]],
+  [["ferrule","ferulle"],
+   ["פנואמטית","לחיצה פנואמטית","ferrule"]],
+  [["semi rigid","semirigid","lmr600","lmr400","rg-405ss"],
+   ["semi rigid","rigid"]],
+  [["coaxial"," sma "," smb "," bnc ","rg174","rg316","rg179",
+    "rg405","microwave cable","cable,coax","cbl,coax",
+    "coax-50","fr connector"," 75 ohm","75ohm","smp "],
+   ["קואקסיאלי","קואקס","coax"]],
+  [["shield braid","braid tubular","flat tinned copper braid",
+    "braided sleeve","expandable sleeving","spiral strip shield",
+    "shield braid tubular","spiral strip"],
+   ["סיכוך","שרוול ארוג","ספירלה"]],
+  [["label tubing","marker sleeve","wire marker","identific. sleeve",
+    "wire identification","shrink identific","marker x/x",
+    "marker 3/8","marker 1/2"],
+   ["הדפסת מדבקות","סימוניות","מדבקות"]],
+  [["adhesive","epoxy","glue","scotch-weld","dp270"],
+   ["הדבקה","יציקה קרה","הזרקת"]],
+  [["mil d38999","d38999","38999","mil spec","milspec",
+    "circular mil spec","cicular mil","conn circ plug","plug circ",
+    "circ conn","circular connector"],
+   ["צבאי","military"]],
+  [["ring terminal","ring cable lug","ring.ter",
+    "fork terminal","fork cable lug","lock.fork",
+    "insulated ring","insulated fork"],
+   ["לחיצה ידנית פינים","נעיצת"]],
+  [["crimp contact","contact pin","crimping contact","crimping pin",
+    "crimp pin","crimp terminal","female crimp","male crimping",
+    "female crimp connect","male crimp","w/term,",
+    "pin terminal","conn,w/term","crimp 28","crimp gold",
+    "conn socket","crimp style"],
+   ["לחיצה ידנית פינים","החדרה","לחיצה ידנית"]],
+  [["backshell","back shell","backsh","strain relief"],
+   ["הרכבה מכנית","backshell"]],
+  [["band it sst","band it ","band clamp","band adapter","banding sz"],
+   ["בנד מתכתי","band"]],
+  [["wire,strd","wire strd","hook-up wire","wire single",
+    "wire teflon","wire 22","wire 14","wire 20","wire 16",
+    "hook-up wire etfe"],
+   ["חיתוך חוטים","גילוי חוטים"]],
+  [["cable,","cbl,shld","cbl,u/shld","cbl,robotics",
+    "multi-conductor","power cable","cat6","ethernet cable",
+    "cable elect","cable 20awg","cable 4cond","cable 2cond",
+    "cable 5x","cable 2x","cable 16x"],
+   ["חיתוך כבל","גילוי כבל"]],
+  [["connector"," conn,"," plug "," socket "," housing","receptacle"],
+   ["החדרה","לחיצה ידנית פינים"]],
+];
+// keyword-set → operation-name substrings, used only to auto-fill an empty
+// "Description Options" field when a routing is created/imported without one.
+const _ROUTING_AUTO_FILL_MAP=[
+  ["SR, SEMI RIGID",["semi rigid","lmr600","lmr400"]],
+  ["COAX, RG405, RG179, SMB, BNC",["קואקסיאלי","קואקס מובאייל","בדיקת קואקס","גילוי קואקס"]],
+  ["BRAID, SHIELD",["פיצול קואקס/סיכוך","סיכוך/שרוול ארוג"]],
+  ["RJ45, CAT6, CAT6A, ETHERNET",["חיווט rj"]],
+  ["BOOT, TRANSITION BOOT",["כיווץ בוט"]],
+  ["SHRINK, TUBE, TUBING",["כיווץ בידוד","חיתוך והלבשת שרוול בידוד"]],
+  ["SLEEVE, MARKER, LABEL",["הדפסת מדבקות","הדבקת מדבקת סימון"]],
+  ["ADHESIVE, EPOXY, GLUE, 3M SCOTCH-WELD",["הדבקה","הזרקת דבק","ביקורת לפני יציקה"]],
+  ["MIL D38999, BAND ADAPTER, BACKSHELL",["מחבר צבאי","הרכבת בנד","ביקורת סופית - צבאי"]],
+  ["FERRULE, TERMINAL, LUG",["הרכבת פרולה","לחיצה ידנית - סופיות"]],
+  ["PIN, SOCKET, CONTACT",["לחיצה ידנית פינים","חליצת פין ממחבר","בדיקת משיכה לפין"]],
+  ["PLUG, CONNECTOR, HOUSING",["הרכבה מכנית","הרכבת כיסוי","החדרה"]],
+  ["SOLDER",["הלחמה"]],
+  ["WIRE, CABLE, CBL",["חיתוך כבל","חיתוך כבל ידני","גילוי כבל","גילוי כבל מיוחד",
+    "חיתוך חוטים","גילוי חוטים","גילוי מיוחד"]],
+];
+
+let _routings=[];
+let _routingsLoaded=false;
+async function loadRoutings(force=false){
+  if(_routingsLoaded && !force) return _routings;
+  try{
+    const snap=await getDocs(collection(db,'companies',companyId,'routings'));
+    _routings=snap.docs.map(d=>({_id:d.id,...d.data()}));
+  }catch(e){ console.warn('[Routings] load error:',e.message); _routings=[]; }
+  _routingsLoaded=true;
+  return _routings;
+}
+// Replaces the whole routings collection with `rows` (mirrors the Windows app's
+// delete-all-then-rewrite _save_firebase behavior).
+async function saveRoutingsAll(rows){
+  try{
+    const snap=await getDocs(collection(db,'companies',companyId,'routings'));
+    await Promise.all(snap.docs.map(d=>deleteDoc(d.ref)));
+  }catch(e){ console.warn('[Routings] delete error:',e.message); }
+  let i=0;
+  for(const row of rows){
+    const key=(String(row.operation_code||'').trim()||`row_${i}`).replace(/[\/\\#\[\]*?]/g,'_').slice(0,300)||`row_${i}`;
+    try{
+      await setDoc(doc(db,'companies',companyId,'routings',key),{
+        operation_code: row.operation_code||'',
+        operation_name: row.operation_name||'',
+        operation_duration: row.operation_duration||'',
+        description_options: row.description_options||'',
+      });
+    }catch(e){ console.warn('[Routings] save error:',key,e.message); }
+    i++;
+  }
+  _routings=rows.map((r,idx)=>({_id:String(r.operation_code||`row_${idx}`),...r}));
+  _routingsLoaded=true;
+}
+// Auto-fills an empty description_options on routing rows whose operation_name matches
+// one of the known Hebrew/English substrings above (first match wins per row).
+function _autoFillRoutingDescriptions(rows){
+  let filled=0;
+  for(const [kwStr,opSubs] of _ROUTING_AUTO_FILL_MAP){
+    for(const r of rows){
+      if(String(r.description_options||'').trim()) continue;
+      const opLower=String(r.operation_name||'').toLowerCase();
+      if(opSubs.some(s=>opLower.includes(s.toLowerCase()))){ r.description_options=kwStr; filled++; }
+    }
+  }
+  return filled;
+}
+
+// Given a BOM description, returns a labor-time string in minutes (or '' if no match).
+function _matchLaborTime(description, routings){
+  if(!description || !routings || !routings.length) return '';
+  const descLower=String(description).toLowerCase();
+
+  // 0. User-defined Description Options on routing rows — sum ALL matches (multi-step)
+  const matchedDurations=[];
+  for(const rt of routings){
+    const opts=String(rt.description_options||'').trim();
+    if(!opts) continue;
+    const keywords=opts.split(',').map(k=>k.trim().toLowerCase()).filter(Boolean);
+    if(keywords.some(kw=>descLower.includes(kw))){
+      const dur=parseFloat(String(rt.operation_duration||'').trim());
+      if(!isNaN(dur)) matchedDurations.push(dur);
+    }
+  }
+  if(matchedDurations.length){
+    const total=matchedDurations.reduce((a,b)=>a+b,0);
+    return Number.isInteger(total)?String(total):total.toFixed(1);
+  }
+
+  // 1. Rule-based pass
+  for(const [descKws,opKws] of _LABOR_RULES){
+    if(descKws.some(kw=>descLower.includes(kw))){
+      for(const rt of routings){
+        const op=String(rt.operation_name||'').toLowerCase();
+        if(opKws.some(ok=>op.includes(ok.toLowerCase()))){
+          const dur=String(rt.operation_duration||'').trim();
+          if(dur) return dur;
+        }
+      }
+      break; // matched a description category but no routing covers it — stop here
+    }
+  }
+
+  // 2. Word-overlap fallback
+  let best=null, bestScore=0;
+  const descWords=new Set(descLower.split(/\s+/).filter(Boolean));
+  for(const rt of routings){
+    const op=String(rt.operation_name||'').toLowerCase();
+    if(!op) continue;
+    const opWords=op.split(/\s+/).filter(Boolean);
+    let score=0;
+    for(const w of opWords) if(descWords.has(w)) score++;
+    if(score===0 && (descLower.includes(op)||op.includes(descLower))) score=1;
+    if(score>bestScore){ bestScore=score; best=rt; }
+  }
+  if(best && bestScore>0) return String(best.operation_duration||'').trim();
+  return '';
+}
+
+// One batched AI call to match whatever rows steps 0-2 above couldn't resolve.
+// rowsToMatch: [{idx, description}]. Returns {idx: durationString}.
+async function _aiMatchLaborBatch(rowsToMatch, routings){
+  if(!rowsToMatch.length || !routings.length || (!anthKey && !geminiKey)) return {};
+  const routingsList=routings.filter(r=>r.operation_name).slice(0,150)
+    .map(r=>`- "${r.operation_name}" (${r.operation_duration||'?'} min)`).join('\n');
+  const rowsList=rowsToMatch.map(r=>`${r.idx}: ${r.description}`).join('\n');
+  const prompt=`You are matching cable/connector BOM line-item descriptions to the closest manufacturing routing operation.
+
+Available operations (name, duration in minutes):
+${routingsList}
+
+For each numbered BOM description below, pick the SINGLE best-matching operation from the list above and return its duration in minutes. If nothing plausibly matches, use "".
+
+BOM descriptions:
+${rowsList}
+
+Return ONLY a valid JSON object mapping the row number (as a string) to the duration (as a string), e.g. {"0":"5","1":"","2":"12.5"}`;
+  try{
+    let raw='';
+    if(anthKey){
+      const resp=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
+                 'anthropic-dangerous-allow-browser':'true','content-type':'application/json'},
+        body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:1024,
+          messages:[{role:'user',content:prompt}]})
+      });
+      if(resp.ok){ const data=await resp.json(); raw=data.content[0].text.trim(); }
+    } else if(geminiKey){
+      const resp=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+        {method:'POST',headers:{'content-type':'application/json'},
+         body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{thinkingConfig:{thinkingBudget:0}}})});
+      if(resp.ok){ const data=await resp.json();
+        raw=(data.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join(''); }
+    }
+    const m=raw.match(/\{[\s\S]*\}/);
+    if(!m) return {};
+    return JSON.parse(m[0]);
+  }catch(e){ console.warn('[Labor AI] match error:',e.message); return {}; }
+}
+
+// Renders the Manufacturing Routings management modal — Firestore-backed CRUD table
+// with Excel import, mirroring ui/manufacturing_routings_dialog.py.
+function openRoutingsModal(){
+  showModal(`<div class="modal" style="width:min(96vw,1000px)">
+    <div class="modal-head"><h3>⚙️ Manufacturing Routings</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:10px">Operation codes/names/durations used to auto-calculate Labor Time on Sales Desk BOM rows. "Description Options" are comma-separated keyword phrases matched against the BOM description (highest priority match).</p>
+      <div class="toolbar" style="margin-bottom:8px">
+        <button class="btn btn-blue btn-sm" id="rt-import">📂 Import Excel</button>
+        <button class="btn btn-ghost btn-sm" id="rt-add">＋ Add Row</button>
+        <button class="btn btn-red btn-sm" id="rt-del">🗑 Delete Selected</button>
+        <button class="btn btn-ghost btn-sm" id="rt-autofill">✨ Auto-fill Description Options</button>
+        <input type="file" id="rt-file-input" accept=".xlsx,.xls,.csv" style="display:none">
+        <span class="count-badge" id="rt-count" style="margin-left:auto"></span>
+      </div>
+      <div class="table-wrap" style="max-height:50vh"><table id="rt-table">
+        <thead><tr>
+          <th style="width:28px"><input type="checkbox" id="rt-check-all"></th>
+          <th style="min-width:110px">Operation Code</th>
+          <th style="min-width:220px">Operation Name</th>
+          <th style="min-width:100px">Duration (min)</th>
+          <th style="min-width:240px">Description Options</th>
+        </tr></thead>
+        <tbody id="rt-tbody"></tbody>
+      </table></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-green" id="rt-save">💾 Save</button>
+    </div>
+  </div>`);
+
+  let rows=[];
+  const renderRows=()=>{
+    const tb=document.getElementById('rt-tbody');
+    tb.innerHTML=rows.map((r,i)=>`<tr data-i="${i}">
+      <td style="text-align:center"><input type="checkbox" class="rt-check" data-i="${i}"></td>
+      <td contenteditable="true" data-k="operation_code" data-i="${i}">${esc(r.operation_code||'')}</td>
+      <td contenteditable="true" data-k="operation_name" data-i="${i}">${esc(r.operation_name||'')}</td>
+      <td contenteditable="true" data-k="operation_duration" data-i="${i}">${esc(r.operation_duration||'')}</td>
+      <td contenteditable="true" data-k="description_options" data-i="${i}">${esc(r.description_options||'')}</td>
+    </tr>`).join('')||`<tr class="empty-row"><td colspan="5">No routings yet — import an Excel file or add rows manually</td></tr>`;
+    tb.querySelectorAll('td[contenteditable]').forEach(td=>{
+      td.addEventListener('blur',()=>{
+        const i=+td.dataset.i, k=td.dataset.k;
+        if(rows[i]) rows[i][k]=td.textContent.trim();
+      });
+    });
+    document.getElementById('rt-count').textContent=`${rows.length} routings`;
+  };
+
+  (async()=>{
+    rows=(await loadRoutings(true)).map(r=>({operation_code:r.operation_code||'',operation_name:r.operation_name||'',
+      operation_duration:r.operation_duration||'',description_options:r.description_options||''}));
+    renderRows();
+  })();
+
+  document.getElementById('rt-add').addEventListener('click',()=>{
+    rows.push({operation_code:'',operation_name:'',operation_duration:'',description_options:''});
+    renderRows();
+  });
+  document.getElementById('rt-check-all').addEventListener('change',e=>{
+    document.querySelectorAll('.rt-check').forEach(cb=>cb.checked=e.target.checked);
+  });
+  document.getElementById('rt-del').addEventListener('click',()=>{
+    const checked=[...document.querySelectorAll('.rt-check:checked')].map(cb=>+cb.dataset.i);
+    if(!checked.length){ toast('No rows selected','error'); return; }
+    rows=rows.filter((_,i)=>!checked.includes(i));
+    renderRows();
+  });
+  document.getElementById('rt-autofill').addEventListener('click',()=>{
+    const n=_autoFillRoutingDescriptions(rows);
+    renderRows();
+    toast(n?`Auto-filled ${n} row(s)`:'Nothing to auto-fill','info');
+  });
+  document.getElementById('rt-import').addEventListener('click',()=>document.getElementById('rt-file-input').click());
+  document.getElementById('rt-file-input').addEventListener('change',async e=>{
+    const file=e.target.files[0];
+    if(!file) return;
+    try{
+      if(!window.XLSX) throw new Error('Excel library not loaded');
+      const ab=await file.arrayBuffer();
+      const wb=XLSX.read(ab,{type:'array'});
+      const sheet=wb.Sheets[wb.SheetNames[0]];
+      const data=XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:''});
+      const EXCEL_MAP={'operation code':'operation_code','op code':'operation_code','code':'operation_code','op':'operation_code',
+        'operation name':'operation_name','op name':'operation_name','name':'operation_name','operation':'operation_name',
+        'description':'operation_name','desc':'operation_name',
+        'duration':'operation_duration','duration (min)':'operation_duration','time':'operation_duration',
+        'time (min)':'operation_duration','cycle time':'operation_duration','lead time':'operation_duration',
+        'minutes':'operation_duration','min':'operation_duration'};
+      let headerRowIdx=-1, colMap={};
+      for(let ri=0; ri<Math.min(30,data.length); ri++){
+        const mapping={};
+        data[ri].forEach((cell,ci)=>{ const v=String(cell||'').trim().toLowerCase(); if(EXCEL_MAP[v]) mapping[ci]=EXCEL_MAP[v]; });
+        if(Object.keys(mapping).length>=1){ headerRowIdx=ri; colMap=mapping; break; }
+      }
+      if(headerRowIdx<0){ toast('No matching columns detected (need Operation Code / Name / Duration headers)','error'); return; }
+      const imported=[];
+      for(let ri=headerRowIdx+1; ri<data.length; ri++){
+        const row=data[ri]; const rd={};
+        for(const ci in colMap) rd[colMap[ci]]=String(row[ci]??'').trim();
+        if(Object.values(rd).some(v=>v)) imported.push({operation_code:rd.operation_code||'',operation_name:rd.operation_name||'',
+          operation_duration:rd.operation_duration||'',description_options:''});
+      }
+      if(!imported.length){ toast('No rows found in the file','error'); return; }
+      rows=imported;
+      renderRows();
+      toast(`Imported ${imported.length} rows from Excel`,'success');
+    }catch(err){ toast('Import error: '+err.message,'error'); }
+    e.target.value='';
+  });
+  document.getElementById('rt-save').addEventListener('click',async()=>{
+    document.querySelectorAll('#rt-tbody td[contenteditable]').forEach(td=>{
+      const i=+td.dataset.i, k=td.dataset.k;
+      if(rows[i]) rows[i][k]=td.textContent.trim();
+    });
+    const btn=document.getElementById('rt-save');
+    btn.disabled=true; btn.textContent='Saving…';
+    try{
+      await saveRoutingsAll(rows.filter(r=>Object.values(r).some(v=>v)));
+      toast(`Saved ${rows.length} routings`,'success');
+      closeModal();
+    }catch(e){ toast('Save error: '+e.message,'error'); btn.disabled=false; btn.textContent='💾 Save'; }
+  });
+}
+
 // SALES DESK
 // ══════════════════════════════════════════════════════════════════════════════
 const _SD_DEFAULT_COLS=[
@@ -2174,28 +2554,105 @@ const _SD_DEFAULT_COLS=[
   {k:'unit',           l:'Units',           w:'55px'},
   {k:'price',          l:'FC Price',        w:'85px'},
   {k:'priority_price', l:'Priority Price',  w:'95px'},
-  {k:'total',          l:'Total',           w:'85px'},
+  {k:'total',          l:'Part Cost',       w:'85px'},
+  {k:'labor_time',     l:'Labor Time',      w:'85px'},
+  {k:'labor_total',    l:'Labor Total',     w:'90px'},
 ];
-function _sdEffectivePrice(r){ return parseFloat(r.price)||parseFloat(r.priority_price)||0; }
+// Part Cost uses the LOWER of FC/Priority price when both exist (mirrors the
+// Windows app's _update_row_total), not just "whichever is present".
+function _sdEffectivePrice(r){
+  const fc=parseFloat(r.price)||0, pr=parseFloat(r.priority_price)||0;
+  if(fc>0 && pr>0) return Math.min(fc,pr);
+  return fc||pr||0;
+}
 function _sdRecalcTotal(r){ r.total=_sdEffectivePrice(r)*(parseFloat(r.qty)||1); return r.total; }
+// Labor Total = labor_time(min) × qty_for_labor. QTY ending in mm/cm (or a Units
+// column of mm/cm) is converted to whole meters first — matches the Windows rule.
+function _sdLaborQtyMultiplier(r){
+  const qtyRaw=String(r.qty??'').trim().toLowerCase();
+  const unit=String(r.unit||'').trim().toLowerCase();
+  const qtyNum=parseFloat(r.qty)||0;
+  if(qtyRaw.endsWith('mm')||unit==='mm'){
+    const num=parseFloat(qtyRaw.replace(/[^\d.]/g,''))||qtyNum||0;
+    return Math.max(1, Math.ceil(num/1000));
+  }
+  if(qtyRaw.endsWith('cm')||unit==='cm'){
+    const num=parseFloat(qtyRaw.replace(/[^\d.]/g,''))||qtyNum||0;
+    return Math.max(1, Math.ceil(num/100));
+  }
+  return qtyNum>0 ? qtyNum : 1;
+}
+function _sdRecalcLaborTotal(r){
+  const lt=parseFloat(r.labor_time)||0;
+  r.labor_total = lt>0 ? lt*_sdLaborQtyMultiplier(r) : 0;
+  return r.labor_total;
+}
+function _sdRecalcRow(r){ _sdRecalcTotal(r); _sdRecalcLaborTotal(r); return r; }
 function _sdCellHTML(k,r,i){
   const fcPrice=parseFloat(r.price)||0, prPrice=parseFloat(r.priority_price)||0;
   let fcC='',prC='';
   if(fcPrice&&prPrice){fcC=fcPrice<=prPrice?'price-green':'price-red';prC=prPrice<=fcPrice?'price-green':'price-red';}
   switch(k){
-    case 'qty': return `<input type="number" class="sd-qty" data-i="${i}" value="${r.qty}" min="0.001" step="any"
+    case 'qty': return `<input type="number" class="sd-qty" data-i="${i}" value="${r.qty??''}" min="0.001" step="any"
            style="width:60px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
     case 'price': return fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:'';
     case 'priority_price': return prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:'';
     case 'total': return `<strong>$${(r.total||0).toFixed(2)}</strong>`;
+    case 'labor_time': return `<input type="number" class="sd-labor-time" data-i="${i}" value="${r.labor_time??''}" min="0" step="any"
+           placeholder="min" style="width:60px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
+    case 'labor_total': return r.labor_total?`${r.labor_total.toFixed(2)} min`:'';
     default: return esc(r[k]);
   }
 }
+// Fills labor_time on any sdItems rows missing it: rules-based match first (offline,
+// instant), then a single batched AI call for whatever is still unresolved.
+async function _sdAutoMatchLabor(){
+  await loadRoutings();
+  if(!_routings.length) return;
+  const stillUnmatched=[];
+  sdItems.forEach((r,i)=>{
+    if(String(r.labor_time||'').trim()) return;
+    const desc=String(r.description||'').trim();
+    if(!desc) return;
+    const dur=_matchLaborTime(desc,_routings);
+    if(dur){ r.labor_time=dur; _sdRecalcLaborTotal(r); }
+    else stillUnmatched.push({idx:i,description:desc});
+  });
+  if(stillUnmatched.length){
+    const mapping=await _aiMatchLaborBatch(stillUnmatched,_routings);
+    for(const idxStr in mapping){
+      const idx=parseInt(idxStr), dur=mapping[idxStr];
+      if(dur && sdItems[idx]){ sdItems[idx].labor_time=dur; _sdRecalcLaborTotal(sdItems[idx]); }
+    }
+  }
+}
 let _sdFilterQ='';
+let _sdProfitPct=40;
+const _SD_LABOR_RATE_USD_PER_MIN=0.5; // mirrors Windows: Labor Cost = Σ(labor_total min) × $0.50/min
+
+function _sdComputeSummary(){
+  let partsTotal=0, laborMinutes=0;
+  for(const r of sdItems){ partsTotal+=r.total||0; laborMinutes+=r.labor_total||0; }
+  const laborCost=laborMinutes*_SD_LABOR_RATE_USD_PER_MIN;
+  const subtotal=partsTotal+laborCost;
+  const final=subtotal*(1+_sdProfitPct/100);
+  return {partsTotal, laborCost, subtotal, final};
+}
+
 async function renderSalesDesk(){
   await loadParts();
+  await loadRoutings();
   setActions('');
   const SD_COLS=loadColOrder('salesdesk',_SD_DEFAULT_COLS);
+
+  const _sdUpdateSummaryUI=()=>{
+    const {partsTotal,laborCost,subtotal,final}=_sdComputeSummary();
+    const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent='$'+v.toFixed(2); };
+    set('sd-parts-total',partsTotal);
+    set('sd-labor-total',laborCost);
+    set('sd-subtotal',subtotal);
+    set('sd-final',final);
+  };
 
   const renderSD=()=>{
     const predicate=parseBoolQuery(_sdFilterQ);
@@ -2204,7 +2661,6 @@ async function renderSalesDesk(){
       const r=sdItems[i];
       return predicate(_SD_DEFAULT_COLS.map(c=>String(r[c.k]||'')).join(' | ').toLowerCase());
     });
-    const partsTotal=sdItems.reduce((s,r)=>s+(r.total||0),0);
     const tbody=visibleIdx.map(i=>{
       const r=sdItems[i];
       return `<tr data-i="${i}">
@@ -2216,14 +2672,18 @@ async function renderSalesDesk(){
 
     document.getElementById('sd-tbody').innerHTML=tbody||
       `<tr class="empty-row"><td colspan="${SD_COLS.length+2}">No parts added yet</td></tr>`;
-    document.getElementById('sd-total').textContent='$'+partsTotal.toFixed(2);
     const cEl=document.getElementById('sd-count'); if(cEl) cEl.textContent=sdItems.length;
     const fEl=document.getElementById('sd-flt-count');
     if(fEl) fEl.textContent = _sdFilterQ.trim() ? `${visibleIdx.length}/${sdItems.length} parts` : `${sdItems.length} parts`;
+    _sdUpdateSummaryUI();
 
     document.querySelectorAll('.sd-qty').forEach(inp=>inp.addEventListener('change',()=>{
       const i=+inp.dataset.i, qty=parseFloat(inp.value)||1;
-      sdItems[i].qty=qty; _sdRecalcTotal(sdItems[i]); renderSD();
+      sdItems[i].qty=qty; _sdRecalcRow(sdItems[i]); renderSD();
+    }));
+    document.querySelectorAll('.sd-labor-time').forEach(inp=>inp.addEventListener('change',()=>{
+      const i=+inp.dataset.i, lt=parseFloat(inp.value)||0;
+      sdItems[i].labor_time=lt; _sdRecalcLaborTotal(sdItems[i]); renderSD();
     }));
     document.querySelectorAll('#sd-tbody .btn-red').forEach(btn=>btn.addEventListener('click',()=>{
       sdItems.splice(+btn.dataset.i,1); renderSD();
@@ -2235,13 +2695,11 @@ async function renderSalesDesk(){
       <div class="sd-panel">
         <div class="sd-panel-title">BOM Items</div>
         <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap">
-          <div class="suggest-wrap">
-            <input class="search-box" id="sd-search" placeholder="Search Part Stock to add…" style="min-width:0;flex:1">
-            <div class="suggest-list" id="sd-suggest" style="display:none"></div>
-          </div>
+          <button class="btn btn-blue" id="btn-sd-addpick">📦 Add from Part Stock</button>
           <button class="btn btn-blue" id="btn-sd-file">📎 From File (BOM)</button>
           <button class="btn btn-ghost" id="btn-sd-bydwg">📋 By Drawing #</button>
           <button class="btn btn-blue" id="btn-sd-fc" style="white-space:nowrap">🔍 FindChips</button>
+          <button class="btn btn-ghost" id="btn-sd-routings" title="Manage the operations used to auto-calculate Labor Time">⚙️ Routings</button>
           <button class="btn btn-ghost" id="btn-sd-clear">Clear All</button>
         </div>
         <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap;align-items:center">
@@ -2264,16 +2722,23 @@ async function renderSalesDesk(){
 
       <div style="display:flex;flex-direction:column;gap:12px">
         <div class="sd-panel">
-          <div class="sd-panel-title">Summary</div>
+          <div class="sd-panel-title">Cost Summary</div>
           <div style="padding:6px 0">
-            <div class="summary-row"><span>Parts</span><span id="sd-count">${sdItems.length}</span></div>
+            <div class="summary-row"><span>Parts Total</span><span id="sd-parts-total">$0.00</span></div>
+            <div class="summary-row"><span title="Auto-calculated: Σ(Labor Total min) × $0.50/min">Labor Cost</span><span id="sd-labor-total">$0.00</span></div>
+            <div class="summary-row"><span>Subtotal</span><span id="sd-subtotal">$0.00</span></div>
+            <div class="summary-row">
+              <span>Profit %</span>
+              <input type="number" id="sd-profit-pct" value="${_sdProfitPct}" min="0" step="any"
+                style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
+            </div>
           </div>
           <div class="summary-total">
-            <span>TOTAL PARTS COST</span>
-            <span id="sd-total">$0.00</span>
+            <span>FINAL PRICE</span>
+            <span id="sd-final">$0.00</span>
           </div>
         </div>
-        <button class="btn btn-green" style="width:100%;padding:10px;justify-content:center" id="btn-sd-print">🖨 Print / Save PDF</button>
+        <button class="btn btn-green" style="width:100%;padding:10px;justify-content:center" id="btn-sd-export">📊 Export to Excel</button>
       </div>
     </div>`);
 
@@ -2290,43 +2755,37 @@ async function renderSalesDesk(){
     if(ni){ni.focus();ni.setSelectionRange(s,s);}
   },220));
 
-  // Search Part Stock
-  const sdSearch=document.getElementById('sd-search');
-  const sdSuggest=document.getElementById('sd-suggest');
-  let suggestions=[];
+  document.getElementById('sd-profit-pct').addEventListener('input',debounce(e=>{
+    _sdProfitPct=parseFloat(e.target.value)||0;
+    _sdUpdateSummaryUI();
+  },150));
 
-  sdSearch.addEventListener('input',()=>{
-    const q=sdSearch.value.toLowerCase().trim();
-    if(!q){ sdSuggest.style.display='none'; return; }
-    suggestions=allParts.filter(p=>
-      [p.part_number,p.description,p.manufacturer,p.drawing_number]
-        .some(v=>String(v||'').toLowerCase().includes(q))
-    ).slice(0,10);
-    if(!suggestions.length){ sdSuggest.style.display='none'; return; }
-    sdSuggest.style.display='block';
-    sdSuggest.innerHTML=suggestions.map((p,i)=>`
-      <div class="suggest-item" data-si="${i}">
-        <strong>${esc(p.part_number)}</strong>
-        <span style="color:var(--muted)"> — ${esc((p.description||'').slice(0,50))}</span>
-        ${p.price?`<span style="float:right;color:var(--green)">$${parseFloat(p.price).toFixed(4)}</span>`:''}
-      </div>`).join('');
-    sdSuggest.querySelectorAll('.suggest-item').forEach(el=>el.addEventListener('click',()=>{
-      const p=suggestions[+el.dataset.si];
-      const item={part_number:p.part_number||'',description:p.description||'',
-        drawing_number:p.drawing_number||p.drawing_name||'',
-        qty:1,unit:p.unit||p.units||'pcs',price:parseFloat(p.price)||0,priority_price:parseFloat(p.priority_price)||0,total:0};
-      _sdRecalcTotal(item);
-      sdItems.push(item);
-      sdSearch.value=''; sdSuggest.style.display='none';
-      renderSD();
-      // Update count
-      document.getElementById('sd-count').textContent=sdItems.length;
-    }));
+  document.getElementById('btn-sd-addpick').addEventListener('click',()=>{
+    openPartPickerModal(async(parts,qtyOverride,hadSelection)=>{
+      let added=0;
+      for(const p of parts){
+        const origQty=String(p.qty||'').trim();
+        const qty = hadSelection ? ((qtyOverride!==1||!origQty) ? qtyOverride : (parseFloat(origQty)||1)) : (parseFloat(p.qty)||1);
+        const item={part_number:p.part_number||'',description:p.description||'',
+          drawing_number:p.drawing_number||p.drawing_name||'',
+          qty, unit:p.unit||p.units||'pcs',price:parseFloat(p.price)||0,priority_price:parseFloat(p.priority_price)||0,
+          total:0, labor_time:'', labor_total:0};
+        const m=_matchLaborTime(item.description,_routings);
+        if(m) item.labor_time=m;
+        _sdRecalcRow(item);
+        sdItems.push(item);
+        added++;
+      }
+      renderSalesDesk();
+      toast(`Added ${added} part(s) to Sales Desk`,'success');
+      await _sdAutoMatchLabor();
+      renderSalesDesk();
+    });
   });
-  document.addEventListener('click',e=>{if(!e.target.closest('.suggest-wrap'))sdSuggest.style.display='none';});
 
+  document.getElementById('btn-sd-routings').addEventListener('click',()=>openRoutingsModal());
   document.getElementById('btn-sd-clear').addEventListener('click',()=>{sdItems=[];_sdFilterQ='';renderSD();});
-  document.getElementById('btn-sd-print').addEventListener('click',()=>window.print());
+  document.getElementById('btn-sd-export').addEventListener('click',()=>exportSalesDeskExcel());
 
   // SD check-all toggle
   document.addEventListener('change',e=>{
@@ -2368,23 +2827,29 @@ async function renderSalesDesk(){
       </div>
       <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
     </div>`);
-    document.querySelectorAll('.dwg-pick').forEach(btn=>btn.addEventListener('click',()=>{
+    document.querySelectorAll('.dwg-pick').forEach(btn=>btn.addEventListener('click',async()=>{
       const dwg=btn.dataset.dwg;
       const matching=allParts.filter(p=>(p.drawing_number||p.drawing_name)===dwg);
+      await loadRoutings();
       for(const p of matching){
         const qty=parseFloat(p.qty)||1;
         const item={
           part_number:p.part_number||'', description:p.description||'',
           drawing_number:p.drawing_number||p.drawing_name||dwg||'',
           qty, unit:p.unit||p.units||'pcs',
-          price:parseFloat(p.price)||0, priority_price:parseFloat(p.priority_price)||0, total:0
+          price:parseFloat(p.price)||0, priority_price:parseFloat(p.priority_price)||0, total:0,
+          labor_time:'', labor_total:0
         };
-        _sdRecalcTotal(item);
+        const m=_matchLaborTime(item.description,_routings);
+        if(m) item.labor_time=m;
+        _sdRecalcRow(item);
         sdItems.push(item);
       }
       closeModal();
       renderSalesDesk();
       toast(`Added ${matching.length} parts from drawing "${dwg}"`, 'success');
+      await _sdAutoMatchLabor();
+      renderSalesDesk();
     }));
   });
 
@@ -2392,6 +2857,112 @@ async function renderSalesDesk(){
   document.getElementById('btn-sd-file').addEventListener('click',()=>{
     if(!anthKey && !geminiKey){ showSettingsModal(()=>document.getElementById('btn-sd-file')?.click()); return; }
     openSDFileModal();
+  });
+}
+
+// Full-featured Part Stock picker for Sales Desk — mirrors the Windows app's
+// ui/sales_desk_dialog.py _PartPickerDialog: filter by Drawing Number / Drawing
+// Name dropdown plus free-text boolean search, multi-select rows (checkboxes),
+// an optional QTY-per-part override, and "Add Selected" (or, if nothing is
+// checked, every currently-visible row is added — same as Windows).
+// onAdd(parts, qtyOverride, hadSelection) is called once, after the modal closes.
+function openPartPickerModal(onAdd){
+  showModal(`<div class="modal" style="width:min(96vw,1100px)">
+    <div class="modal-head"><h3>📦 Select from Part Stock</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="toolbar" style="margin-bottom:8px">
+        <label style="font-size:12px;color:var(--muted);white-space:nowrap">Filter by:</label>
+        <select id="pp-field" class="search-box" style="flex:0 0 auto;width:150px">
+          <option value="drawing_number">Drawing Number</option>
+          <option value="drawing_name">Drawing Name</option>
+        </select>
+        <select id="pp-value" class="search-box" style="flex:0 0 auto;min-width:220px">
+          <option value="">All</option>
+        </select>
+        <input class="search-box" id="pp-search" placeholder='Search part number / description — AND/OR/NOT/"phrase"'>
+      </div>
+      <div class="table-wrap" style="max-height:50vh" id="pp-table-wrap">
+        <table id="pp-table">
+          <thead><tr>
+            <th style="width:28px"><input type="checkbox" id="pp-check-all"></th>
+            <th>Part #</th><th>Drawing #</th><th>Drawing Name</th><th>Description</th>
+            <th>QTY</th><th>Units</th><th>FC Price</th><th>Priority Price</th>
+          </tr></thead>
+          <tbody id="pp-tbody"></tbody>
+        </table>
+      </div>
+      <div style="margin-top:10px;display:flex;align-items:center;gap:8px">
+        <label style="font-size:12px;color:var(--muted)">QTY per selected part:</label>
+        <input type="number" id="pp-qty" class="form-input" style="width:90px" value="1" min="0.001" step="any">
+        <span style="font-size:11px;color:var(--muted)">(only used for rows you check — unchecked "Add All" keeps each part's own QTY)</span>
+        <span class="count-badge" id="pp-count" style="margin-left:auto"></span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-green" id="pp-add">＋ Add Selected</button>
+    </div>
+  </div>`);
+
+  let visibleParts=[];
+  const fieldSel=document.getElementById('pp-field');
+  const valueSel=document.getElementById('pp-value');
+  const searchInp=document.getElementById('pp-search');
+
+  const reloadValueOptions=()=>{
+    const field=fieldSel.value;
+    const values=[...new Set(allParts.map(p=>p[field]).filter(Boolean).map(v=>String(v).trim()).filter(Boolean))]
+      .sort((a,b)=>a.localeCompare(b));
+    valueSel.innerHTML=`<option value="">All (${values.length})</option>`+
+      values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    filterRows();
+  };
+
+  const filterRows=()=>{
+    const field=fieldSel.value;
+    const val=valueSel.value;
+    const predicate=parseBoolQuery(searchInp.value);
+    visibleParts=allParts.filter(p=>{
+      if(val && String(p[field]||'').trim()!==val) return false;
+      if(searchInp.value.trim()){
+        const haystack=[p.part_number,p.description,p.manufacturer,p.drawing_number,p.drawing_name]
+          .map(v=>String(v||'')).join(' | ').toLowerCase();
+        if(!predicate(haystack)) return false;
+      }
+      return true;
+    });
+    const tb=document.getElementById('pp-tbody');
+    tb.innerHTML=visibleParts.map(p=>{
+      const fc=parseFloat(p.price)||0, pr=parseFloat(p.priority_price)||0;
+      let fcC='',prC='';
+      if(fc&&pr){fcC=fc<=pr?'price-green':'price-red';prC=pr<=fc?'price-green':'price-red';}
+      return `<tr data-id="${esc(p._id)}">
+        <td style="text-align:center"><input type="checkbox" class="pp-check" data-id="${esc(p._id)}"></td>
+        <td>${esc(p.part_number)}</td><td>${esc(p.drawing_number)}</td><td>${esc(p.drawing_name)}</td>
+        <td class="wrap">${esc(p.description)}</td><td>${esc(p.qty)}</td><td>${esc(p.unit||p.units)}</td>
+        <td>${fc?`<span class="${fcC}">${fmtPrice(fc)}</span>`:''}</td>
+        <td>${pr?`<span class="${prC}">${fmtPrice(pr)}</span>`:''}</td>
+      </tr>`;
+    }).join('')||`<tr class="empty-row"><td colspan="9">No parts match this filter</td></tr>`;
+    document.getElementById('pp-count').textContent=`${visibleParts.length} parts`;
+  };
+
+  fieldSel.addEventListener('change',reloadValueOptions);
+  valueSel.addEventListener('change',filterRows);
+  searchInp.addEventListener('input',debounce(filterRows,220));
+  document.getElementById('pp-check-all').addEventListener('change',e=>{
+    document.querySelectorAll('.pp-check').forEach(cb=>cb.checked=e.target.checked);
+  });
+  reloadValueOptions();
+
+  document.getElementById('pp-add').addEventListener('click',()=>{
+    const checked=[...document.querySelectorAll('.pp-check:checked')].map(cb=>cb.dataset.id);
+    const qtyOverride=parseFloat(document.getElementById('pp-qty').value)||1;
+    const hadSelection=checked.length>0;
+    const selected = hadSelection ? allParts.filter(p=>checked.includes(p._id)) : visibleParts;
+    if(!selected.length){ toast('No parts to add','error'); return; }
+    closeModal();
+    onAdd(selected, qtyOverride, hadSelection);
   });
 }
 
@@ -2520,6 +3091,7 @@ async function handleSDFiles(files){
     `💾 Save to Part Stock + Sales Desk (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
     async(updatedRows)=>{
       await saveBOMToPartStock(updatedRows);
+      await loadRoutings();
       let added=0;
       for(const r of updatedRows){
         const pn=(r.part_number||'').trim().toLowerCase();
@@ -2529,17 +3101,61 @@ async function handleSDFiles(files){
           part_number:r.part_number||r.item||'', description:r.description||'',
           drawing_number:r.drawing_number||match?.drawing_number||match?.drawing_name||'',
           qty, unit:r.unit||match?.unit||match?.units||'pcs',
-          price:match?parseFloat(match.price)||0:0, priority_price:match?parseFloat(match.priority_price)||0:0, total:0
+          price:match?parseFloat(match.price)||0:0, priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
+          labor_time:'', labor_total:0
         };
-        _sdRecalcTotal(item);
+        const m=_matchLaborTime(item.description,_routings);
+        if(m) item.labor_time=m;
+        _sdRecalcRow(item);
         sdItems.push(item);
         added++;
       }
       toast(`Added ${added} parts to Sales Desk`,'success');
       closeModal();
       document.getElementById('sd-tbody')&&renderSalesDesk();
+      await _sdAutoMatchLabor();
+      document.getElementById('sd-tbody')&&renderSalesDesk();
     }
   );
+}
+
+// ── Sales Desk → Excel quote export (client-side via SheetJS) ─────────────────
+// Replaces the old Print/Save-PDF button. Mirrors the layout/columns/summary rows
+// of the Windows app's ui/sales_desk_dialog.py _generate_quote_xlsx (item, drawing#,
+// part#, drawing name, customer PN, description, qty, unit, manufacturer, FC price,
+// priority price, part cost, labor time, labor total, then a summary block).
+function exportSalesDeskExcel(){
+  if(!sdItems.length){ toast('No items to export','error'); return; }
+  if(!window.XLSX){ toast('Excel library not loaded — please reload the page','error'); return; }
+
+  const {partsTotal,laborCost,subtotal,final}=_sdComputeSummary();
+  const headers=['Item','Drawing #','Part Number','Description','QTY','Units',
+    'FC Price','Priority Price','Part Cost','Labor Time (min)','Labor Total (min)'];
+  const aoa=[['SALES DESK — PRICE QUOTATION'],
+    ['Generated', new Date().toLocaleString()],
+    [],
+    headers];
+  sdItems.forEach((r,i)=>{
+    aoa.push([i+1, r.drawing_number||'', r.part_number||'', r.description||'',
+      parseFloat(r.qty)||0, r.unit||'',
+      parseFloat(r.price)||'', parseFloat(r.priority_price)||'',
+      +(r.total||0).toFixed(2), r.labor_time||'', +(r.labor_total||0).toFixed(2)]);
+  });
+  aoa.push([]);
+  aoa.push(['','','','','','','','','Parts Total', +partsTotal.toFixed(2)]);
+  aoa.push(['','','','','','','','','Labor Cost', +laborCost.toFixed(2)]);
+  aoa.push(['','','','','','','','','Subtotal', +subtotal.toFixed(2)]);
+  aoa.push(['','','','','','','','',`Profit (${_sdProfitPct}%)`, +(final-subtotal).toFixed(2)]);
+  aoa.push(['','','','','','','','','FINAL PRICE', +final.toFixed(2)]);
+
+  const ws=XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols']=[{wch:6},{wch:16},{wch:20},{wch:38},{wch:8},{wch:8},{wch:12},{wch:14},{wch:12},{wch:14},{wch:14}];
+  ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:10}}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Quote');
+  const fname=`SalesDesk_Quote_${new Date().toISOString().slice(0,10)}.xlsx`;
+  XLSX.writeFile(wb,fname);
+  toast('Excel quote downloaded','success');
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
