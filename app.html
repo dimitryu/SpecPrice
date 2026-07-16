@@ -83,13 +83,24 @@
     .count-badge { font-size:11px; color:var(--muted); white-space:nowrap; }
 
     /* ── Tables ── */
-    .table-wrap { overflow:auto; border-radius:8px; border:1px solid var(--border); background:#fff; }
+    .table-wrap { overflow:auto; border-radius:8px; border:1px solid var(--border); background:#fff;
+                  scrollbar-width:auto; }
+    .table-wrap::-webkit-scrollbar { height:12px; width:12px; }
+    .table-wrap::-webkit-scrollbar-track { background:#EDF2F7; }
+    .table-wrap::-webkit-scrollbar-thumb { background:var(--blue-mid); border-radius:6px; border:2px solid #EDF2F7; }
+    .table-wrap::-webkit-scrollbar-thumb:hover { background:var(--blue-dark); }
+    .tbl-scroll-btn { background:var(--blue-light); color:var(--blue-dark); border:1px solid var(--border);
+                       border-radius:6px; width:28px; height:28px; cursor:pointer; font-size:13px;
+                       flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; }
+    .tbl-scroll-btn:hover { background:var(--blue-mid); color:#fff; }
     table { width:100%; border-collapse:collapse; font-size:12.5px; }
     thead th { position:sticky; top:0; z-index:2; background:var(--blue-mid); color:#fff;
                font-weight:600; padding:7px 9px; text-align:left; white-space:nowrap;
                cursor:pointer; user-select:none; border-right:1px solid rgba(255,255,255,.25); }
     thead th:last-child { border-right:none; }
     thead th:hover { background:#1F5B92; }
+    thead th.col-dragging { opacity:.4; }
+    thead th.col-drop-target { box-shadow:inset 0 0 0 2px #fff; }
     tbody tr:nth-child(odd)  { background:#FFFFFF; }
     tbody tr:nth-child(even) { background:var(--row-alt); }
     tbody tr:hover { background:#D6EAF8 !important; }
@@ -221,7 +232,12 @@
 
 <div id="shell" style="display:none">
   <aside>
-    <div class="sb-brand">⚡ SpecPrice</div>
+    <div class="sb-brand" style="display:flex;align-items:center;gap:8px">
+      <img src="https://robotics.radion.co.il/wp-content/uploads/2024/11/cropped-Radion-Logo.png" alt="Radion"
+           style="height:26px;max-width:120px;object-fit:contain;flex-shrink:0"
+           onerror="this.style.display='none'">
+      <span>⚡ SpecPrice</span>
+    </div>
     <div class="sb-company" id="sb-company">—</div>
     <nav>
       <div class="nav-item active" data-view="part-stock"><span class="icon">📦</span>Part Stock</div>
@@ -233,7 +249,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.6.5</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.7.0</div>
     </div>
   </aside>
   <div class="main">
@@ -277,7 +293,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.6.5';
+const APP_VER   = '1.7.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -407,6 +423,8 @@ function makeTableResizable(table){
     if(th.querySelector('.col-resizer')) return;
     const r=document.createElement('div');
     r.className='col-resizer';
+    r.draggable=false;
+    r.addEventListener('dragstart',e=>e.preventDefault());
     th.appendChild(r);
     r.addEventListener('click',e=>{e.stopPropagation();e.preventDefault();});
     let x0=0,w0=0,dragged=false;
@@ -447,10 +465,166 @@ function makeTableResizable(table){
   });
 }
 
+// ── Column order persistence (per browser) ────────────────────────────────
+function loadColOrder(storageKey, defaultCols){
+  try{
+    const saved=JSON.parse(localStorage.getItem('colOrder_'+storageKey)||'null');
+    if(Array.isArray(saved) && saved.length){
+      const byKey=Object.fromEntries(defaultCols.map(c=>[c.k,c]));
+      const ordered=saved.filter(k=>byKey[k]).map(k=>byKey[k]);
+      defaultCols.forEach(c=>{ if(!saved.includes(c.k)) ordered.push(c); });
+      if(ordered.length===defaultCols.length) return ordered;
+    }
+  }catch{}
+  return defaultCols;
+}
+function saveColOrder(storageKey, cols){
+  try{ localStorage.setItem('colOrder_'+storageKey, JSON.stringify(cols.map(c=>c.k))); }catch{}
+}
+// Makes <th data-col="..."> headers in `table` drag-reorderable; on drop, reorders
+// `cols` (array of {k,l,...}), persists the new order under storageKey, and calls
+// rerenderFn() so the table redraws with the new column order.
+function makeColumnsReorderable(table, storageKey, cols, rerenderFn){
+  if(!table) return;
+  table.querySelectorAll('thead th[data-col]').forEach(th=>{
+    th.draggable=true;
+    th.addEventListener('dragstart',e=>{
+      e.dataTransfer.effectAllowed='move';
+      e.dataTransfer.setData('text/plain', th.dataset.col);
+      th.classList.add('col-dragging');
+    });
+    th.addEventListener('dragend',()=>th.classList.remove('col-dragging'));
+    th.addEventListener('dragover',e=>{ e.preventDefault(); th.classList.add('col-drop-target'); });
+    th.addEventListener('dragleave',()=>th.classList.remove('col-drop-target'));
+    th.addEventListener('drop',e=>{
+      e.preventDefault(); e.stopPropagation();
+      th.classList.remove('col-drop-target');
+      const fromKey=e.dataTransfer.getData('text/plain');
+      const toKey=th.dataset.col;
+      if(!fromKey||fromKey===toKey) return;
+      const newCols=[...cols];
+      const fromIdx=newCols.findIndex(c=>c.k===fromKey);
+      const toIdx=newCols.findIndex(c=>c.k===toKey);
+      if(fromIdx<0||toIdx<0) return;
+      const [moved]=newCols.splice(fromIdx,1);
+      newCols.splice(toIdx,0,moved);
+      saveColOrder(storageKey,newCols);
+      rerenderFn();
+    });
+  });
+}
+// Wires up ◀/▶ buttons (if present in the DOM) to scroll a .table-wrap horizontally.
+function wireScrollButtons(wrapEl, leftBtnId, rightBtnId){
+  const wrap = typeof wrapEl==='string' ? document.querySelector(wrapEl) : wrapEl;
+  const leftBtn=document.getElementById(leftBtnId), rightBtn=document.getElementById(rightBtnId);
+  if(!wrap||!leftBtn||!rightBtn) return;
+  leftBtn.addEventListener('click',()=>wrap.scrollBy({left:-220,behavior:'smooth'}));
+  rightBtn.addEventListener('click',()=>wrap.scrollBy({left:220,behavior:'smooth'}));
+}
+
+// ── Boolean search (AND / OR / NOT / parentheses / "quoted phrases") ──────────
+// Matches a free-text query against a lowercase haystack string built from all
+// searchable field values of a row. Bare terms separated by whitespace are
+// implicitly AND-ed; explicit AND/OR/NOT and parentheses are also supported.
+function _tokenizeBoolQuery(q){
+  const tokens=[]; const re=/\(|\)|"[^"]*"|[^\s()]+/g; let m;
+  while((m=re.exec(q))!==null){
+    const raw=m[0];
+    if(raw==='(') tokens.push({type:'LPAREN'});
+    else if(raw===')') tokens.push({type:'RPAREN'});
+    else if(/^AND$/i.test(raw)) tokens.push({type:'AND'});
+    else if(/^OR$/i.test(raw)) tokens.push({type:'OR'});
+    else if(/^NOT$/i.test(raw)) tokens.push({type:'NOT'});
+    else{
+      let val=raw;
+      if(val.startsWith('"')&&val.endsWith('"')&&val.length>=2) val=val.slice(1,-1);
+      tokens.push({type:'TERM', value:val});
+    }
+  }
+  return tokens;
+}
+function parseBoolQuery(query){
+  const q=(query||'').trim();
+  if(!q) return ()=>true;
+  const tokens=_tokenizeBoolQuery(q);
+  let pos=0;
+  const peek=()=>tokens[pos];
+  const next=()=>tokens[pos++];
+  const startsOperand=t=>t && (t.type==='TERM'||t.type==='LPAREN'||t.type==='NOT');
+  function parseOr(){
+    let left=parseAnd();
+    while(peek() && peek().type==='OR'){
+      next(); const right=parseAnd(); const l=left; left=h=>l(h)||right(h);
+    }
+    return left;
+  }
+  function parseAnd(){
+    let left=parseNot();
+    while(peek() && (peek().type==='AND' || startsOperand(peek()))){
+      if(peek().type==='AND') next();
+      const right=parseNot(); const l=left; left=h=>l(h)&&right(h);
+    }
+    return left;
+  }
+  function parseNot(){
+    if(peek() && peek().type==='NOT'){ next(); const operand=parseNot(); return h=>!operand(h); }
+    return parseAtom();
+  }
+  function parseAtom(){
+    const t=next();
+    if(!t) return ()=>true;
+    if(t.type==='LPAREN'){
+      const inner=parseOr();
+      if(peek() && peek().type==='RPAREN') next();
+      return inner;
+    }
+    if(t.type==='TERM'){
+      const term=t.value.toLowerCase();
+      return h=>h.includes(term);
+    }
+    return ()=>true;
+  }
+  try{
+    const predicate=parseOr();
+    return h=>predicate(h);
+  }catch{ return h=>h.includes(q.toLowerCase()); }
+}
+
 async function loadParts(){
   if(allParts.length>0) return;
   const snap=await getDocs(collection(db,'companies',companyId,'parts_cache'));
   allParts=snap.docs.map(d=>({_id:d.id,...d.data()}));
+}
+
+const _PS_DEFAULT_COLS=[
+  {k:'part_number',   l:'Part Number',    w:'120px'},
+  {k:'drawing_number',l:'Drawing #',       w:'100px'},
+  {k:'drawing_name',  l:'Drawing Name',    w:'130px'},
+  {k:'atlantium_pn',  l:'Customer PN',     w:'100px'},
+  {k:'description',   l:'Description',     w:'200px',wrap:true},
+  {k:'manufacturer',  l:'Manufacturer',    w:'110px'},
+  {k:'price',         l:'FC Price',         w:'85px'},
+  {k:'distributor',   l:'Distributor',      w:'110px'},
+  {k:'priority_price',l:'Priority Price',   w:'95px'},
+  {k:'qty',           l:'QTY',              w:'55px'},
+  {k:'unit',          l:'Units',            w:'55px'},
+  {k:'updatedAt',     l:'Updated',          w:'90px'},
+  {k:'_fc',           l:'FindChips',        w:'80px'},
+];
+// Renders the inner HTML for a single Part Stock cell, given a column key and part row
+function _psCellHTML(k,p){
+  const fcPrice=parseFloat(p.price)||0, prPrice=parseFloat(p.priority_price)||0;
+  let fcC='',prC='';
+  if(fcPrice&&prPrice){fcC=fcPrice<=prPrice?'price-green':'price-red';prC=prPrice<=fcPrice?'price-green':'price-red';}
+  const fcUrl=p.findchips_url||`https://www.findchips.com/search/${encodeURIComponent(p.part_number||'')}`;
+  switch(k){
+    case 'price': return fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:'';
+    case 'priority_price': return prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:'';
+    case 'unit': return esc(p.unit||p.units||'');
+    case 'updatedAt': return fmtDate(p.updatedAt);
+    case '_fc': return p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px">🔍 FC</a>`:'';
+    default: return esc(p[k]);
+  }
 }
 
 async function renderPartStock(filter=''){
@@ -458,10 +632,10 @@ async function renderPartStock(filter=''){
   setActions('');
   try { await loadParts(); } catch(e){ setContent(`<p style="color:red;padding:20px">${e.message}</p>`); return; }
 
-  const q=(filter||'').toLowerCase().trim();
-  const filtered=q
-    ? allParts.filter(p=>[p.part_number,p.drawing_number,p.drawing_name,p.description,p.manufacturer,p.atlantium_pn]
-        .some(v=>String(v||'').toLowerCase().includes(q)))
+  const predicate=parseBoolQuery(filter);
+  const filtered=(filter||'').trim()
+    ? allParts.filter(p=>predicate([p.part_number,p.drawing_number,p.drawing_name,p.atlantium_pn,p.description,
+        p.manufacturer,p.distributor,p.qty,p.unit,p.units].map(v=>String(v||'')).join(' | ').toLowerCase()))
     : allParts;
 
   const sorted=[...filtered].sort((a,b)=>{
@@ -470,58 +644,34 @@ async function renderPartStock(filter=''){
     return sortAsc?(va<vb?-1:va>vb?1:0):(va<vb?1:va>vb?-1:0);
   });
 
-  const COLS=[
-    {k:'part_number',   l:'Part Number',    w:'120px'},
-    {k:'drawing_number',l:'Drawing #',       w:'100px'},
-    {k:'drawing_name',  l:'Drawing Name',    w:'130px'},
-    {k:'atlantium_pn',  l:'Customer PN',     w:'100px'},
-    {k:'description',   l:'Description',     w:'200px',wrap:true},
-    {k:'manufacturer',  l:'Manufacturer',    w:'110px'},
-    {k:'price',         l:'FC Price',         w:'85px'},
-    {k:'distributor',   l:'Distributor',      w:'110px'},
-    {k:'priority_price',l:'Priority Price',   w:'95px'},
-    {k:'qty',           l:'QTY',              w:'55px'},
-    {k:'unit',          l:'Units',            w:'55px'},
-    {k:'updatedAt',     l:'Updated',          w:'90px'},
-    {k:'_fc',           l:'FindChips',        w:'80px'},
-  ];
+  const COLS=loadColOrder('partstock',_PS_DEFAULT_COLS);
   const arrow=k=>k===sortCol?(sortAsc?' ▲':' ▼'):'';
-  const rows=sorted.slice(0,2000).map(p=>{
-    const fcPrice=parseFloat(p.price)||0, prPrice=parseFloat(p.priority_price)||0;
-    let fcC='',prC='';
-    if(fcPrice&&prPrice){fcC=fcPrice<=prPrice?'price-green':'price-red';prC=prPrice<=fcPrice?'price-green':'price-red';}
-    const unit=esc(p.unit||p.units||'');
-    const fcUrl=p.findchips_url||`https://www.findchips.com/search/${encodeURIComponent(p.part_number||'')}`;
-    return`<tr data-id="${esc(p._id)}">
+  const rows=sorted.slice(0,2000).map(p=>`<tr data-id="${esc(p._id)}">
       <td style="text-align:center"><input type="checkbox" class="ps-check" data-id="${esc(p._id)}"></td>
-      <td>${esc(p.part_number)}</td><td>${esc(p.drawing_number)}</td>
-      <td>${esc(p.drawing_name)}</td><td>${esc(p.atlantium_pn)}</td>
-      <td class="wrap">${esc(p.description)}</td><td>${esc(p.manufacturer)}</td>
-      <td>${fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:''}</td>
-      <td>${esc(p.distributor)}</td>
-      <td>${prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:''}</td>
-      <td>${esc(p.qty)}</td><td>${unit}</td><td>${fmtDate(p.updatedAt)}</td>
-      <td>${p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px">🔍 FC</a>`:''}</td>
-    </tr>`;
-  }).join('');
+      ${COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${_psCellHTML(c.k,p)}</td>`).join('')}
+    </tr>`).join('');
 
   setContent(`
     <div class="toolbar">
-      <input class="search-box" id="ps-search" placeholder="Search part number, description, manufacturer…" value="${esc(filter)}">
+      <input class="search-box" id="ps-search" placeholder='Search — supports AND / OR / NOT / "phrase" / (...)' value="${esc(filter)}">
+      <button class="tbl-scroll-btn" id="ps-scroll-left" title="Scroll left">◀</button>
+      <button class="tbl-scroll-btn" id="ps-scroll-right" title="Scroll right">▶</button>
       <button class="btn btn-blue" id="btn-ps-fc" style="white-space:nowrap;flex-shrink:0">🔍 Check FindChips</button>
       <button class="btn btn-ghost" id="btn-ps-priority" style="white-space:nowrap;flex-shrink:0">📥 Priority Import</button>
       <span class="count-badge">${filtered.length} parts${filtered.length>2000?' (showing 2000)':''}</span>
     </div>
-    <div class="table-wrap"><table id="ps-table">
+    <div class="table-wrap" id="ps-table-wrap"><table id="ps-table">
       <thead><tr>
         <th style="width:28px"><input type="checkbox" id="ps-check-all" title="Select all"></th>
-        ${COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}">${c.l}${arrow(c.k)}</th>`).join('')}
+        ${COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}" title="Drag to reorder">${c.l}${arrow(c.k)}</th>`).join('')}
       </tr></thead>
       <tbody>${rows||'<tr class="empty-row"><td colspan="14">No parts found</td></tr>'}</tbody>
     </table></div>`);
 
-  makeTableResizable(document.querySelector('.table-wrap table'));
   const inp=document.getElementById('ps-search');
+  makeTableResizable(document.querySelector('#ps-table'));
+  makeColumnsReorderable(document.querySelector('#ps-table'),'partstock',COLS,()=>renderPartStock(inp.value));
+  wireScrollButtons('#ps-table-wrap','ps-scroll-left','ps-scroll-right');
   inp.addEventListener('input',debounce(()=>{
     const v=inp.value, s=inp.selectionStart;
     renderPartStock(v).then(()=>{
@@ -709,7 +859,7 @@ async function deleteRFQ(id, name){
 // ══════════════════════════════════════════════════════════════════════════════
 // RFQ DETAIL  (show drawings – each drawing has items[] array)
 // ══════════════════════════════════════════════════════════════════════════════
-async function renderRFQDetail(projectId, projectName){
+async function renderRFQDetail(projectId, projectName, searchQ=''){
   setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading BOM…</div>`);
   setActions(`
     <button class="btn btn-blue" id="btn-add-drawing">＋ Add Drawing</button>
@@ -751,7 +901,7 @@ async function renderRFQDetail(projectId, projectName){
     return (parseInt(a.item)||0)-(parseInt(b.item)||0);
   });
 
-  const BOM_COLS=[
+  const _BOM_DEFAULT_COLS=[
     {k:'item',          l:'Item',        w:'45px'},
     {k:'drawing_number',l:'Drawing #',   w:'110px'},
     {k:'revision',      l:'Revision',    w:'90px'},
@@ -762,17 +912,25 @@ async function renderRFQDetail(projectId, projectName){
     {k:'unit',          l:'Units',       w:'55px'},
     {k:'manufacturer',  l:'Manufacturer',w:'110px'},
   ];
+  const BOM_COLS=loadColOrder('bom',_BOM_DEFAULT_COLS);
+  const bomColspan=BOM_COLS.length+2;
+
+  // Boolean text search (AND/OR/NOT/"phrase"/(...)) across all BOM columns
+  const _bomPredicate=parseBoolQuery(searchQ);
+  const allRowsFiltered=(searchQ||'').trim()
+    ? allRows.filter(r=>_bomPredicate(_BOM_DEFAULT_COLS.map(c=>String(r[c.k]||'')).join(' | ').toLowerCase()))
+    : allRows;
 
   // Unique drawing names for filter
-  const uniqueDwgs = [...new Set(allRows.map(r=>r._dwgName).filter(Boolean))];
+  const uniqueDwgs = [...new Set(allRowsFiltered.map(r=>r._dwgName).filter(Boolean))];
 
   // Build rows with drawing-name group headers + data-dwg attributes for filtering
   let lastDwgName = null;
-  const rowsHtml = allRows.map((row,ri)=>{
+  const rowsHtml = allRowsFiltered.map((row,ri)=>{
     let header = '';
     if(row._dwgName && row._dwgName !== lastDwgName){
       lastDwgName = row._dwgName;
-      header = `<tr data-dwg="${esc(row._dwgName)}" class="dwg-grp-hdr" style="background:var(--blue-light)"><td colspan="11" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none"><span class="dwg-toggle" style="cursor:pointer;user-select:none;display:inline-block;width:14px;text-align:center;font-size:11px;margin-right:5px;color:var(--blue-mid)" title="Collapse/expand">▼</span>📄 ${esc(row._dwgName)}</td></tr>`;
+      header = `<tr data-dwg="${esc(row._dwgName)}" class="dwg-grp-hdr" style="background:var(--blue-light)"><td colspan="${bomColspan}" style="font-weight:700;color:var(--blue-dark);padding:5px 9px;border-right:none"><span class="dwg-toggle" style="cursor:pointer;user-select:none;display:inline-block;width:14px;text-align:center;font-size:11px;margin-right:5px;color:var(--blue-mid)" title="Collapse/expand">▼</span>📄 ${esc(row._dwgName)}</td></tr>`;
     }
     return header + `<tr data-dwg="${esc(row._dwgName)}">
       <td style="text-align:center"><input type="checkbox" class="bom-check" data-dwgid="${esc(row._dwgId)}" data-idx="${row._idx}" data-fmt="${row._fmt}"></td>
@@ -788,7 +946,10 @@ async function renderRFQDetail(projectId, projectName){
 
   const filterOpts = uniqueDwgs.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
   setContent(`
-    ${uniqueDwgs.length>=1?`<div class="toolbar" style="margin-bottom:10px">
+    <div class="toolbar" style="margin-bottom:10px">
+      <input class="search-box" id="bom-search" placeholder='Search — supports AND / OR / NOT / "phrase" / (...)' value="${esc(searchQ)}">
+      <button class="tbl-scroll-btn" id="bom-scroll-left" title="Scroll left">◀</button>
+      <button class="tbl-scroll-btn" id="bom-scroll-right" title="Scroll right">▶</button>
       ${uniqueDwgs.length>1?`
       <label style="font-size:12px;color:var(--muted);white-space:nowrap">Filter by Drawing:</label>
       <select id="dwg-filter" class="search-box" style="flex:0 0 auto;max-width:280px;padding:5px 9px">
@@ -796,13 +957,13 @@ async function renderRFQDetail(projectId, projectName){
         ${filterOpts}
       </select>`:''}
       <button class="btn btn-ghost btn-sm" id="btn-collapse-all" style="white-space:nowrap;flex-shrink:0">▶ Collapse All</button>
-      <span class="count-badge" id="bom-flt-count">${allRows.length} parts</span>
-    </div>`:''}
-    <div class="table-wrap"><table id="bom-table">
-      <thead><tr><th style="width:28px"><input type="checkbox" id="bom-check-all" title="Select all"></th>${BOM_COLS.map(c=>`<th style="min-width:${c.w}">${c.l}</th>`).join('')}<th style="width:40px"></th></tr></thead>
-      <tbody id="bom-tbody">${rowsHtml||'<tr class="empty-row"><td colspan="11">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>'}</tbody>
+      <span class="count-badge" id="bom-flt-count">${allRowsFiltered.length} parts</span>
+    </div>
+    <div class="table-wrap" id="bom-table-wrap"><table id="bom-table">
+      <thead><tr><th style="width:28px"><input type="checkbox" id="bom-check-all" title="Select all"></th>${BOM_COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}" title="Drag to reorder">${c.l}</th>`).join('')}<th style="width:40px"></th></tr></thead>
+      <tbody id="bom-tbody">${rowsHtml||`<tr class="empty-row"><td colspan="${bomColspan}">No BOM rows yet. Click ＋ Add Drawing to import.</td></tr>`}</tbody>
     </table></div>
-    <div style="margin-top:8px;font-size:11px;color:var(--muted)">${allRows.length} parts across ${drawings.length} drawing(s)</div>`);
+    <div style="margin-top:8px;font-size:11px;color:var(--muted)">${allRowsFiltered.length} parts across ${drawings.length} drawing(s)</div>`);
 
   // Drawing group collapse/expand (per-group toggle)
   document.querySelectorAll('.dwg-grp-hdr').forEach(hdr=>{
@@ -838,12 +999,25 @@ async function renderRFQDetail(projectId, projectName){
     document.querySelectorAll('#bom-tbody tr').forEach(tr=>{
       tr.style.display=(!val||tr.dataset.dwg===val)?'':'none';
     });
-    const cnt=val?document.querySelectorAll(`#bom-tbody tr[data-dwg="${val}"]:not(.dwg-grp-hdr)`).length:allRows.length;
+    const cnt=val?document.querySelectorAll(`#bom-tbody tr[data-dwg="${val}"]:not(.dwg-grp-hdr)`).length:allRowsFiltered.length;
     const el=document.getElementById('bom-flt-count');
     if(el) el.textContent=cnt+' parts';
   });
 
+  // Boolean search box — re-renders BOM view filtered
+  const bomSearchInp=document.getElementById('bom-search');
+  bomSearchInp?.addEventListener('input',debounce(()=>{
+    const v=bomSearchInp.value, s=bomSearchInp.selectionStart;
+    renderRFQDetail(projectId, projectName, v).then(()=>{
+      const ni=document.getElementById('bom-search');
+      if(ni){ni.focus();ni.setSelectionRange(s,s);}
+    });
+  },260));
+
   makeTableResizable(document.getElementById('bom-table'));
+  makeColumnsReorderable(document.getElementById('bom-table'),'bom',BOM_COLS,
+    ()=>renderRFQDetail(projectId, projectName, bomSearchInp?.value||''));
+  wireScrollButtons('#bom-table-wrap','bom-scroll-left','bom-scroll-right');
 
   document.querySelectorAll('.del-row').forEach((btn,ri)=>{
     btn.addEventListener('click', async()=>{
@@ -1600,7 +1774,7 @@ async function runFCCheckModal(items, mode){
           const sdIdx=it._sdIdx;
           if(sdIdx!==undefined&&sdItems[sdIdx]){
             sdItems[sdIdx].price=priceNum;
-            sdItems[sdIdx].total=priceNum*(sdItems[sdIdx].qty||1);
+            _sdRecalcTotal(sdItems[sdIdx]);
           }
           // Also save the result to Part Stock (parts_cache) — upsert by part_number
           try{
@@ -1878,32 +2052,64 @@ async function savePriorityImport(rows){
 
 // SALES DESK
 // ══════════════════════════════════════════════════════════════════════════════
+const _SD_DEFAULT_COLS=[
+  {k:'part_number',    l:'Part #',          w:'110px'},
+  {k:'drawing_number', l:'Drawing #',       w:'100px'},
+  {k:'description',    l:'Description',     w:'190px',wrap:true},
+  {k:'qty',            l:'QTY',             w:'75px'},
+  {k:'unit',           l:'Units',           w:'55px'},
+  {k:'price',          l:'FC Price',        w:'85px'},
+  {k:'priority_price', l:'Priority Price',  w:'95px'},
+  {k:'total',          l:'Total',           w:'85px'},
+];
+function _sdEffectivePrice(r){ return parseFloat(r.price)||parseFloat(r.priority_price)||0; }
+function _sdRecalcTotal(r){ r.total=_sdEffectivePrice(r)*(parseFloat(r.qty)||1); return r.total; }
+function _sdCellHTML(k,r,i){
+  const fcPrice=parseFloat(r.price)||0, prPrice=parseFloat(r.priority_price)||0;
+  let fcC='',prC='';
+  if(fcPrice&&prPrice){fcC=fcPrice<=prPrice?'price-green':'price-red';prC=prPrice<=fcPrice?'price-green':'price-red';}
+  switch(k){
+    case 'qty': return `<input type="number" class="sd-qty" data-i="${i}" value="${r.qty}" min="0.001" step="any"
+           style="width:60px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
+    case 'price': return fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:'';
+    case 'priority_price': return prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:'';
+    case 'total': return `<strong>$${(r.total||0).toFixed(2)}</strong>`;
+    default: return esc(r[k]);
+  }
+}
+let _sdFilterQ='';
 async function renderSalesDesk(){
   await loadParts();
   setActions('');
+  const SD_COLS=loadColOrder('salesdesk',_SD_DEFAULT_COLS);
 
   const renderSD=()=>{
-    const partsTotal=sdItems.reduce((s,r)=>s+r.total,0);
-    const tbody=sdItems.map((r,i)=>`<tr data-i="${i}">
+    const predicate=parseBoolQuery(_sdFilterQ);
+    const visibleIdx=sdItems.map((r,i)=>i).filter(i=>{
+      if(!_sdFilterQ.trim()) return true;
+      const r=sdItems[i];
+      return predicate(_SD_DEFAULT_COLS.map(c=>String(r[c.k]||'')).join(' | ').toLowerCase());
+    });
+    const partsTotal=sdItems.reduce((s,r)=>s+(r.total||0),0);
+    const tbody=visibleIdx.map(i=>{
+      const r=sdItems[i];
+      return `<tr data-i="${i}">
       <td style="text-align:center"><input type="checkbox" class="sd-check" data-i="${i}"></td>
-      <td>${esc(r.part_number)}</td>
-      <td>${esc(r.drawing_number)}</td>
-      <td class="wrap">${esc(r.description)}</td>
-      <td><input type="number" class="sd-qty" data-i="${i}" value="${r.qty}" min="0.001" step="any"
-           style="width:60px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px"></td>
-      <td>${esc(r.unit)}</td>
-      <td>${fmtPrice(r.price)}</td>
-      <td><strong>$${r.total.toFixed(2)}</strong></td>
+      ${SD_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${_sdCellHTML(c.k,r,i)}</td>`).join('')}
       <td><button class="btn btn-red btn-sm" data-i="${i}">✕</button></td>
-    </tr>`).join('');
+    </tr>`;
+    }).join('');
 
     document.getElementById('sd-tbody').innerHTML=tbody||
-      `<tr class="empty-row"><td colspan="9">No parts added yet</td></tr>`;
+      `<tr class="empty-row"><td colspan="${SD_COLS.length+2}">No parts added yet</td></tr>`;
     document.getElementById('sd-total').textContent='$'+partsTotal.toFixed(2);
+    const cEl=document.getElementById('sd-count'); if(cEl) cEl.textContent=sdItems.length;
+    const fEl=document.getElementById('sd-flt-count');
+    if(fEl) fEl.textContent = _sdFilterQ.trim() ? `${visibleIdx.length}/${sdItems.length} parts` : `${sdItems.length} parts`;
 
     document.querySelectorAll('.sd-qty').forEach(inp=>inp.addEventListener('change',()=>{
       const i=+inp.dataset.i, qty=parseFloat(inp.value)||1;
-      sdItems[i].qty=qty; sdItems[i].total=sdItems[i].price*qty; renderSD();
+      sdItems[i].qty=qty; _sdRecalcTotal(sdItems[i]); renderSD();
     }));
     document.querySelectorAll('#sd-tbody .btn-red').forEach(btn=>btn.addEventListener('click',()=>{
       sdItems.splice(+btn.dataset.i,1); renderSD();
@@ -1916,7 +2122,7 @@ async function renderSalesDesk(){
         <div class="sd-panel-title">BOM Items</div>
         <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap">
           <div class="suggest-wrap">
-            <input class="search-box" id="sd-search" placeholder="Search Part Stock…" style="min-width:0;flex:1">
+            <input class="search-box" id="sd-search" placeholder="Search Part Stock to add…" style="min-width:0;flex:1">
             <div class="suggest-list" id="sd-suggest" style="display:none"></div>
           </div>
           <button class="btn btn-blue" id="btn-sd-file">📎 From File (BOM)</button>
@@ -1924,12 +2130,18 @@ async function renderSalesDesk(){
           <button class="btn btn-blue" id="btn-sd-fc" style="white-space:nowrap">🔍 FindChips</button>
           <button class="btn btn-ghost" id="btn-sd-clear">Clear All</button>
         </div>
-        <div class="sd-scroll">
-          <table style="width:100%">
+        <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap;align-items:center">
+          <input class="search-box" id="sd-filter" placeholder='Filter items — AND / OR / NOT / "phrase" / (...)' style="min-width:0;flex:1" value="${esc(_sdFilterQ)}">
+          <button class="tbl-scroll-btn" id="sd-scroll-left" title="Scroll left">◀</button>
+          <button class="tbl-scroll-btn" id="sd-scroll-right" title="Scroll right">▶</button>
+          <span class="count-badge" id="sd-flt-count" style="white-space:nowrap">${sdItems.length} parts</span>
+        </div>
+        <div class="sd-scroll table-wrap" id="sd-table-wrap">
+          <table style="width:100%" id="sd-table">
             <thead><tr>
               <th style="width:28px"><input type="checkbox" id="sd-check-all" title="Select all"></th>
-              <th>Part #</th><th>Drawing #</th><th>Description</th><th>QTY</th>
-              <th>Units</th><th>Price</th><th>Total</th><th></th>
+              ${SD_COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}" title="Drag to reorder">${c.l}</th>`).join('')}
+              <th style="width:40px"></th>
             </tr></thead>
             <tbody id="sd-tbody"></tbody>
           </table>
@@ -1952,6 +2164,17 @@ async function renderSalesDesk(){
     </div>`);
 
   renderSD();
+  makeColumnsReorderable(document.getElementById('sd-table'),'salesdesk',SD_COLS,()=>renderSalesDesk());
+  wireScrollButtons('#sd-table-wrap','sd-scroll-left','sd-scroll-right');
+
+  const sdFilterInp=document.getElementById('sd-filter');
+  sdFilterInp.addEventListener('input',debounce(()=>{
+    const s=sdFilterInp.selectionStart;
+    _sdFilterQ=sdFilterInp.value;
+    renderSD();
+    const ni=document.getElementById('sd-filter');
+    if(ni){ni.focus();ni.setSelectionRange(s,s);}
+  },220));
 
   // Search Part Stock
   const sdSearch=document.getElementById('sd-search');
@@ -1975,10 +2198,11 @@ async function renderSalesDesk(){
       </div>`).join('');
     sdSuggest.querySelectorAll('.suggest-item').forEach(el=>el.addEventListener('click',()=>{
       const p=suggestions[+el.dataset.si];
-      const price=parseFloat(p.price)||parseFloat(p.priority_price)||0;
-      sdItems.push({part_number:p.part_number||'',description:p.description||'',
+      const item={part_number:p.part_number||'',description:p.description||'',
         drawing_number:p.drawing_number||p.drawing_name||'',
-        qty:1,unit:p.unit||p.units||'pcs',price,total:price});
+        qty:1,unit:p.unit||p.units||'pcs',price:parseFloat(p.price)||0,priority_price:parseFloat(p.priority_price)||0,total:0};
+      _sdRecalcTotal(item);
+      sdItems.push(item);
       sdSearch.value=''; sdSuggest.style.display='none';
       renderSD();
       // Update count
@@ -1987,7 +2211,7 @@ async function renderSalesDesk(){
   });
   document.addEventListener('click',e=>{if(!e.target.closest('.suggest-wrap'))sdSuggest.style.display='none';});
 
-  document.getElementById('btn-sd-clear').addEventListener('click',()=>{sdItems=[];renderSD();});
+  document.getElementById('btn-sd-clear').addEventListener('click',()=>{sdItems=[];_sdFilterQ='';renderSD();});
   document.getElementById('btn-sd-print').addEventListener('click',()=>window.print());
 
   // SD check-all toggle
@@ -2034,13 +2258,15 @@ async function renderSalesDesk(){
       const dwg=btn.dataset.dwg;
       const matching=allParts.filter(p=>(p.drawing_number||p.drawing_name)===dwg);
       for(const p of matching){
-        const price=parseFloat(p.price)||parseFloat(p.priority_price)||0;
         const qty=parseFloat(p.qty)||1;
-        sdItems.push({
+        const item={
           part_number:p.part_number||'', description:p.description||'',
           drawing_number:p.drawing_number||p.drawing_name||dwg||'',
-          qty, unit:p.unit||p.units||'pcs', price, total:price*qty
-        });
+          qty, unit:p.unit||p.units||'pcs',
+          price:parseFloat(p.price)||0, priority_price:parseFloat(p.priority_price)||0, total:0
+        };
+        _sdRecalcTotal(item);
+        sdItems.push(item);
       }
       closeModal();
       renderSalesDesk();
@@ -2184,13 +2410,15 @@ async function handleSDFiles(files){
       for(const r of updatedRows){
         const pn=(r.part_number||'').trim().toLowerCase();
         const match=pn?allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
-        const price=match?(parseFloat(match.price)||parseFloat(match.priority_price)||0):0;
         const qty=parseFloat(r.qty)||1;
-        sdItems.push({
+        const item={
           part_number:r.part_number||r.item||'', description:r.description||'',
           drawing_number:r.drawing_number||match?.drawing_number||match?.drawing_name||'',
-          qty, unit:r.unit||match?.unit||match?.units||'pcs', price, total:price*qty
-        });
+          qty, unit:r.unit||match?.unit||match?.units||'pcs',
+          price:match?parseFloat(match.price)||0:0, priority_price:match?parseFloat(match.priority_price)||0:0, total:0
+        };
+        _sdRecalcTotal(item);
+        sdItems.push(item);
         added++;
       }
       toast(`Added ${added} parts to Sales Desk`,'success');
