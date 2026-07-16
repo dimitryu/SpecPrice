@@ -192,6 +192,13 @@
     .sd-split { display:grid; grid-template-columns:1fr 300px; gap:14px; height:calc(100vh - 110px); }
     .sd-panel { background:#fff; border:1px solid var(--border); border-radius:9px;
                 display:flex; flex-direction:column; overflow:hidden; }
+    /* Same look as .sd-panel but WITHOUT the mobile max-height/overflow:hidden
+       behavior below — .sd-panel's mobile constraint is meant for the Sales Desk
+       BOM-items panel (which has its own internal .sd-scroll region), and was
+       clipping content (e.g. the Save Settings button) when reused on the
+       Settings page, whose panels can be taller than 60vh and have no inner
+       scroll region of their own. */
+    .settings-panel { background:#fff; border:1px solid var(--border); border-radius:9px; }
     .sd-panel-title { padding:9px 13px; font-size:12px; font-weight:700;
                       color:var(--blue-dark); background:var(--blue-light);
                       border-bottom:1px solid var(--border); flex-shrink:0; }
@@ -298,7 +305,7 @@
       </div>
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.14</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.15</div>
     </div>
   </aside>
   <div class="main">
@@ -362,7 +369,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.14';
+const APP_VER   = '1.8.15';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3607,7 +3614,7 @@ async function deleteCustomer(id,name){
 function renderSettingsPage(){
   setActions('');
   setContent(`
-    <div class="sd-panel" style="padding:20px 22px;max-width:520px">
+    <div class="settings-panel" style="padding:20px 22px;max-width:520px">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">AI API Keys</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Used for extracting BOMs from PDF/image drawings.</p>
       <div class="form-field">
@@ -3636,13 +3643,13 @@ function renderSettingsPage(){
       <button class="btn btn-green" id="btn-save-settings">💾 Save Settings</button>
     </div>
 
-    <div class="sd-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Users</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Manage user accounts, companies, and roles.</p>
       <div id="stg-users-body"></div>
     </div>
 
-    <div class="sd-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Companies</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Manage companies and per-company branding (logo).</p>
       <div id="stg-companies-body"></div>
