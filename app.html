@@ -251,7 +251,7 @@
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.2</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.3</div>
     </div>
   </aside>
   <div class="main">
@@ -313,7 +313,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.2';
+const APP_VER   = '1.8.3';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1744,6 +1744,14 @@ async function _fcFetchPart(partNumber, qty=0){
   // then pick the single break whose quantity is closest to the target qty — not
   // just whichever distributor happens to be cheapest overall (that can pick a
   // price meant for a completely different order size).
+  //
+  // FindChips' search results page is fuzzy: searching "LM358N" also lists rows for
+  // related-but-different parts like "LM358N/NOPB", "LM358N-NOPB", "LM358NG", etc.
+  // Each result row's first (Part #) cell contains that row's own manufacturer part
+  // number, normally as a link (e.g. "Details <a>LM358N/NOPB</a> DISTI # 34AH0959").
+  // Only rows whose Part # matches the searched part number EXACTLY (case-insensitive)
+  // are used — anything else is a different part and must not contribute pricing.
+  const pnNorm=pn.toUpperCase();
   const candidates=[];
   for(const sec of doc.querySelectorAll('[class*="distributor-results"]')){
     let dist='';
@@ -1754,6 +1762,12 @@ async function _fcFetchPart(partNumber, qty=0){
     for(const row of sec.querySelectorAll('tr')){
       const cells=[...row.querySelectorAll('td')];
       if(cells.length<3) continue;
+      // Row's own part number = first non-"Details" link text in the Part # (first) cell,
+      // falling back to the raw cell text if no such link is found.
+      const linkEls=[...cells[0].querySelectorAll('a')];
+      const mpnLink=linkEls.find(a=>{const t=a.textContent.trim();return t&&!/^details$/i.test(t);});
+      const rowPn=(mpnLink?mpnLink.textContent:cells[0].textContent).trim().toUpperCase();
+      if(rowPn!==pnNorm) continue;
       const texts=cells.map(c=>c.textContent.trim().replace(/\s+/g,' '));
       const brks=_fcParsePriceBreaks(texts);
       if(!brks.length) continue;
