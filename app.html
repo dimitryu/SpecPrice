@@ -93,8 +93,15 @@
     .search-clear.show { display:flex; }
 
     /* ── Tables ── */
+    /* Bounded so the box itself scrolls internally once rows overflow it — this is what
+       makes `thead th { position:sticky }` below actually stick (a sticky element only
+       sticks within its nearest ancestor that truly scrolls; with no height cap here the
+       box just grows forever and the whole page scrolls instead, taking the toolbar/search
+       row and header along with it). Modals that embed a table override this max-height
+       inline with their own (smaller) value — this default only applies to the main
+       Part Stock / RFQ BOM table views. */
     .table-wrap { overflow:auto; border-radius:8px; border:1px solid var(--border); background:#fff;
-                  scrollbar-width:auto; }
+                  scrollbar-width:auto; max-height:calc(100vh - 250px); }
     .table-wrap::-webkit-scrollbar { height:12px; width:12px; }
     .table-wrap::-webkit-scrollbar-track { background:#EDF2F7; }
     .table-wrap::-webkit-scrollbar-thumb { background:var(--blue-mid); border-radius:6px; border:2px solid #EDF2F7; }
@@ -291,7 +298,7 @@
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.5</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.6</div>
     </div>
   </aside>
   <div class="main">
@@ -354,7 +361,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.5';
+const APP_VER   = '1.8.6';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
