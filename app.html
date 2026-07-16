@@ -233,7 +233,7 @@
     <div class="sb-foot">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.6.4</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.6.5</div>
     </div>
   </aside>
   <div class="main">
@@ -277,7 +277,7 @@ let sortCol     = 'part_number';
 let sortAsc     = true;
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.6.4';
+const APP_VER   = '1.6.5';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -478,6 +478,7 @@ async function renderPartStock(filter=''){
     {k:'description',   l:'Description',     w:'200px',wrap:true},
     {k:'manufacturer',  l:'Manufacturer',    w:'110px'},
     {k:'price',         l:'FC Price',         w:'85px'},
+    {k:'distributor',   l:'Distributor',      w:'110px'},
     {k:'priority_price',l:'Priority Price',   w:'95px'},
     {k:'qty',           l:'QTY',              w:'55px'},
     {k:'unit',          l:'Units',            w:'55px'},
@@ -497,6 +498,7 @@ async function renderPartStock(filter=''){
       <td>${esc(p.drawing_name)}</td><td>${esc(p.atlantium_pn)}</td>
       <td class="wrap">${esc(p.description)}</td><td>${esc(p.manufacturer)}</td>
       <td>${fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:''}</td>
+      <td>${esc(p.distributor)}</td>
       <td>${prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:''}</td>
       <td>${esc(p.qty)}</td><td>${unit}</td><td>${fmtDate(p.updatedAt)}</td>
       <td>${p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px">🔍 FC</a>`:''}</td>
@@ -515,7 +517,7 @@ async function renderPartStock(filter=''){
         <th style="width:28px"><input type="checkbox" id="ps-check-all" title="Select all"></th>
         ${COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}">${c.l}${arrow(c.k)}</th>`).join('')}
       </tr></thead>
-      <tbody>${rows||'<tr class="empty-row"><td colspan="13">No parts found</td></tr>'}</tbody>
+      <tbody>${rows||'<tr class="empty-row"><td colspan="14">No parts found</td></tr>'}</tbody>
     </table></div>`);
 
   makeTableResizable(document.querySelector('.table-wrap table'));
@@ -786,12 +788,14 @@ async function renderRFQDetail(projectId, projectName){
 
   const filterOpts = uniqueDwgs.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
   setContent(`
-    ${uniqueDwgs.length>1?`<div class="toolbar" style="margin-bottom:10px">
+    ${uniqueDwgs.length>=1?`<div class="toolbar" style="margin-bottom:10px">
+      ${uniqueDwgs.length>1?`
       <label style="font-size:12px;color:var(--muted);white-space:nowrap">Filter by Drawing:</label>
       <select id="dwg-filter" class="search-box" style="flex:0 0 auto;max-width:280px;padding:5px 9px">
         <option value="">All Drawings (${uniqueDwgs.length})</option>
         ${filterOpts}
-      </select>
+      </select>`:''}
+      <button class="btn btn-ghost btn-sm" id="btn-collapse-all" style="white-space:nowrap;flex-shrink:0">▶ Collapse All</button>
       <span class="count-badge" id="bom-flt-count">${allRows.length} parts</span>
     </div>`:''}
     <div class="table-wrap"><table id="bom-table">
@@ -800,7 +804,7 @@ async function renderRFQDetail(projectId, projectName){
     </table></div>
     <div style="margin-top:8px;font-size:11px;color:var(--muted)">${allRows.length} parts across ${drawings.length} drawing(s)</div>`);
 
-  // Drawing group collapse/expand
+  // Drawing group collapse/expand (per-group toggle)
   document.querySelectorAll('.dwg-grp-hdr').forEach(hdr=>{
     hdr.querySelector('.dwg-toggle')?.addEventListener('click',e=>{
       const dwg=hdr.dataset.dwg;
@@ -811,6 +815,21 @@ async function renderRFQDetail(projectId, projectName){
         if(tr.dataset.dwg===dwg) tr.style.display=collapsing?'none':'';
       });
     });
+  });
+
+  // Collapse All / Expand All toggle
+  let _allCollapsed=false;
+  document.getElementById('btn-collapse-all')?.addEventListener('click',e=>{
+    _allCollapsed=!_allCollapsed;
+    document.querySelectorAll('.dwg-grp-hdr').forEach(hdr=>{
+      const arrow=hdr.querySelector('.dwg-toggle');
+      if(arrow) arrow.textContent=_allCollapsed?'▶':'▼';
+      const dwg=hdr.dataset.dwg;
+      document.querySelectorAll('#bom-tbody tr:not(.dwg-grp-hdr)').forEach(tr=>{
+        if(tr.dataset.dwg===dwg) tr.style.display=_allCollapsed?'none':'';
+      });
+    });
+    e.currentTarget.textContent=_allCollapsed?'▼ Expand All':'▶ Collapse All';
   });
 
   // Drawing filter
@@ -1004,6 +1023,7 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
       const fileRevision = _spaceIdx>0 ? _fileBase.slice(_spaceIdx+1).trim() : '';
       extractedRows.forEach(r=>{
         if(!r.drawing_number) r.drawing_number=effectiveDwgName;
+        if(!r.drawing_name) r.drawing_name=effectiveDwgName;
         if(!r.revision) r.revision=fileRevision;
       });
 
@@ -1457,7 +1477,11 @@ async function _fcFetchPart(partNumber, qty=0){
   if(/no results were found|0 results|no parts found/i.test(html))
     return{price:'Not found',distributor:'',stock:'',url:fcUrl};
   const doc=new DOMParser().parseFromString(html,'text/html');
-  const offers=[];
+  // Collect every individual (qty,price) price-break across ALL distributor rows,
+  // then pick the single break whose quantity is closest to the target qty — not
+  // just whichever distributor happens to be cheapest overall (that can pick a
+  // price meant for a completely different order size).
+  const candidates=[];
   for(const sec of doc.querySelectorAll('[class*="distributor-results"]')){
     let dist='';
     for(const sel of ['[class*="distributor-name"]','[class*="distributor-title"]','h2','h3','h4']){
@@ -1470,17 +1494,29 @@ async function _fcFetchPart(partNumber, qty=0){
       const texts=cells.map(c=>c.textContent.trim().replace(/\s+/g,' '));
       const brks=_fcParsePriceBreaks(texts);
       if(!brks.length) continue;
-      const price=qty>0?_fcNearestBreakPrice(brks,qty):('$'+brks[0][1].toFixed(4).replace(/\.?0+$/,''));
       let stock='';
       for(const t of texts){
         if(!t.includes('$')&&t.length<20){const m=t.match(/^([\d,]+)$/);if(m){stock=m[1];break;}}
       }
-      offers.push({price,distributor:dist,stock,url:fcUrl});
+      for(const [bqty,bprice] of brks){
+        candidates.push({qty:bqty, price:bprice, distributor:dist, stock});
+      }
     }
   }
-  if(!offers.length) return{price:'Not found',distributor:'',stock:'',url:fcUrl};
-  offers.sort((a,b)=>(parseFloat(a.price.replace(/[^0-9.]/g,''))||Infinity)-(parseFloat(b.price.replace(/[^0-9.]/g,''))||Infinity));
-  return{...offers[0],url:fcUrl};
+  if(!candidates.length) return{price:'Not found',distributor:'',stock:'',url:fcUrl};
+  const target=qty>0?qty:1;
+  let best=candidates[0];
+  let bestDist=Math.abs(target-best.qty);
+  for(const c of candidates.slice(1)){
+    const d=Math.abs(target-c.qty);
+    if(d<bestDist || (d===bestDist && c.price<best.price)){ best=c; bestDist=d; }
+  }
+  return {
+    price: '$'+best.price.toFixed(4).replace(/\.?0+$/,''),
+    distributor: best.distributor,
+    stock: best.stock,
+    url: fcUrl
+  };
 }
 
 // mode: 'parts' → save to Firestore allParts; 'sd' → update sdItems in memory
@@ -1676,15 +1712,22 @@ async function handlePriorityFile(file){
     const rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:false,defval:''});
     if(!rows.length) throw new Error('The file appears to be empty.');
 
+    // Header row may have fewer cells than some data rows actually contain (Excel
+    // pivot-table exports, trailing unlabeled columns, etc). Pad the header list out
+    // to the widest row in the file so every real data column gets its own selectable
+    // option in the mapping dropdowns below — otherwise the Price dropdown could end
+    // up with no valid option and silently collapse to the same column as Part Number.
+    const maxCols = rows.reduce((m,r)=>Math.max(m, r.length), 0);
+    const headers = Array.from({length:maxCols}, (_,i)=>rows[0][i] ?? '');
+
     // Suggest column mapping (Part Number may be labeled "מק"ט", Price may be "מחיר ליחידה") —
     // let the user confirm/adjust before importing, rather than guessing silently.
-    const headers=rows[0];
     let pnCol=_priorityFindCol(headers,_PN_HEADER_HINTS);
     let prCol=_priorityFindCol(headers,_PRICE_HEADER_HINTS);
     const headerDetected = pnCol>=0 || prCol>=0;
     if(pnCol<0) pnCol=0;
     if(prCol<0) prCol=(pnCol===1?0:1);
-    if(prCol===pnCol) prCol=(pnCol===0?1:0);
+    if(prCol===pnCol) prCol=(pnCol===0 && maxCols>1)?1:(pnCol>0?0:1);
 
     showPriorityColumnMap(rows, headers, pnCol, prCol, headerDetected, body, foot);
   }catch(e){
@@ -2106,6 +2149,7 @@ async function handleSDFiles(files){
       const fileRevision=_spaceIdx>0 ? _fileBase.slice(_spaceIdx+1).trim() : '';
       extractedRows.forEach(r=>{
         if(!r.drawing_number) r.drawing_number=effectiveDwgName;
+        if(!r.drawing_name) r.drawing_name=effectiveDwgName;
         if(!r.revision) r.revision=fileRevision;
       });
 
