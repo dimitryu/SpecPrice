@@ -293,12 +293,12 @@
       <div class="nav-item" data-view="settings" id="nav-settings" style="display:none"><span class="icon">⚙️</span>Settings</div>
     </nav>
     <div class="sb-foot">
-      <img id="sb-logo" src="https://robotics.radion.co.il/wp-content/uploads/2024/11/cropped-Radion-Logo.png" alt="Logo"
-           style="width:100%;max-height:48px;object-fit:contain;display:block;margin-bottom:8px"
-           onerror="this.style.display='none'">
+      <div id="sb-logo" style="width:100%;height:48px;display:flex;align-items:center;justify-content:center;margin-bottom:8px;overflow:hidden">
+        <span style="font-size:22px;color:#607D8B">🏢</span>
+      </div>
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.13</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.14</div>
     </div>
   </aside>
   <div class="main">
@@ -362,7 +362,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.13';
+const APP_VER   = '1.8.14';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -397,7 +397,7 @@ onAuthStateChanged(auth, async user => {
   document.getElementById('user-email-sb').textContent = user.email;
   try {
     await initCompany(user);
-  } catch(e) { splashErr('Company load error: ' + e.message); return; }
+  } catch(e) { splashErr(e.isDisabled ? e.message : ('Company load error: ' + e.message)); return; }
   document.getElementById('splash').style.display = 'none';
   document.getElementById('shell').style.display = 'flex';
   route('rfq');
@@ -410,6 +410,12 @@ async function initCompany(user) {
   try {
     const uSnap = await getDoc(doc(db,'users',user.uid));
     const uData = uSnap.data() || {};
+    if (uData.disabled === true) {
+      await signOut(auth);
+      const err = new Error('This account has been disabled. Contact your administrator.');
+      err.isDisabled = true;
+      throw err;
+    }
     companyId = uData.company_id || '';
     currentUserRole = uData.role || '';
     if (currentUserRole === 'admin') {
@@ -429,12 +435,14 @@ async function initCompany(user) {
       geminiKey = cData.gemini_key || '';
       _sdLaborRateMin = parseFloat(cData.labor_rate_min) || 0.5;
       document.getElementById('sb-company').textContent = companyName;
-      if (cData.logo_b64) {
-        const logoEl = document.getElementById('sb-logo');
-        if (logoEl) logoEl.src = cData.logo_b64;
+      const logoEl = document.getElementById('sb-logo');
+      if (logoEl) {
+        logoEl.innerHTML = cData.logo_b64
+          ? `<img src="${cData.logo_b64}" style="max-width:100%;max-height:48px;object-fit:contain">`
+          : `<span style="font-size:22px;color:#607D8B">🏢</span>`;
       }
     }
-  } catch(e) { console.error('initCompany', e); }
+  } catch(e) { console.error('initCompany', e); if (e.isDisabled) throw e; }
 }
 function pickCompany(docs) {
   return new Promise(resolve => {
@@ -943,6 +951,10 @@ async function renderRFQList(){
   filtered.forEach(p=>{
     const key=p.customer_name||'';
     (groupsMap[key]=groupsMap[key]||[]).push(p);
+  });
+  // Within each customer group, RFQs are sorted alphabetically (A→Z) by name.
+  Object.keys(groupsMap).forEach(key=>{
+    groupsMap[key].sort((a,b)=>String(a.name||a._id||'').localeCompare(String(b.name||b._id||'')));
   });
   const groupKeys=Object.keys(groupsMap).sort((a,b)=>{
     if(!a) return 1; if(!b) return -1;
@@ -3731,12 +3743,13 @@ async function renderSettingsUsersSection(){
     <div class="toolbar"><span class="count-badge">${users.length} users</span>
       <button class="btn btn-green btn-sm" id="btn-invite-user" style="margin-left:auto">＋ Invite User</button></div>
     <div class="table-wrap"><table id="stg-users-table">
-      <thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Role</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Role</th><th>Status</th><th></th></tr></thead>
       <tbody>${users.map(u=>`<tr data-id="${esc(u._id)}">
         <td>${esc(u.displayName||'')}</td>
         <td>${esc(u.email||'')}</td>
         <td>${esc(compName(u.company_id))}</td>
         <td>${esc(u.role||'')}</td>
+        <td>${u.disabled===true?'<span class="price-red" style="font-weight:600">Disabled</span>':'<span class="price-green">Active</span>'}</td>
         <td style="text-align:right"><button class="btn btn-ghost btn-sm stg-edit-user" data-id="${esc(u._id)}">✏️ Edit</button></td>
       </tr>`).join('')}</tbody>
     </table></div>`;
@@ -3817,9 +3830,16 @@ function openEditUserModal(u,companies){
       <div class="form-field" style="margin-top:10px"><label>Role</label>
         <select class="form-input" id="edu-role-sel">${ROLES.map(([v,l])=>`<option value="${v}" ${v===u.role?'selected':''}>${l}</option>`).join('')}</select>
       </div>
+      <div class="form-field" style="margin-top:10px">
+        <label style="display:flex;align-items:center;gap:7px;cursor:pointer">
+          <input type="checkbox" id="edu-disabled-chk" ${u.disabled===true?'checked':''} style="width:auto">
+          <span>Account disabled (blocks sign-in)</span>
+        </label>
+      </div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+      <button class="btn btn-red btn-sm" id="btn-edu-delete">🗑 Delete User</button>
       <button class="btn btn-green" id="btn-edu-save">💾 Save</button>
     </div>
   </div>`);
@@ -3828,13 +3848,24 @@ function openEditUserModal(u,companies){
   document.getElementById('btn-edu-save').addEventListener('click',async()=>{
     const companyIdVal=document.getElementById('edu-company-sel').value;
     const role=document.getElementById('edu-role-sel').value;
+    const disabled=document.getElementById('edu-disabled-chk').checked;
     const btn=document.getElementById('btn-edu-save');
     btn.disabled=true; btn.textContent='Saving…';
     try{
-      await updateDoc(doc(db,'users',u._id),{company_id:companyIdVal,role,updatedAt:serverTimestamp()});
+      await updateDoc(doc(db,'users',u._id),{company_id:companyIdVal,role,disabled,updatedAt:serverTimestamp()});
       toast('User updated','success');
       closeModal(); renderSettingsUsersSection();
     }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='💾 Save'; }
+  });
+  document.getElementById('btn-edu-delete').addEventListener('click', async()=>{
+    if(!confirm(`Delete user "${u.displayName||u.email}"?\n\nThis removes their profile, company assignment, and role. Note: their sign-in account itself isn't deleted (that requires a backend) — use "disable" instead if you need to reliably block sign-in.`)) return;
+    const btn=document.getElementById('btn-edu-delete');
+    btn.disabled=true; btn.textContent='Deleting…';
+    try{
+      await deleteDoc(doc(db,'users',u._id));
+      toast('User profile deleted','success');
+      closeModal(); renderSettingsUsersSection();
+    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='🗑 Delete User'; }
   });
 }
 
@@ -3966,7 +3997,9 @@ async function renderSettingsCompaniesSection(){
       await setDoc(doc(db,'companies',sel.value),{logo_b64:_brdLogoB64},{merge:true});
       if(sel.value===companyId){
         const logoEl=document.getElementById('sb-logo');
-        if(logoEl) logoEl.src=_brdLogoB64||'https://robotics.radion.co.il/wp-content/uploads/2024/11/cropped-Radion-Logo.png';
+        if(logoEl) logoEl.innerHTML=_brdLogoB64
+          ? `<img src="${_brdLogoB64}" style="max-width:100%;max-height:48px;object-fit:contain">`
+          : `<span style="font-size:22px;color:#607D8B">🏢</span>`;
       }
       toast('Branding saved','success');
       const c=companies.find(x=>x._id===sel.value); if(c) c.logo_b64=_brdLogoB64;
