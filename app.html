@@ -290,7 +290,7 @@
       <div class="nav-item" data-view="sales-desk"><span class="icon">💰</span>Sales Desk</div>
       <div class="nav-item" data-view="part-stock"><span class="icon">📦</span>Part Stock</div>
       <div class="nav-item" data-view="customers"><span class="icon">👥</span>Customers</div>
-      <div class="nav-item" data-view="settings"><span class="icon">⚙️</span>Settings</div>
+      <div class="nav-item" data-view="settings" id="nav-settings" style="display:none"><span class="icon">⚙️</span>Settings</div>
       <div class="nav-item" data-view="admin" id="nav-admin" style="display:none"><span class="icon">👑</span>Admin</div>
     </nav>
     <div class="sb-foot">
@@ -299,7 +299,7 @@
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.10</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.11</div>
     </div>
   </aside>
   <div class="main">
@@ -363,7 +363,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.10';
+const APP_VER   = '1.8.11';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -416,6 +416,8 @@ async function initCompany(user) {
     if (currentUserRole === 'admin') {
       const navAdmin = document.getElementById('nav-admin');
       if (navAdmin) navAdmin.style.display = 'flex';
+      const navSettings = document.getElementById('nav-settings');
+      if (navSettings) navSettings.style.display = 'flex';
     }
     if (!companyId) {
       const snap = await getDocs(collection(db,'companies'));
@@ -490,7 +492,10 @@ function route(v){
   else if(currentView==='rfq') renderRFQList();
   else if(currentView==='sales-desk') renderSalesDesk();
   else if(currentView==='customers') renderCustomers();
-  else if(currentView==='settings'){ renderSettingsPage(); }
+  else if(currentView==='settings'){
+    if(currentUserRole!=='admin'){ route('rfq'); return; }
+    renderSettingsPage();
+  }
   else if(currentView==='admin'){
     if(currentUserRole!=='admin'){ route('rfq'); return; }
     renderAdminPage();
