@@ -291,7 +291,7 @@
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.4</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.5</div>
     </div>
   </aside>
   <div class="main">
@@ -354,7 +354,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.4';
+const APP_VER   = '1.8.5';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -610,6 +610,27 @@ function wireSearchClear(inputId, clearId){
     inp.focus();
   });
 }
+// Shift-click range selection for a table's row checkboxes: click one checkbox, then
+// shift-click another — every checkbox in between (inclusive) is set to match the
+// checked state of the one just clicked. Uses event delegation on `container` so it
+// keeps working across re-renders of the checkboxes inside it (e.g. Sales Desk rows
+// re-rendered by renderSD()) without needing to be re-wired each time.
+function wireShiftCheck(container, checkboxSelector){
+  if(!container) return;
+  let lastIdx=null;
+  container.addEventListener('click',e=>{
+    const cb=e.target.closest(checkboxSelector);
+    if(!cb) return;
+    const all=[...container.querySelectorAll(checkboxSelector)];
+    const idx=all.indexOf(cb);
+    if(e.shiftKey && lastIdx!==null && idx>=0){
+      const [from,to]=lastIdx<idx?[lastIdx,idx]:[idx,lastIdx];
+      const state=cb.checked;
+      for(let i=from;i<=to;i++) all[i].checked=state;
+    }
+    lastIdx=idx;
+  });
+}
 
 // ── Boolean search (AND / OR / NOT / parentheses / "quoted phrases") ──────────
 // Matches a free-text query against a lowercase haystack string built from all
@@ -766,6 +787,7 @@ async function renderPartStock(filter=''){
       <select class="search-box" id="ps-page-size" style="flex:0 0 auto;min-width:auto;width:auto;padding:7px 9px">${pageSizeOpts}</select>
       <button class="btn btn-blue" id="btn-ps-fc" style="white-space:nowrap;flex-shrink:0">🔍 Check FindChips</button>
       <button class="btn btn-ghost" id="btn-ps-priority" style="white-space:nowrap;flex-shrink:0">📥 Priority Import</button>
+      <button class="btn btn-red" id="btn-ps-delsel" style="white-space:nowrap;flex-shrink:0">🗑 Delete Selected</button>
       <span class="count-badge">${totalItems} parts — page ${psPage}/${totalPages}</span>
     </div>
     <div class="table-wrap" id="ps-table-wrap"><table id="ps-table">
@@ -779,6 +801,7 @@ async function renderPartStock(filter=''){
 
   const inp=document.getElementById('ps-search');
   wireSearchClear('ps-search','ps-search-clear');
+  wireShiftCheck(document.querySelector('#ps-table'),'.ps-check');
   makeTableResizable(document.querySelector('#ps-table'));
   makeColumnsReorderable(document.querySelector('#ps-table'),'partstock',COLS,()=>renderPartStock(inp.value));
   wireScrollButtons('#ps-table-wrap','ps-scroll-left','ps-scroll-right');
@@ -835,6 +858,19 @@ async function renderPartStock(filter=''){
   // Priority Import button
   document.getElementById('btn-ps-priority')?.addEventListener('click',()=>{
     openPriorityImportModal();
+  });
+
+  // Delete Selected — removes checked rows from Part Stock (parts_cache) in Firestore
+  document.getElementById('btn-ps-delsel')?.addEventListener('click', async()=>{
+    const checked=[...document.querySelectorAll('.ps-check:checked')].map(cb=>cb.dataset.id);
+    if(!checked.length){ toast('No rows selected','error'); return; }
+    if(!confirm(`Delete ${checked.length} selected part(s) from Part Stock? This cannot be undone.`)) return;
+    try{
+      await Promise.all(checked.map(id=>deleteDoc(doc(db,'companies',companyId,'parts_cache',id))));
+      allParts=allParts.filter(p=>!checked.includes(p._id));
+      toast(`Deleted ${checked.length} part(s)`,'success');
+      renderPartStock(inp.value);
+    }catch(e){ toast('Error: '+e.message,'error'); }
   });
 }
 
@@ -1167,6 +1203,7 @@ async function renderRFQDetail(projectId, projectName, searchQ=''){
   makeColumnsReorderable(document.getElementById('bom-table'),'bom',BOM_COLS,
     ()=>renderRFQDetail(projectId, projectName, bomSearchInp?.value||''));
   wireScrollButtons('#bom-table-wrap','bom-scroll-left','bom-scroll-right');
+  wireShiftCheck(document.getElementById('bom-table'),'.bom-check');
 
   document.querySelectorAll('.del-row').forEach((btn,ri)=>{
     btn.addEventListener('click', async()=>{
@@ -2572,6 +2609,7 @@ function openRoutingsModal(){
   document.getElementById('rt-check-all').addEventListener('change',e=>{
     document.querySelectorAll('.rt-check').forEach(cb=>cb.checked=e.target.checked);
   });
+  wireShiftCheck(document.getElementById('rt-table'),'.rt-check');
   document.getElementById('rt-del').addEventListener('click',()=>{
     const checked=[...document.querySelectorAll('.rt-check:checked')].map(cb=>+cb.dataset.i);
     if(!checked.length){ toast('No rows selected','error'); return; }
@@ -2835,6 +2873,7 @@ async function renderSalesDesk(){
   renderSD();
   makeColumnsReorderable(document.getElementById('sd-table'),'salesdesk',SD_COLS,()=>renderSalesDesk());
   wireScrollButtons('#sd-table-wrap','sd-scroll-left','sd-scroll-right');
+  wireShiftCheck(document.getElementById('sd-table'),'.sd-check');
 
   document.getElementById('sd-profit-pct').addEventListener('input',debounce(e=>{
     _sdProfitPct=parseFloat(e.target.value)||0;
@@ -3037,6 +3076,7 @@ function openPartPickerModal(onAdd){
   document.getElementById('pp-check-all').addEventListener('change',e=>{
     document.querySelectorAll('.pp-check').forEach(cb=>cb.checked=e.target.checked);
   });
+  wireShiftCheck(document.getElementById('pp-table'),'.pp-check');
   reloadValueOptions();
 
   document.getElementById('pp-add').addEventListener('click',()=>{
