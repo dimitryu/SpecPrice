@@ -299,7 +299,7 @@
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.11</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.12</div>
     </div>
   </aside>
   <div class="main">
@@ -363,7 +363,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.11';
+const APP_VER   = '1.8.12';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -815,6 +815,7 @@ async function renderPartStock(filter=''){
       <select class="search-box" id="ps-page-size" style="flex:0 0 auto;min-width:auto;width:auto;padding:7px 9px">${pageSizeOpts}</select>
       <button class="btn btn-blue" id="btn-ps-fc" style="white-space:nowrap;flex-shrink:0">🔍 Check FindChips</button>
       <button class="btn btn-ghost" id="btn-ps-priority" style="white-space:nowrap;flex-shrink:0">📥 Priority Import</button>
+      <button class="btn btn-green" id="btn-ps-export" style="white-space:nowrap;flex-shrink:0">📊 Export Excel</button>
       <button class="btn btn-red" id="btn-ps-delsel" style="white-space:nowrap;flex-shrink:0">🗑 Delete Selected</button>
       <span class="count-badge">${totalItems} parts — page ${psPage}/${totalPages}</span>
     </div>
@@ -886,6 +887,13 @@ async function renderPartStock(filter=''){
   // Priority Import button
   document.getElementById('btn-ps-priority')?.addEventListener('click',()=>{
     openPriorityImportModal();
+  });
+
+  // Export Excel — selected rows only, or all filtered rows (across every page) if none selected
+  document.getElementById('btn-ps-export')?.addEventListener('click',()=>{
+    const checked=[...document.querySelectorAll('.ps-check:checked')].map(cb=>cb.dataset.id);
+    const targets = checked.length ? sorted.filter(p=>checked.includes(p._id)) : sorted;
+    exportPartStockExcel(targets, sorted.length, COLS);
   });
 
   // Delete Selected — removes checked rows from Part Stock (parts_cache) in Firestore
@@ -1093,6 +1101,7 @@ async function renderRFQDetail(projectId, projectName, searchQ=''){
   setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading BOM…</div>`);
   setActions(`
     <button class="btn btn-blue" id="btn-add-drawing">＋ Add Drawing</button>
+    <button class="btn btn-green" id="btn-bom-export">📊 Export Excel</button>
     <button class="btn btn-red" id="btn-bom-del-sel">🗑 Delete Selected</button>
     <button class="btn btn-ghost" id="btn-back-rfq">← Back</button>`);
 
@@ -1285,6 +1294,16 @@ async function renderRFQDetail(projectId, projectName, searchQ=''){
   });
 
   // Bulk delete selected rows
+  // Export Excel — selected rows only, or every filtered row if none selected
+  document.getElementById('btn-bom-export')?.addEventListener('click',()=>{
+    const checkedKeys=[...document.querySelectorAll('.bom-check:checked')]
+      .map(cb=>cb.dataset.dwgid+'|'+cb.dataset.idx+'|'+cb.dataset.fmt);
+    const targets = checkedKeys.length
+      ? allRowsFiltered.filter(r=>checkedKeys.includes(r._dwgId+'|'+r._idx+'|'+r._fmt))
+      : allRowsFiltered;
+    exportBOMExcel(targets, allRowsFiltered.length, BOM_COLS, projectName);
+  });
+
   document.getElementById('btn-bom-del-sel')?.addEventListener('click', async()=>{
     const checked=[...document.querySelectorAll('.bom-check:checked')];
     if(!checked.length){ toast('No rows selected','error'); return; }
@@ -3290,6 +3309,57 @@ async function handleSDFiles(files){
       document.getElementById('sd-tbody')&&renderSalesDesk();
     }
   );
+}
+
+// ── Part Stock → Excel export (client-side via SheetJS) ───────────────────────
+// `rows` are the rows to actually write out (selected rows, or every filtered row
+// across all pages if nothing was selected); `totalCount` is always the full
+// filtered-row count, used only to report "exported X of Y" in the toast.
+function exportPartStockExcel(rows, totalCount, cols){
+  if(!window.XLSX){ toast('Excel library not loaded — please reload the page','error'); return; }
+  if(!rows.length){ toast('No rows to export','error'); return; }
+  const exportCols=cols.filter(c=>c.k!=='_fc');
+  const headers=exportCols.map(c=>c.l);
+  const aoa=[headers];
+  rows.forEach(p=>{
+    aoa.push(exportCols.map(c=>{
+      if(c.k==='updatedAt') return fmtDate(p.updatedAt);
+      if(c.k==='price') return parseFloat(p.price)||'';
+      if(c.k==='priority_price') return parseFloat(p.priority_price)||'';
+      if(c.k==='unit') return p.unit||p.units||'';
+      return p[c.k]||'';
+    }));
+  });
+  const ws=XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols']=exportCols.map(()=>({wch:16}));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Part Stock');
+  const fname=`PartStock_Export_${new Date().toISOString().slice(0,10)}.xlsx`;
+  XLSX.writeFile(wb,fname);
+  toast(`Exported ${rows.length} of ${totalCount} rows`,'success');
+}
+
+// ── RFQ Detail (BOM) → Excel export (client-side via SheetJS) ─────────────────
+function exportBOMExcel(rows, totalCount, cols, projectName){
+  if(!window.XLSX){ toast('Excel library not loaded — please reload the page','error'); return; }
+  if(!rows.length){ toast('No rows to export','error'); return; }
+  const headers=cols.map(c=>c.l);
+  const aoa=[headers];
+  rows.forEach(r=>{
+    aoa.push(cols.map(c=>{
+      let val=r[c.k]||'';
+      if(c.k==='drawing_number'&&!val) val=r._dwgName||'';
+      return val;
+    }));
+  });
+  const ws=XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols']=cols.map(()=>({wch:16}));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'BOM');
+  const safeName=(projectName||'RFQ').replace(/[^\w\-]+/g,'_');
+  const fname=`${safeName}_BOM_${new Date().toISOString().slice(0,10)}.xlsx`;
+  XLSX.writeFile(wb,fname);
+  toast(`Exported ${rows.length} of ${totalCount} rows`,'success');
 }
 
 // ── Sales Desk → Excel quote export (client-side via SheetJS) ─────────────────
