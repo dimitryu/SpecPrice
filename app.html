@@ -298,7 +298,7 @@
            onerror="this.style.display='none'">
       <div id="user-email-sb"></div>
       <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.6</div>
+      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.7</div>
     </div>
   </aside>
   <div class="main">
@@ -361,7 +361,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.6';
+const APP_VER   = '1.8.7';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -478,7 +478,7 @@ function route(v){
   else if(currentView==='rfq') renderRFQList();
   else if(currentView==='sales-desk') renderSalesDesk();
   else if(currentView==='customers') renderCustomers();
-  else if(currentView==='settings'){ setContent(''); showSettingsModal(); }
+  else if(currentView==='settings'){ renderSettingsPage(); }
 }
 document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',()=>route(el.dataset.view)));
 
@@ -3484,6 +3484,61 @@ async function deleteCustomer(id,name){
 // ══════════════════════════════════════════════════════════════════════════════
 // SETTINGS MODAL
 // ══════════════════════════════════════════════════════════════════════════════
+// Full Settings page (inline in #content, not a modal) — reached via the sidebar
+// "Settings" nav item. showSettingsModal() below remains a lightweight modal used
+// only as a contextual prompt when a task needs an AI key that isn't configured yet.
+function renderSettingsPage(){
+  setActions('');
+  setContent(`
+    <div style="max-width:520px">
+      <div class="sd-panel" style="padding:20px 22px">
+        <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">AI API Keys</h3>
+        <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Used for extracting BOMs from PDF/image drawings.</p>
+        <div class="form-field">
+          <label>Anthropic API Key</label>
+          <input class="form-input" id="inp-anth-key" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
+        </div>
+        <div class="form-field" style="margin-top:12px">
+          <label>Gemini API Key</label>
+          <input class="form-input" id="inp-gem-key" type="password" placeholder="AIza…" value="${esc(geminiKey)}">
+        </div>
+        <p style="font-size:11px;color:var(--muted);margin-top:10px">Keys are stored in your browser (localStorage) and never sent to our servers.</p>
+        <div style="border-top:1px solid var(--border);margin:20px 0 16px"></div>
+        <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Sales Desk</h3>
+        <div class="form-field" style="margin-top:10px">
+          <label>Labor Rate ($ / minute)</label>
+          <input class="form-input" id="inp-labor-rate" type="number" min="0" step="any"
+            placeholder="0.5" value="${esc(_sdLaborRateMin)}">
+          <p style="font-size:11px;color:var(--muted);margin-top:5px">Used to calculate Labor Cost in Sales Desk (Labor Total minutes × this rate). Shared across the company.</p>
+        </div>
+        <div class="form-field" style="margin-top:14px">
+          <label>Manufacturing Routings</label>
+          <button class="btn btn-ghost" id="btn-open-routings" type="button">⚙️ Manage Routings</button>
+          <p style="font-size:11px;color:var(--muted);margin-top:5px">Operations used to auto-calculate Labor Time on Sales Desk BOM rows.</p>
+        </div>
+        <div style="border-top:1px solid var(--border);margin:20px 0 16px"></div>
+        <button class="btn btn-green" id="btn-save-settings">💾 Save Settings</button>
+      </div>
+    </div>`);
+
+  document.getElementById('btn-open-routings').addEventListener('click',()=>openRoutingsModal());
+
+  document.getElementById('btn-save-settings').addEventListener('click', async()=>{
+    anthKey=document.getElementById('inp-anth-key').value.trim();
+    geminiKey=document.getElementById('inp-gem-key').value.trim();
+    _sdLaborRateMin=parseFloat(document.getElementById('inp-labor-rate').value)||0;
+    localStorage.setItem('anth_key',anthKey);
+    localStorage.setItem('gem_key',geminiKey);
+    const btn=document.getElementById('btn-save-settings');
+    btn.disabled=true; btn.textContent='Saving…';
+    try{
+      if(companyId) await setDoc(doc(db,'companies',companyId),{labor_rate_min:_sdLaborRateMin},{merge:true});
+      toast('Settings saved','success');
+    }catch(e){ toast('Error saving: '+e.message,'error'); }
+    btn.disabled=false; btn.textContent='💾 Save Settings';
+  });
+}
+
 function showSettingsModal(onSaved){
   showModal(`<div class="modal modal-sm">
     <div class="modal-head"><h3>⚙️ Settings</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
