@@ -291,7 +291,7 @@
 import { initializeApp }       from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js';
 import { getAuth, onAuthStateChanged, signOut }
                                from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
-import { getFirestore, doc, getDoc, getDocs, setDoc, addDoc,
+import { getFirestore, doc, getDoc, getDocs, setDoc, addDoc, arrayUnion,
          updateDoc, deleteDoc, collection, query, orderBy, serverTimestamp }
                                from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js';
 
@@ -374,7 +374,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.17';
+const APP_VER   = '1.8.18';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -788,6 +788,7 @@ const _PS_DEFAULT_COLS=[
   {k:'priority_price',l:'Priority Price',   w:'95px'},
   {k:'qty',           l:'QTY',              w:'55px'},
   {k:'unit',          l:'Units',            w:'55px'},
+  {k:'rfq_names',     l:'RFQ',             w:'140px',wrap:true},
   {k:'updatedAt',     l:'Updated',          w:'90px'},
   {k:'_fc',           l:'FindChips',        w:'80px'},
 ];
@@ -801,6 +802,7 @@ function _psCellHTML(k,p){
     case 'price': return fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:'';
     case 'priority_price': return prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:'';
     case 'unit': return esc(p.unit||p.units||'');
+    case 'rfq_names': return esc((p.rfq_names||[]).join(', '));
     case 'updatedAt': return fmtDate(p.updatedAt);
     case '_fc': return p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px">🔍 FC</a>`:'';
     default: return esc(p[k]);
@@ -815,7 +817,7 @@ async function renderPartStock(filter=''){
   const predicate=parseBoolQuery(filter);
   const filtered=(filter||'').trim()
     ? allParts.filter(p=>predicate([p.part_number,p.drawing_number,p.drawing_name,p.atlantium_pn,p.description,
-        p.manufacturer,p.distributor,p.qty,p.unit,p.units].map(v=>String(v||'')).join(' | ').toLowerCase()))
+        p.manufacturer,p.distributor,p.qty,p.unit,p.units,(p.rfq_names||[]).join(' ')].map(v=>String(v||'')).join(' | ').toLowerCase()))
     : allParts;
 
   // Sort ALWAYS runs over the full filtered set (all matching parts across every page),
@@ -920,7 +922,7 @@ async function renderPartStock(filter=''){
       ? sorted.filter(p=>checked.includes(p._id))
       : sorted.slice(0,2000);
     const items=targets.filter(p=>p.part_number).map(p=>({
-      _id:p._id, part_number:p.part_number, qty:parseInt(p.qty)||1
+      _id:p._id, part_number:p.part_number, qty:parseFloat(p.qty)||1, unit:p.unit||p.units||''
     }));
     if(!items.length){toast('No parts with part numbers','error');return;}
     runFCCheckModal(items,'parts');
@@ -1499,6 +1501,7 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
         if(!r.drawing_number) r.drawing_number=effectiveDwgName;
         if(!r.drawing_name) r.drawing_name=effectiveDwgName;
         if(!r.revision) r.revision=fileRevision;
+        _splitLengthQtyUnit(r);
       });
 
       if(!extractedRows.length){
@@ -1530,7 +1533,7 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
   showBOMPreview(allRows, body, foot,
     `💾 Save to Part Stock + RFQ (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
     async(updatedRows)=>{
-      await saveBOMToPartStock(updatedRows);
+      await saveBOMToPartStock(updatedRows, projectName);
       // Group rows by drawing_number so each source file lands in its own RFQ drawing doc
       const byDwg = {};
       updatedRows.forEach(r=>{
@@ -1618,9 +1621,28 @@ function _normalizeBOMRows(rows){
   return rows;
 }
 
+// AI BOM extraction sometimes returns a length value as a single QTY string
+// like "500mm" or "2.5M" instead of a separate qty + unit — split it: the
+// numeric part goes into qty, the unit (normalized to 'mm' or 'm') goes into
+// the unit field, overwriting whatever unit was there (the suffix embedded in
+// QTY is the more authoritative signal, since it came from the same cell).
+function _splitLengthQtyUnit(r){
+  const raw=String(r.qty??'').trim();
+  if(!raw) return;
+  let m=raw.match(/^([\d.,]+)\s*mm$/i);
+  if(m){ r.qty=parseFloat(m[1].replace(/,/g,''))||raw; r.unit='mm'; return; }
+  m=raw.match(/^([\d.,]+)\s*m$/i);
+  if(m){ r.qty=parseFloat(m[1].replace(/,/g,''))||raw; r.unit='m'; return; }
+}
+
 // ── Save BOM rows to Part Stock (parts_cache) ─────────────────────────────────
-// Upserts each row by part_number; never overwrites existing price/stock/distributor
-async function saveBOMToPartStock(rows){
+// Upserts each row by part_number; never overwrites existing price/stock/distributor.
+// rfqName (optional): when the BOM being saved belongs to a specific RFQ (i.e. this
+// was called from the "Add Drawing" flow inside an RFQ, not the standalone Sales
+// Desk "From File" import), that RFQ's name is added to the part's rfq_names array
+// — a part_number can be referenced by more than one RFQ, so this is a set, not a
+// single value, and existing entries are always preserved (arrayUnion).
+async function saveBOMToPartStock(rows, rfqName=''){
   let created=0;
   for(const r of rows){
     const pn=(r.part_number||'').trim();
@@ -1639,6 +1661,7 @@ async function saveBOMToPartStock(rows){
         if(r.manufacturer && !d.manufacturer) patch.manufacturer=r.manufacturer;
         if(r.unit && !d.unit) patch.unit=r.unit;
         if(r.atlantium_pn && !d.atlantium_pn) patch.atlantium_pn=r.atlantium_pn;
+        if(rfqName && !(d.rfq_names||[]).includes(rfqName)) patch.rfq_names=arrayUnion(rfqName);
         if(Object.keys(patch).length>1) await updateDoc(ref,patch);
       } else {
         await setDoc(ref,{
@@ -1646,6 +1669,7 @@ async function saveBOMToPartStock(rows){
           drawing_number:r.drawing_number||'', manufacturer:r.manufacturer||'',
           unit:r.unit||'', atlantium_pn:r.atlantium_pn||'',
           price:'', distributor:'', stock:'', price_description:'',
+          rfq_names: rfqName ? [rfqName] : [],
           updatedAt:serverTimestamp()
         });
         created++;
@@ -1946,6 +1970,20 @@ function _fcParsePriceBreaks(texts){
   return result;
 }
 
+// FindChips lists length-based parts (cables, wire, etc.) in FEET, but our BOMs
+// store length quantities in mm or m. Before searching FindChips for a
+// length-unit part, convert the local qty to feet so the nearest price-break
+// match is against the right scale — otherwise e.g. a 2500mm cable would be
+// searched as "2500" and match a price break meant for 2500 feet, not 2500mm
+// (~8.2 ft). Non-length units (pcs, ea, etc. or no unit) pass through unchanged.
+function _fcTargetQty(qty, unit){
+  const u=String(unit||'').trim().toLowerCase();
+  const n=parseFloat(qty)||0;
+  if(u==='mm') return Math.max(1, Math.round(n*0.00328084));
+  if(u==='m'||u==='meter'||u==='meters') return Math.max(1, Math.round(n*3.28084));
+  return Math.max(1, Math.round(n)||1);
+}
+
 function _fcNearestBreakPrice(breaks,targetQty){
   if(!breaks.length) return '';
   let [bestQty,bestPrice]=breaks[0];
@@ -2075,7 +2113,7 @@ async function runFCCheckModal(items, mode){
     if(stEl) stEl.textContent=`Checking ${i+1}/${total}: ${it.part_number}`;
     setStatus('⏳');
     try{
-      const res=await _fcFetchPart(it.part_number, parseInt(it.qty)||1);
+      const res=await _fcFetchPart(it.part_number, _fcTargetQty(it.qty, it.unit));
       if(!res||res.price==='Not found'){
         setStatus('Not found','var(--muted)');
         const pd=document.getElementById(`fc-p-${i}`); if(pd) pd.textContent='—';
@@ -2826,6 +2864,15 @@ function _sdLaborQtyMultiplier(r){
   return qtyNum>0 ? qtyNum : 1;
 }
 function _sdRecalcLaborTotal(r){
+  // Length-unit rows (mm or m — cable/wire etc.) always take a flat 1 minute
+  // of labor, regardless of length or whatever labor_time a routing match
+  // found — cutting/prepping a cable takes roughly the same setup time no
+  // matter how long the run is, so labor doesn't scale with quantity here.
+  const unit=String(r.unit||'').trim().toLowerCase();
+  if(unit==='mm'||unit==='m'){
+    r.labor_total = 1;
+    return r.labor_total;
+  }
   const lt=parseFloat(r.labor_time)||0;
   r.labor_total = lt>0 ? lt*_sdLaborQtyMultiplier(r) : 0;
   return r.labor_total;
@@ -2942,6 +2989,7 @@ async function renderSalesDesk(){
           <button class="btn btn-blue" id="btn-sd-addpick">📦 Add from Part Stock</button>
           <button class="btn btn-blue" id="btn-sd-file">📎 From File (BOM)</button>
           <button class="btn btn-blue" id="btn-sd-bydwg">📋 By Drawing #</button>
+          <button class="btn btn-blue" id="btn-sd-byrfq">🗂️ By RFQ</button>
           <button class="btn btn-green" id="btn-sd-fc" style="white-space:nowrap">🔍 FindChips</button>
           <button class="btn btn-red" id="btn-sd-clear">Clear All</button>
         </div>
@@ -3035,7 +3083,7 @@ async function renderSalesDesk(){
       : sdItems;
     const items=targets.filter(r=>r.part_number).map(r=>{
       const sdIdx=sdItems.indexOf(r);
-      return{part_number:r.part_number, qty:Math.round(Number(r.qty))||1, _sdIdx:sdIdx};
+      return{part_number:r.part_number, qty:parseFloat(r.qty)||1, unit:r.unit||'', _sdIdx:sdIdx};
     });
     if(!items.length){toast('No parts to check','error');return;}
     runFCCheckModal(items,'sd');
@@ -3081,6 +3129,52 @@ async function renderSalesDesk(){
       closeModal();
       renderSalesDesk();
       toast(`Added ${matching.length} parts from drawing "${dwg}"`, 'success');
+      await _sdAutoMatchLabor();
+      renderSalesDesk();
+    }));
+  });
+
+  // By RFQ — pick an RFQ name, add all its parts from Part Stock. Mirrors
+  // "By Drawing #" above, but filters on each part's rfq_names array (which
+  // parts get whenever a BOM is saved to Part Stock from inside an RFQ) so a
+  // part shared across multiple RFQs still shows up under each one.
+  document.getElementById('btn-sd-byrfq').addEventListener('click',()=>{
+    const rfqNames=[...new Set(allParts.flatMap(p=>p.rfq_names||[]))].sort((a,b)=>a.localeCompare(b));
+    if(!rfqNames.length){ toast('No RFQ-linked parts found in Part Stock','error'); return; }
+    showModal(`<div class="modal modal-sm">
+      <div class="modal-head"><h3>Select RFQ</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+      <div class="modal-body">
+        <p style="margin-bottom:10px;color:var(--muted);font-size:12px">Select an RFQ to add all its parts to Sales Desk:</p>
+        <div style="max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:4px">
+          ${rfqNames.map(n=>`<button class="btn btn-ghost rfq-pick" data-rfq="${esc(n)}" style="text-align:left;justify-content:flex-start">
+            ${esc(n)}
+            <span style="color:var(--muted);font-size:11px;margin-left:auto">${allParts.filter(p=>(p.rfq_names||[]).includes(n)).length} parts</span>
+          </button>`).join('')}
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+    </div>`);
+    document.querySelectorAll('.rfq-pick').forEach(btn=>btn.addEventListener('click',async()=>{
+      const rfqName=btn.dataset.rfq;
+      const matching=allParts.filter(p=>(p.rfq_names||[]).includes(rfqName));
+      await loadRoutings();
+      for(const p of matching){
+        const qty=parseFloat(p.qty)||1;
+        const item={
+          part_number:p.part_number||'', description:p.description||'',
+          drawing_number:p.drawing_number||p.drawing_name||'',
+          qty, unit:p.unit||p.units||'pcs',
+          price:parseFloat(p.price)||0, priority_price:parseFloat(p.priority_price)||0, total:0,
+          labor_time:'', labor_total:0
+        };
+        const m=_matchLaborTime(item.description,_routings);
+        if(m) item.labor_time=m;
+        _sdRecalcRow(item);
+        sdItems.push(item);
+      }
+      closeModal();
+      renderSalesDesk();
+      toast(`Added ${matching.length} parts from RFQ "${rfqName}"`, 'success');
       await _sdAutoMatchLabor();
       renderSalesDesk();
     }));
@@ -3300,6 +3394,7 @@ async function handleSDFiles(files){
         if(!r.drawing_number) r.drawing_number=effectiveDwgName;
         if(!r.drawing_name) r.drawing_name=effectiveDwgName;
         if(!r.revision) r.revision=fileRevision;
+        _splitLengthQtyUnit(r);
       });
 
       if(!extractedRows.length){
@@ -3373,6 +3468,7 @@ function exportPartStockExcel(rows, totalCount, cols){
       if(c.k==='price') return parseFloat(p.price)||'';
       if(c.k==='priority_price') return parseFloat(p.priority_price)||'';
       if(c.k==='unit') return p.unit||p.units||'';
+      if(c.k==='rfq_names') return (p.rfq_names||[]).join(', ');
       return p[c.k]||'';
     }));
   });
