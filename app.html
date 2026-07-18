@@ -374,7 +374,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.18';
+const APP_VER   = '1.8.19';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1502,6 +1502,7 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
         if(!r.drawing_name) r.drawing_name=effectiveDwgName;
         if(!r.revision) r.revision=fileRevision;
         _splitLengthQtyUnit(r);
+        r.unit=_normalizeUnit(r.unit);
       });
 
       if(!extractedRows.length){
@@ -1634,6 +1635,18 @@ function _splitLengthQtyUnit(r){
   m=raw.match(/^([\d.,]+)\s*m$/i);
   if(m){ r.qty=parseFloat(m[1].replace(/,/g,''))||raw; r.unit='m'; return; }
 }
+// Units recognized from drawing extraction: pc, mm, M, cm, ea, gm (grams —
+// "GR" is accepted as an alias for gm). Anything else that ends up in the
+// extracted UNIT field isn't a real unit of measure — almost always a
+// mis-extraction — so it's cleared rather than kept and treated as if it
+// meant something downstream (labor calc, FC lookup, etc.).
+const _VALID_UNITS=['pc','mm','m','cm','ea','gm'];
+function _normalizeUnit(raw){
+  const s=String(raw||'').trim().toLowerCase();
+  if(!s) return '';
+  if(s==='gr') return 'gm';
+  return _VALID_UNITS.includes(s) ? s : '';
+}
 
 // ── Save BOM rows to Part Stock (parts_cache) ─────────────────────────────────
 // Upserts each row by part_number; never overwrites existing price/stock/distributor.
@@ -1751,7 +1764,7 @@ COLUMN MAPPING (column names may vary between drawings):
 - "part_number" → manufacturer part number — look for: MANUFACTURER PN, MFR PN, MFG PN, PART NUMBER, PART NO, PN, P/N
 - "drawing_number" → drawing number — look for: DWG NO, DRAWING NO, DRAWING #
 - "drawing_name" → drawing title or assembly name
-- "unit" → unit of measure — look for: UNIT, UOM, U/M — values like "pc", "m", "ft", "ea", "set", "kg"
+- "unit" → unit of measure — look for: UNIT, UOM, U/M — the ONLY valid values are: "pc", "mm", "M", "cm", "ea", "gm" (grams — also written "GR"). If the column shows anything else, leave "unit" as empty string "" rather than inventing or guessing a unit.
 
 QTY RULE: If there are multiple quantity columns (e.g. for different product sizes), take the FIRST one only.
 
@@ -1781,7 +1794,7 @@ For each row extract:
 - "atlantium_pn": internal/customer part number if a separate column exists, else empty
 - "description": component description (DESCRIPTION / DESC column)
 - "qty": quantity as a number string
-- "unit": unit of measure (mm, ea, m, kg, pc, etc.)
+- "unit": unit of measure — the ONLY valid values are: pc, mm, M, cm, ea, gm (grams — also written GR). If it's anything else, use empty string "" instead of guessing.
 - "manufacturer": manufacturer name if shown, else empty string
 
 RULES:
@@ -1980,7 +1993,10 @@ function _fcTargetQty(qty, unit){
   const u=String(unit||'').trim().toLowerCase();
   const n=parseFloat(qty)||0;
   if(u==='mm') return Math.max(1, Math.round(n*0.00328084));
-  if(u==='m'||u==='meter'||u==='meters') return Math.max(1, Math.round(n*3.28084));
+  // gm/gr (grams) is treated the same as meters here, per business rule —
+  // these are bulk-material quantities, not per-piece counts, and should be
+  // looked up the same way length-based (m) rows are.
+  if(u==='m'||u==='meter'||u==='meters'||u==='gm'||u==='gr') return Math.max(1, Math.round(n*3.28084));
   return Math.max(1, Math.round(n)||1);
 }
 
@@ -2864,12 +2880,13 @@ function _sdLaborQtyMultiplier(r){
   return qtyNum>0 ? qtyNum : 1;
 }
 function _sdRecalcLaborTotal(r){
-  // Length-unit rows (mm or m — cable/wire etc.) always take a flat 1 minute
-  // of labor, regardless of length or whatever labor_time a routing match
-  // found — cutting/prepping a cable takes roughly the same setup time no
-  // matter how long the run is, so labor doesn't scale with quantity here.
+  // Length-unit rows (mm or m — cable/wire etc.) and bulk-weight rows (gm/gr,
+  // treated the same as meters per business rule) always take a flat 1
+  // minute of labor, regardless of length/weight or whatever labor_time a
+  // routing match found — prepping this kind of material takes roughly the
+  // same setup time no matter the quantity, so labor doesn't scale here.
   const unit=String(r.unit||'').trim().toLowerCase();
-  if(unit==='mm'||unit==='m'){
+  if(unit==='mm'||unit==='m'||unit==='gm'||unit==='gr'){
     r.labor_total = 1;
     return r.labor_total;
   }
@@ -3395,6 +3412,7 @@ async function handleSDFiles(files){
         if(!r.drawing_name) r.drawing_name=effectiveDwgName;
         if(!r.revision) r.revision=fileRevision;
         _splitLengthQtyUnit(r);
+        r.unit=_normalizeUnit(r.unit);
       });
 
       if(!extractedRows.length){
