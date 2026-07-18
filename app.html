@@ -36,26 +36,10 @@
 
     /* ── Shell ── */
     #shell { display:flex; height:100vh; }
-    aside { width:var(--sidebar-w); background:var(--blue-dark); color:#CBD5E0;
-            display:flex; flex-direction:column; flex-shrink:0; overflow:hidden; }
-    .sb-brand { padding:18px 16px 10px; font-size:17px; font-weight:700; color:#fff;
-                border-bottom:1px solid rgba(255,255,255,.08); }
-    .sb-company { padding:7px 16px 10px; font-size:11px; color:#90A4AE;
-                  border-bottom:1px solid rgba(255,255,255,.08);
-                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    nav { flex:1; padding:6px 0; overflow-y:auto; }
-    .nav-item { display:flex; align-items:center; gap:9px; padding:9px 18px; cursor:pointer;
-                font-size:13px; color:#B0BEC5; transition:background .12s, color .12s;
-                user-select:none; border-left:3px solid transparent; }
-    .nav-item:hover { background:rgba(255,255,255,.07); color:#fff; }
-    .nav-item.active { background:rgba(46,117,182,.3); color:#fff; border-left-color:var(--blue-mid); }
-    .nav-item .icon { font-size:15px; width:20px; text-align:center; }
-    .sb-foot { padding:10px 14px; border-top:1px solid rgba(255,255,255,.08); font-size:11px; color:#90A4AE; }
-    #user-email-sb { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:7px; }
-    .btn-signout { width:100%; padding:5px; background:rgba(255,255,255,.08);
-                   border:1px solid rgba(255,255,255,.12); border-radius:5px;
-                   color:#B0BEC5; font-size:11px; cursor:pointer; }
-    .btn-signout:hover { background:rgba(255,255,255,.15); color:#fff; }
+    /* The old persistent-sidebar CSS (aside/.sb-brand/.sb-company/.nav-item/
+       .sb-foot/#user-email-sb/.btn-signout) was removed along with the
+       sidebar itself when the app moved to the role-gated Home-screen hub
+       model — the Home screen's Sign Out button uses .btn/.btn-ghost. */
 
     /* ── Main ── */
     .main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
@@ -246,30 +230,33 @@
     .col-resizer:hover, .col-resizer:active { background:rgba(255,255,255,.45); }
 
     @media print {
-      aside, .topbar, .toolbar { display:none !important; }
+      .topbar, .toolbar { display:none !important; }
       #content { padding:0 !important; background:#fff !important; overflow:visible !important; }
       #shell { display:block; height:auto; }
       .main { overflow:visible; }
       table { font-size:11px; }
     }
 
-    /* ── Responsive layout (tablet / phone) ── */
-    #mobile-menu-btn { display:none; background:var(--blue-light); color:var(--blue-dark);
-                        border:1px solid var(--border); border-radius:6px; width:32px; height:32px;
-                        font-size:16px; cursor:pointer; flex-shrink:0; align-items:center; justify-content:center; }
-    #sidebar-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:140; }
-    #sidebar-backdrop.show { display:block; }
+    /* ── Home screen (button grid, replaces the old sidebar nav) ── */
+    #btn-home { display:none; background:var(--blue-light); color:var(--blue-dark);
+                border:1px solid var(--border); border-radius:6px; width:32px; height:32px;
+                font-size:16px; cursor:pointer; flex-shrink:0; align-items:center; justify-content:center; }
+    .home-btn-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:16px; }
+    .home-btn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;
+                padding:26px 14px; background:#fff; border:1px solid var(--border); border-radius:10px;
+                cursor:pointer; font-size:13px; font-weight:600; color:var(--blue-dark);
+                transition:box-shadow .12s, transform .12s; }
+    .home-btn:hover { box-shadow:0 4px 14px rgba(31,58,95,.12); transform:translateY(-2px); }
+    .home-btn-icon { font-size:30px; }
 
+    /* ── Responsive layout (tablet / phone) ── */
     @media (max-width: 900px) {
       .sd-split { grid-template-columns: 1fr; height:auto; }
       .sd-panel { max-height:60vh; }
     }
 
     @media (max-width: 720px) {
-      #mobile-menu-btn { display:inline-flex; }
-      aside { position:fixed; top:0; left:0; bottom:0; z-index:150; width:min(80vw,260px);
-              transform:translateX(-100%); transition:transform .2s ease; box-shadow:4px 0 24px rgba(0,0,0,.35); }
-      aside.open { transform:translateX(0); }
+      #btn-home { display:inline-flex; }
       .topbar { padding:0 10px; gap:8px; }
       .topbar h2 { font-size:13px; }
       #topbar-actions { flex-wrap:wrap; gap:6px; justify-content:flex-end; }
@@ -288,30 +275,10 @@
 <div id="splash"><h1>⚡ SpecPrice</h1><div class="ring" id="splash-ring"></div><p id="splash-msg" style="color:#90A4AE;font-size:12px;margin-top:12px;text-align:center;max-width:320px;line-height:1.5">Connecting…</p></div>
 
 <div id="shell" style="display:none">
-  <div id="sidebar-backdrop"></div>
-  <aside>
-    <div class="sb-brand"><span>⚡ SpecPrice</span></div>
-    <div class="sb-company" id="sb-company">—</div>
-    <nav>
-      <div class="nav-item active" data-view="rfq"><span class="icon">📋</span>RFQ</div>
-      <div class="nav-item" data-view="sales-desk"><span class="icon">💰</span>Sales Desk</div>
-      <div class="nav-item" data-view="part-stock"><span class="icon">📦</span>Part Stock</div>
-      <div class="nav-item" data-view="customers"><span class="icon">👥</span>Customers</div>
-      <div class="nav-item" data-view="settings" id="nav-settings" style="display:none"><span class="icon">⚙️</span>Settings</div>
-    </nav>
-    <div class="sb-foot">
-      <div id="sb-logo" style="width:100%;height:48px;display:flex;align-items:center;justify-content:center;margin-bottom:8px;overflow:hidden">
-        <span style="font-size:22px;color:#607D8B">🏢</span>
-      </div>
-      <div id="user-email-sb"></div>
-      <button class="btn-signout" id="logout-btn">Sign Out</button>
-      <div style="margin-top:6px;font-size:10px;color:#607D8B;text-align:right">v1.8.16</div>
-    </div>
-  </aside>
   <div class="main">
     <div class="topbar">
-      <button id="mobile-menu-btn" title="Menu">☰</button>
-      <h2 id="page-title">Part Stock</h2>
+      <button id="btn-home" title="Home" style="display:none">🏠</button>
+      <h2 id="page-title">Home</h2>
       <div id="topbar-actions" style="display:flex;gap:8px"></div>
     </div>
     <div id="content"></div>
@@ -343,10 +310,48 @@ const db   = getFirestore(FB);
 // ── State ─────────────────────────────────────────────────────────────────────
 let companyId   = '';
 let companyName = '';
+let companyLogoB64 = '';
+let currentUserEmail = '';
 let allParts    = [];
 let anthKey     = '';
-let currentView = 'rfq';
+let currentView = 'home';
 let currentUserRole = '';
+// Role → views visible as buttons on the Home screen. This is now admin-
+// configurable (Settings > Roles, persisted to the Firestore 'roles'
+// collection, loaded into roleViewsMap by loadRoles() at boot). The hardcoded
+// map below is only a SAFETY-NET FALLBACK — used when a role has no Firestore
+// doc yet (e.g. before an admin ever opens Settings > Roles), so nobody is
+// ever fully locked out due to missing seed data. Unknown/legacy (empty)
+// roles fall back to 'agent' — the pre-role-system behavior was "everyone sees
+// everything except Settings", which 'agent' already matches.
+const DEFAULT_ROLE_VIEWS = {
+  admin:  ['rfq','sales-desk','part-stock','customers','settings'],
+  agent:  ['rfq','sales-desk','part-stock','customers'],
+  viewer: ['part-stock','rfq'],
+  sales:  ['sales-desk'],
+};
+let roleViewsMap = {}; // populated from Firestore 'roles' collection: {[roleKey]: {name, views:[...]}}
+async function loadRoles(){
+  try{
+    const snap = await getDocs(collection(db,'roles'));
+    const map = {};
+    snap.docs.forEach(d=>{ map[d.id] = d.data(); });
+    roleViewsMap = map;
+  }catch(e){ console.error('loadRoles', e); }
+}
+function allowedViews(){
+  const r = roleViewsMap[currentUserRole];
+  if (r && Array.isArray(r.views)) return r.views;
+  return DEFAULT_ROLE_VIEWS[currentUserRole] || DEFAULT_ROLE_VIEWS['agent'];
+}
+function canView(v){ return v==='home' || allowedViews().includes(v); }
+// All role names known to Settings (built-in defaults ∪ any custom roles
+// already saved to Firestore) — used to populate the role <select> dropdowns
+// in Invite/Edit User, and the row list in Settings > Roles.
+function roleOptions(){
+  const keys = Object.keys(roleViewsMap).length ? Object.keys(roleViewsMap) : Object.keys(DEFAULT_ROLE_VIEWS);
+  return keys.map(k => [k, (roleViewsMap[k] && roleViewsMap[k].name) || (k.charAt(0).toUpperCase()+k.slice(1))]);
+}
 let sortCol     = 'part_number';
 let sortAsc     = true;
 let psPage      = 1;
@@ -369,7 +374,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.16';
+const APP_VER   = '1.8.17';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -401,16 +406,15 @@ onAuthStateChanged(auth, async user => {
   clearTimeout(_authTimeout);
   if (!user) { location.href = 'index.html'; return; }
   splashMsg('Loading company data…');
-  document.getElementById('user-email-sb').textContent = user.email;
+  currentUserEmail = user.email || '';
   try {
     await initCompany(user);
+    await loadRoles();
   } catch(e) { splashErr(e.isDisabled ? e.message : ('Company load error: ' + e.message)); return; }
   document.getElementById('splash').style.display = 'none';
   document.getElementById('shell').style.display = 'flex';
-  route('rfq');
+  route('home');
 });
-document.getElementById('logout-btn').addEventListener('click',
-  () => signOut(auth).then(() => location.href = 'index.html'));
 
 // ── Company ───────────────────────────────────────────────────────────────────
 async function initCompany(user) {
@@ -425,10 +429,6 @@ async function initCompany(user) {
     }
     companyId = uData.company_id || '';
     currentUserRole = uData.role || '';
-    if (currentUserRole === 'admin') {
-      const navSettings = document.getElementById('nav-settings');
-      if (navSettings) navSettings.style.display = 'flex';
-    }
     if (!companyId) {
       const snap = await getDocs(collection(db,'companies'));
       if (snap.size === 1) companyId = snap.docs[0].id;
@@ -441,13 +441,7 @@ async function initCompany(user) {
       anthKey   = cData.anthropic_key || '';
       geminiKey = cData.gemini_key || '';
       _sdLaborRateMin = parseFloat(cData.labor_rate_min) || 0.5;
-      document.getElementById('sb-company').textContent = companyName;
-      const logoEl = document.getElementById('sb-logo');
-      if (logoEl) {
-        logoEl.innerHTML = cData.logo_b64
-          ? `<img src="${cData.logo_b64}" style="max-width:100%;max-height:48px;object-fit:contain">`
-          : `<span style="font-size:22px;color:#607D8B">🏢</span>`;
-      }
+      companyLogoB64 = cData.logo_b64 || '';
     }
   } catch(e) { console.error('initCompany', e); if (e.isDisabled) throw e; }
 }
@@ -494,19 +488,25 @@ function setContent(html){document.getElementById('content').innerHTML=html;}
 function setActions(html){document.getElementById('topbar-actions').innerHTML=html;}
 
 // ── Router ────────────────────────────────────────────────────────────────────
+// There's no persistent sidebar — the Home screen (role-gated button grid) is
+// the hub. Every other screen shows a 🏠 button in the topbar to get back.
 function route(v){
-  currentView=v||'part-stock';
-  document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.view===currentView));
-  const TITLES={'part-stock':'📦 Part Stock','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','customers':'👥 Customers','settings':'⚙️ Settings'};
+  const target = v||'home';
+  if(!canView(target)){ route('home'); return; }
+  currentView=target;
+  const btnHome=document.getElementById('btn-home');
+  if(btnHome) btnHome.style.display = currentView==='home' ? 'none' : 'inline-flex';
+  const TITLES={'home':'🏠 Home','part-stock':'📦 Part Stock','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','customers':'👥 Customers','settings':'⚙️ Settings'};
   document.getElementById('page-title').textContent=TITLES[currentView]||'';
   setActions('');
-  if(currentView==='part-stock'){
-    // Navigating to Part Stock (from the sidebar or elsewhere) always refetches
-    // from Firestore, so parts added on other screens (Add Drawing extraction,
-    // Priority Import, etc.) show up immediately without needing a full page
-    // reload. Same-screen interactions (search/sort/paging) call
-    // renderPartStock() directly rather than route(), so they keep reusing the
-    // in-memory cache and don't re-hit Firestore on every keystroke.
+  if(currentView==='home') renderHome();
+  else if(currentView==='part-stock'){
+    // Navigating to Part Stock always refetches from Firestore, so parts added
+    // on other screens (Add Drawing extraction, Priority Import, etc.) show up
+    // immediately without needing a full page reload. Same-screen interactions
+    // (search/sort/paging) call renderPartStock() directly rather than route(),
+    // so they keep reusing the in-memory cache and don't re-hit Firestore on
+    // every keystroke.
     allParts=[];
     renderPartStock();
   }
@@ -514,22 +514,47 @@ function route(v){
   else if(currentView==='sales-desk') renderSalesDesk();
   else if(currentView==='customers') renderCustomers();
   else if(currentView==='settings'){
-    if(currentUserRole!=='admin'){ route('rfq'); return; }
+    if(currentUserRole!=='admin'){ route('home'); return; }
     renderSettingsPage();
   }
 }
-document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',()=>route(el.dataset.view)));
+document.getElementById('btn-home')?.addEventListener('click',()=>route('home'));
 
-// ── Mobile sidebar (hamburger menu on narrow screens) ─────────────────────────
-const _asideEl=document.querySelector('aside');
-const _sidebarBackdrop=document.getElementById('sidebar-backdrop');
-function openMobileSidebar(){ _asideEl?.classList.add('open'); _sidebarBackdrop?.classList.add('show'); }
-function closeMobileSidebar(){ _asideEl?.classList.remove('open'); _sidebarBackdrop?.classList.remove('show'); }
-document.getElementById('mobile-menu-btn')?.addEventListener('click',()=>{
-  _asideEl?.classList.contains('open') ? closeMobileSidebar() : openMobileSidebar();
-});
-_sidebarBackdrop?.addEventListener('click',closeMobileSidebar);
-document.querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',closeMobileSidebar));
+// ── Home screen ───────────────────────────────────────────────────────────────
+const HOME_BUTTONS = {
+  'rfq':         ['📋',"RFQ's"],
+  'sales-desk':  ['💰','Sales Desk'],
+  'part-stock':  ['📦','Part Stock'],
+  'customers':   ['👥','Customers'],
+  'settings':    ['⚙️','Settings'],
+};
+function _logoHTML(){
+  return companyLogoB64
+    ? `<img src="${companyLogoB64}" style="max-width:100%;max-height:100%;object-fit:contain">`
+    : `<span style="font-size:26px;color:#607D8B">🏢</span>`;
+}
+function renderHome(){
+  setActions('');
+  const views = allowedViews();
+  setContent(`
+    <div style="max-width:640px;margin:20px auto;text-align:center">
+      <div style="width:120px;height:80px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center">${_logoHTML()}</div>
+      <h1 style="font-size:19px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">${esc(companyName)}</h1>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">${esc(currentUserEmail)}</div>
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:28px">${esc(currentUserRole||'—')}</div>
+      <div class="home-btn-grid">
+        ${views.map(v=>{
+          const [icon,label]=HOME_BUTTONS[v]||['❓',v];
+          return `<button class="home-btn" data-view="${v}"><span class="home-btn-icon">${icon}</span><span>${label}</span></button>`;
+        }).join('')}
+      </div>
+      <button class="btn btn-ghost" id="btn-home-signout" style="margin-top:36px">Sign Out</button>
+      <div style="margin-top:10px;font-size:10px;color:#94A3B8">v${APP_VER}</div>
+    </div>`);
+  document.querySelectorAll('.home-btn').forEach(b=>b.addEventListener('click',()=>route(b.dataset.view)));
+  document.getElementById('btn-home-signout')?.addEventListener('click',
+    () => signOut(auth).then(() => location.href = 'index.html'));
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // PART STOCK
@@ -3662,6 +3687,12 @@ function renderSettingsPage(){
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Companies</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Manage companies and per-company branding (logo).</p>
       <div id="stg-companies-body"></div>
+    </div>
+
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Roles</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Create new roles and control which Home-screen buttons each role can see.</p>
+      <div id="stg-roles-body"></div>
     </div>`);
 
   document.getElementById('btn-open-routings').addEventListener('click',()=>openRoutingsModal());
@@ -3683,6 +3714,7 @@ function renderSettingsPage(){
 
   renderSettingsUsersSection();
   renderSettingsCompaniesSection();
+  renderSettingsRolesSection();
 }
 
 function showSettingsModal(onSaved){
@@ -3741,7 +3773,8 @@ function showSettingsModal(onSaved){
 // itself only reachable by users with role:'admin' on their users/{uid} doc).
 // Ported from the Windows desktop app's AdminPanel (ui/admin_panel.py).
 // ══════════════════════════════════════════════════════════════════════════════
-const ROLES=[['admin','Admin'],['agent','Agent'],['viewer','Viewer']];
+// Role dropdown options are dynamic now — see roleOptions() near the top of
+// the script (built-in defaults ∪ custom roles saved via Settings > Roles).
 
 // ── Users section ─────────────────────────────────────────────────────────────
 async function renderSettingsUsersSection(){
@@ -3786,7 +3819,7 @@ function openInviteUserModal(companies){
         <select class="form-input" id="inv-company-sel">${companies.map(c=>`<option value="${esc(c._id)}">${esc(c.name||c._id)}</option>`).join('')}</select>
       </div>
       <div class="form-field" style="margin-top:10px"><label>Role</label>
-        <select class="form-input" id="inv-role-sel">${ROLES.map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select>
+        <select class="form-input" id="inv-role-sel">${roleOptions().map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select>
       </div>
     </div>
     <div class="modal-foot">
@@ -3844,7 +3877,7 @@ function openEditUserModal(u,companies){
         <select class="form-input" id="edu-company-sel">${companies.map(c=>`<option value="${esc(c._id)}" ${c._id===u.company_id?'selected':''}>${esc(c.name||c._id)}</option>`).join('')}</select>
       </div>
       <div class="form-field" style="margin-top:10px"><label>Role</label>
-        <select class="form-input" id="edu-role-sel">${ROLES.map(([v,l])=>`<option value="${v}" ${v===u.role?'selected':''}>${l}</option>`).join('')}</select>
+        <select class="form-input" id="edu-role-sel">${roleOptions().map(([v,l])=>`<option value="${v}" ${v===u.role?'selected':''}>${l}</option>`).join('')}</select>
       </div>
       <div class="form-field" style="margin-top:10px">
         <label style="display:flex;align-items:center;gap:7px;cursor:pointer">
@@ -4011,16 +4044,104 @@ async function renderSettingsCompaniesSection(){
     btn.disabled=true; btn.textContent='Saving…';
     try{
       await setDoc(doc(db,'companies',sel.value),{logo_b64:_brdLogoB64},{merge:true});
-      if(sel.value===companyId){
-        const logoEl=document.getElementById('sb-logo');
-        if(logoEl) logoEl.innerHTML=_brdLogoB64
-          ? `<img src="${_brdLogoB64}" style="max-width:100%;max-height:48px;object-fit:contain">`
-          : `<span style="font-size:22px;color:#607D8B">🏢</span>`;
-      }
+      // Keep the in-memory logo state in sync so the Home screen (which reads
+      // companyLogoB64 via _logoHTML()) reflects the change immediately,
+      // without needing a full reload.
+      if(sel.value===companyId) companyLogoB64=_brdLogoB64;
       toast('Branding saved','success');
       const c=companies.find(x=>x._id===sel.value); if(c) c.logo_b64=_brdLogoB64;
     }catch(e){ toast('Error: '+e.message,'error'); }
     btn.disabled=false; btn.textContent='💾 Save Branding';
+  });
+}
+
+// ── Roles section ────────────────────────────────────────────────────────────
+// Admin-configurable role → button-visibility matrix. Persisted to the
+// Firestore 'roles' collection (doc id = role key), read into roleViewsMap by
+// loadRoles() at boot (see near the top of the script). If the collection is
+// still empty (nobody has saved via this UI yet), the 4 built-in roles are
+// shown pre-filled from DEFAULT_ROLE_VIEWS so an admin can review and save
+// them for real with one click per row.
+async function renderSettingsRolesSection(){
+  const body=document.getElementById('stg-roles-body');
+  if(!body) return;
+  body.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)"><div class="ring" style="margin:0 auto"></div></div>`;
+  let roles=[];
+  try{
+    const snap=await getDocs(collection(db,'roles'));
+    roles=snap.docs.map(d=>({_id:d.id,...d.data()}));
+  }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${e.message}</p>`; return; }
+  if(!roles.length){
+    roles=Object.keys(DEFAULT_ROLE_VIEWS).map(k=>({_id:k,name:k.charAt(0).toUpperCase()+k.slice(1),views:DEFAULT_ROLE_VIEWS[k]}));
+  }
+  const viewKeys=Object.keys(HOME_BUTTONS);
+  body.innerHTML=`
+    <div class="toolbar"><span class="count-badge">${roles.length} roles</span>
+      <button class="btn btn-green btn-sm" id="btn-new-role" style="margin-left:auto">＋ New Role</button></div>
+    <div class="table-wrap"><table id="stg-roles-table">
+      <thead><tr><th>Role Name</th><th>Key</th>${viewKeys.map(v=>`<th style="text-align:center">${HOME_BUTTONS[v][0]} ${HOME_BUTTONS[v][1]}</th>`).join('')}<th></th></tr></thead>
+      <tbody>${roles.map(r=>`<tr data-key="${esc(r._id)}">
+        <td><input class="form-input role-name-inp" data-key="${esc(r._id)}" value="${esc(r.name||r._id)}" style="padding:4px 7px;font-size:12px;min-width:100px"></td>
+        <td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(r._id)}</td>
+        ${viewKeys.map(v=>`<td style="text-align:center"><input type="checkbox" class="role-view-chk" data-key="${esc(r._id)}" data-view="${v}" ${(r.views||[]).includes(v)?'checked':''}></td>`).join('')}
+        <td style="text-align:right"><button class="btn btn-green btn-sm role-save" data-key="${esc(r._id)}">💾 Save</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+
+  document.getElementById('btn-new-role').addEventListener('click',()=>openNewRoleModal());
+  body.querySelectorAll('.role-save').forEach(btn=>btn.addEventListener('click',async()=>{
+    const key=btn.dataset.key;
+    const name=(body.querySelector(`.role-name-inp[data-key="${key}"]`).value||'').trim()||key;
+    const views=[...body.querySelectorAll(`.role-view-chk[data-key="${key}"]:checked`)].map(c=>c.dataset.view);
+    btn.disabled=true; btn.textContent='Saving…';
+    try{
+      await setDoc(doc(db,'roles',key),{name,views,updatedAt:serverTimestamp()},{merge:true});
+      roleViewsMap[key]={name,views};
+      toast(`Role "${name}" saved`,'success');
+    }catch(e){ toast('Error: '+e.message,'error'); }
+    btn.disabled=false; btn.textContent='💾 Save';
+  }));
+}
+
+function openNewRoleModal(){
+  const viewKeys=Object.keys(HOME_BUTTONS);
+  showModal(`<div class="modal modal-sm">
+    <div class="modal-head"><h3>New Role</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-field">
+        <label>Role Name</label>
+        <input class="form-input" id="nr-name-inp" placeholder="e.g. Manager">
+      </div>
+      <div class="form-field" style="margin-top:12px">
+        <label>Role Key (internal, lowercase, no spaces)</label>
+        <input class="form-input" id="nr-key-inp" placeholder="e.g. manager">
+      </div>
+      <div class="form-field" style="margin-top:12px">
+        <label>Visible Buttons</label>
+        ${viewKeys.map(v=>`<label style="display:flex;align-items:center;gap:7px;margin-top:8px;cursor:pointer;font-weight:400;font-size:13px">
+          <input type="checkbox" class="nr-view-chk" value="${v}" style="width:auto"><span>${HOME_BUTTONS[v][0]} ${HOME_BUTTONS[v][1]}</span>
+        </label>`).join('')}
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-green" id="btn-nr-save">＋ Create</button>
+    </div>
+  </div>`);
+  document.getElementById('btn-nr-save').addEventListener('click',async()=>{
+    const name=document.getElementById('nr-name-inp').value.trim();
+    const key=document.getElementById('nr-key-inp').value.trim().toLowerCase().replace(/[^a-z0-9_]+/g,'_');
+    const views=[...document.querySelectorAll('.nr-view-chk:checked')].map(c=>c.value);
+    if(!name||!key){ toast('Name and key are required','error'); return; }
+    const btn=document.getElementById('btn-nr-save');
+    btn.disabled=true; btn.textContent='Creating…';
+    try{
+      await setDoc(doc(db,'roles',key),{name,views,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+      roleViewsMap[key]={name,views};
+      toast(`Role "${name}" created`,'success');
+      closeModal();
+      renderSettingsRolesSection();
+    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='＋ Create'; }
   });
 }
 
