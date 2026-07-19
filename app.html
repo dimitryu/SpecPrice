@@ -374,7 +374,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.25';
+const APP_VER   = '1.8.26';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3724,7 +3724,7 @@ async function handleSDFiles(files){
           const rowsList=extractedRows.map((r,idx)=>`${idx}: ${r.description||r.part_number||''}`).join('\n');
           const proc = await aiAnalyzeCableProcess(_procIsImage?'':_pdfText, _procIsImage, _procImgData, rowsList);
           if(proc && proc.steps.length){
-            let generalMinutes=0;
+            let generalMinutes=0, rowTiedMinutes=0;
             for(const step of proc.steps){
               const mins=parseFloat(step.minutes)||0;
               if(!mins) continue;
@@ -3732,6 +3732,7 @@ async function handleSDFiles(files){
               if(row){
                 const key=`${effectiveDwgName}|${row.part_number||row.description||step.row_idx}`;
                 _sdPendingLaborByKey[key]=(_sdPendingLaborByKey[key]||0)+mins;
+                rowTiedMinutes+=mins;
               } else {
                 generalMinutes+=mins;
               }
@@ -3739,7 +3740,13 @@ async function handleSDFiles(files){
             _sdLaborBreakdowns.push({
               drawingName: effectiveDwgName,
               steps: proc.steps,
-              seriesTotal: parseFloat(proc.series_total_minutes) || proc.steps.reduce((a,s)=>a+(parseFloat(s.minutes)||0),0),
+              // Always the row-tied sum + general — NOT the AI's own reported
+              // series_total_minutes, which could drift from the actual step
+              // list. This keeps "Total (series, per unit)" exactly equal to
+              // what Cost Summary's Labor Time actually adds up (row labor
+              // totals + general steps for this drawing), so the two numbers
+              // can never disagree.
+              seriesTotal: rowTiedMinutes + generalMinutes,
               singleUnitMinutes: parseFloat(proc.single_unit_minutes)||0,
               generalMinutes,
             });
