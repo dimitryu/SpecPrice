@@ -374,7 +374,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.23';
+const APP_VER   = '1.8.24';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1570,8 +1570,14 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
 // showBOMPreview(rows, body, foot, btnLabel, saveCallback)
 // saveCallback(updatedRows) is called when user clicks Save
 function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
-  const PCOLS=['item','drawing_number','revision','part_number','drawing_name','atlantium_pn','description','qty','unit','manufacturer','pin_count','price'];
-  const PLABELS=['Item','Drawing #','Revision','MNF P/N','Dwg Name','Cust PN','Description','QTY','Units','Manufacturer','Pins','Price'];
+  const PCOLS=['item','drawing_number','revision','part_number','drawing_name','atlantium_pn','description','qty','unit','manufacturer','pin_count'];
+  const PLABELS=['Item','Drawing #','Revision','MNF P/N','Dwg Name','Cust PN','Description','QTY','Units','Manufacturer','Pins'];
+  // "price" is intentionally NOT a visible/editable column here — it's only
+  // ever populated on a synthesized crimp-tool row (see _BOM_TEXT_PROMPT/
+  // _BOM_VISION_PROMPT rule 5) and showing an empty Price column for every
+  // normal part is just clutter. It's still carried through to saveCallback
+  // via the stable data-i index below, so the tool row's price still reaches
+  // the Database's FC Price field (see saveBOMToPartStock).
 
   // Expand modal for comfortable editing
   const modalEl=body.closest('.modal');
@@ -1602,6 +1608,11 @@ function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
     document.querySelectorAll('#preview-tbody tr').forEach(tr=>{
       const row={};
       tr.querySelectorAll('td[contenteditable]').forEach(td=>{row[td.dataset.k]=td.textContent.trim();});
+      // Carry over the hidden "price" field (not a visible column — see above)
+      // from the original row, keyed by the stable data-i index so it survives
+      // even though it's not one of the contenteditable cells.
+      const origIdx=+tr.dataset.i;
+      if(rows[origIdx] && rows[origIdx].price) row.price=rows[origIdx].price;
       if(Object.values(row).some(v=>v)) updatedRows.push(row);
     });
     if(!updatedRows.length){ toast('No rows to save','error'); return; }
@@ -1722,6 +1733,7 @@ async function saveBOMToPartStock(rows, rfqName=''){
         const patch={updatedAt:serverTimestamp(), qty:1};
         if(r.description && !d.description) patch.description=r.description;
         if(r.drawing_number && !d.drawing_number) patch.drawing_number=r.drawing_number;
+        if(r.drawing_name && !d.drawing_name) patch.drawing_name=r.drawing_name;
         if(r.manufacturer && !d.manufacturer) patch.manufacturer=r.manufacturer;
         if(r.unit && !d.unit) patch.unit=_dbNormalizeUnit(r.unit);
         if(r.atlantium_pn && !d.atlantium_pn) patch.atlantium_pn=r.atlantium_pn;
@@ -1735,7 +1747,7 @@ async function saveBOMToPartStock(rows, rfqName=''){
       } else {
         await setDoc(ref,{
           part_number:pn, description:r.description||'',
-          drawing_number:r.drawing_number||'', manufacturer:r.manufacturer||'',
+          drawing_number:r.drawing_number||'', drawing_name:r.drawing_name||'', manufacturer:r.manufacturer||'',
           unit:_dbNormalizeUnit(r.unit)||'', atlantium_pn:r.atlantium_pn||'', qty:1,
           pin_count:r.pin_count||'',
           price:r.price?(parseFloat(r.price)||''):'', distributor:'', stock:'', price_description:'',
@@ -3077,6 +3089,16 @@ function _sdLaborQtyMultiplier(r){
   return qtyNum>0 ? qtyNum : 1;
 }
 function _sdRecalcLaborTotal(r){
+  // Rows whose Labor Time came from the AI cable-process analysis (see
+  // handleSDFiles/_sdPendingLaborByKey) already carry the FULL time for that
+  // row's step(s) — e.g. "crimp 8 contacts" = 4 min TOTAL, not 4 min per
+  // contact — so it must be used as-is, with no qty multiplication and no
+  // mm/gr flat-1-minute override (both of those rules exist for the older
+  // generic per-piece routing-match model, which this bypasses entirely).
+  if(r._laborIsFixedTotal){
+    r.labor_total = parseFloat(r.labor_time)||0;
+    return r.labor_total;
+  }
   // Length rows (mm — the system's sole canonical length unit) and bulk-weight
   // rows (gr, treated the same as mm per business rule) always take a flat 1
   // minute of labor, regardless of length/weight or whatever labor_time a
@@ -3747,6 +3769,7 @@ async function handleSDFiles(files){
         const dwgKey=`${item.drawing_number}|${item.part_number||item.description}`;
         if(_sdPendingLaborByKey[dwgKey]!=null){
           item.labor_time = String(_sdPendingLaborByKey[dwgKey]);
+          item._laborIsFixedTotal = true;
         } else {
           const m=_matchLaborTime(item.description,_routings);
           if(m) item.labor_time=m;
@@ -4383,7 +4406,7 @@ async function cleanLegacyData(){
 // to be run once to catch rows that were saved before those functions were
 // updated — everything saved going forward already gets this automatically.
 async function normalizeDatabaseData(){
-  if(!confirm('Set QTY to 1 and normalize units (M/cm→mm, EA→pc, GM→gr) for every part in the Database? This cannot be undone.')) return;
+  if(!confirm('Set QTY to 1, normalize units (M/cm→mm, EA→pc, GM→gr), and backfill Drawing Name (= Drawing # where missing) for every part in the Database? This cannot be undone.')) return;
   try{
     const snap=await getDocs(collection(db,'companies',companyId,'parts_cache'));
     let count=0;
@@ -4392,6 +4415,10 @@ async function normalizeDatabaseData(){
       const patch={qty:1};
       const normUnit=_dbNormalizeUnit(data.unit);
       if(normUnit && normUnit!==data.unit) patch.unit=normUnit;
+      // drawing_name was never written by older versions of saveBOMToPartStock
+      // (fixed going forward) — backfill it here for existing rows so the
+      // common case (no distinct title, same as Drawing #) shows in both columns.
+      if(!data.drawing_name && data.drawing_number) patch.drawing_name=data.drawing_number;
       await updateDoc(doc(db,'companies',companyId,'parts_cache',d.id),patch);
       count++;
     }
