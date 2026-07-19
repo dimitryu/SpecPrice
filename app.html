@@ -374,7 +374,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.19';
+const APP_VER   = '1.8.20';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -496,7 +496,7 @@ function route(v){
   currentView=target;
   const btnHome=document.getElementById('btn-home');
   if(btnHome) btnHome.style.display = currentView==='home' ? 'none' : 'inline-flex';
-  const TITLES={'home':'🏠 Home','part-stock':'📦 Part Stock','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','customers':'👥 Customers','settings':'⚙️ Settings'};
+  const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','customers':'👥 Customers','settings':'⚙️ Settings'};
   document.getElementById('page-title').textContent=TITLES[currentView]||'';
   setActions('');
   if(currentView==='home') renderHome();
@@ -524,7 +524,7 @@ document.getElementById('btn-home')?.addEventListener('click',()=>route('home'))
 const HOME_BUTTONS = {
   'rfq':         ['📋',"RFQ's"],
   'sales-desk':  ['💰','Sales Desk'],
-  'part-stock':  ['📦','Part Stock'],
+  'part-stock':  ['📦','Database'],
   'customers':   ['👥','Customers'],
   'settings':    ['⚙️','Settings'],
 };
@@ -777,7 +777,7 @@ async function loadParts(){
 }
 
 const _PS_DEFAULT_COLS=[
-  {k:'part_number',   l:'Part Number',    w:'120px'},
+  {k:'part_number',   l:'MNF P/N',    w:'120px'},
   {k:'drawing_number',l:'Drawing #',       w:'100px'},
   {k:'drawing_name',  l:'Drawing Name',    w:'130px'},
   {k:'atlantium_pn',  l:'Customer PN',     w:'100px'},
@@ -789,6 +789,9 @@ const _PS_DEFAULT_COLS=[
   {k:'qty',           l:'QTY',              w:'55px'},
   {k:'unit',          l:'Units',            w:'55px'},
   {k:'rfq_names',     l:'RFQ',             w:'140px',wrap:true},
+  {k:'pin_count',       l:'Pins',           w:'55px'},
+  {k:'crimp_tool_pn',   l:'Crimp Tool PN',  w:'110px'},
+  {k:'crimp_tool_price',l:'Crimp Tool $',   w:'85px'},
   {k:'updatedAt',     l:'Updated',          w:'90px'},
   {k:'_fc',           l:'FindChips',        w:'80px'},
 ];
@@ -803,6 +806,7 @@ function _psCellHTML(k,p){
     case 'priority_price': return prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:'';
     case 'unit': return esc(p.unit||p.units||'');
     case 'rfq_names': return esc((p.rfq_names||[]).join(', '));
+    case 'crimp_tool_price': return p.crimp_tool_price ? fmtPrice(parseFloat(p.crimp_tool_price)||0) : '';
     case 'updatedAt': return fmtDate(p.updatedAt);
     case '_fc': return p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px">🔍 FC</a>`:'';
     default: return esc(p[k]);
@@ -817,7 +821,8 @@ async function renderPartStock(filter=''){
   const predicate=parseBoolQuery(filter);
   const filtered=(filter||'').trim()
     ? allParts.filter(p=>predicate([p.part_number,p.drawing_number,p.drawing_name,p.atlantium_pn,p.description,
-        p.manufacturer,p.distributor,p.qty,p.unit,p.units,(p.rfq_names||[]).join(' ')].map(v=>String(v||'')).join(' | ').toLowerCase()))
+        p.manufacturer,p.distributor,p.qty,p.unit,p.units,(p.rfq_names||[]).join(' '),
+        p.pin_count,p.crimp_tool_pn,p.crimp_tool_price].map(v=>String(v||'')).join(' | ').toLowerCase()))
     : allParts;
 
   // Sort ALWAYS runs over the full filtered set (all matching parts across every page),
@@ -859,7 +864,7 @@ async function renderPartStock(filter=''){
       <select class="search-box" id="ps-page-size" style="flex:0 0 auto;min-width:auto;width:auto;padding:7px 9px">${pageSizeOpts}</select>
       <button class="btn btn-blue" id="btn-ps-fc" style="white-space:nowrap;flex-shrink:0">🔍 Check FindChips</button>
       <button class="btn btn-ghost" id="btn-ps-priority" style="white-space:nowrap;flex-shrink:0">📥 Priority Import</button>
-      <button class="btn btn-green" id="btn-ps-export" style="white-space:nowrap;flex-shrink:0">📊 Export Excel</button>
+      <button class="btn btn-green" id="btn-ps-export" style="white-space:nowrap;flex-shrink:0">📊 Export to Excel</button>
       <button class="btn btn-red" id="btn-ps-delsel" style="white-space:nowrap;flex-shrink:0">🗑 Delete Selected</button>
       <span class="count-badge">${totalItems} parts — page ${psPage}/${totalPages}</span>
     </div>
@@ -922,7 +927,8 @@ async function renderPartStock(filter=''){
       ? sorted.filter(p=>checked.includes(p._id))
       : sorted.slice(0,2000);
     const items=targets.filter(p=>p.part_number).map(p=>({
-      _id:p._id, part_number:p.part_number, qty:parseFloat(p.qty)||1, unit:p.unit||p.units||''
+      _id:p._id, part_number:p.part_number, qty:parseFloat(p.qty)||1, unit:p.unit||p.units||'',
+      description:p.description||''
     }));
     if(!items.length){toast('No parts with part numbers','error');return;}
     runFCCheckModal(items,'parts');
@@ -944,7 +950,7 @@ async function renderPartStock(filter=''){
   document.getElementById('btn-ps-delsel')?.addEventListener('click', async()=>{
     const checked=[...document.querySelectorAll('.ps-check:checked')].map(cb=>cb.dataset.id);
     if(!checked.length){ toast('No rows selected','error'); return; }
-    if(!confirm(`Delete ${checked.length} selected part(s) from Part Stock? This cannot be undone.`)) return;
+    if(!confirm(`Delete ${checked.length} selected part(s) from Database? This cannot be undone.`)) return;
     try{
       await Promise.all(checked.map(id=>deleteDoc(doc(db,'companies',companyId,'parts_cache',id))));
       allParts=allParts.filter(p=>!checked.includes(p._id));
@@ -1149,7 +1155,7 @@ async function renderRFQDetail(projectId, projectName, searchQ=''){
   setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading BOM…</div>`);
   setActions(`
     <button class="btn btn-blue" id="btn-add-drawing">＋ Add Drawing</button>
-    <button class="btn btn-green" id="btn-bom-export">📊 Export Excel</button>
+    <button class="btn btn-green" id="btn-bom-export">📊 Export to Excel</button>
     <button class="btn btn-red" id="btn-bom-del-sel">🗑 Delete Selected</button>
     <button class="btn btn-ghost" id="btn-back-rfq">← Back</button>`);
 
@@ -1192,12 +1198,15 @@ async function renderRFQDetail(projectId, projectName, searchQ=''){
     {k:'item',          l:'Item',        w:'45px'},
     {k:'drawing_number',l:'Drawing #',   w:'110px'},
     {k:'revision',      l:'Revision',    w:'90px'},
-    {k:'part_number',   l:'Part #',      w:'130px'},
+    {k:'part_number',   l:'MNF P/N',      w:'130px'},
     {k:'atlantium_pn',  l:'Cust PN',     w:'100px'},
     {k:'description',   l:'Description', w:'210px',wrap:true},
     {k:'qty',           l:'QTY',         w:'55px'},
     {k:'unit',          l:'Units',       w:'55px'},
     {k:'manufacturer',  l:'Manufacturer',w:'110px'},
+    {k:'pin_count',       l:'Pins',           w:'55px'},
+    {k:'crimp_tool_pn',   l:'Crimp Tool PN',  w:'110px'},
+    {k:'crimp_tool_price',l:'Crimp Tool $',   w:'85px'},
   ];
   const BOM_COLS=loadColOrder('bom',_BOM_DEFAULT_COLS);
   const bomColspan=BOM_COLS.length+2;
@@ -1532,7 +1541,7 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
   }
 
   showBOMPreview(allRows, body, foot,
-    `💾 Save to Part Stock + RFQ (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
+    `💾 Save to Database + RFQ (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
     async(updatedRows)=>{
       await saveBOMToPartStock(updatedRows, projectName);
       // Group rows by drawing_number so each source file lands in its own RFQ drawing doc
@@ -1554,8 +1563,8 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
 // showBOMPreview(rows, body, foot, btnLabel, saveCallback)
 // saveCallback(updatedRows) is called when user clicks Save
 function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
-  const PCOLS=['item','drawing_number','revision','part_number','drawing_name','atlantium_pn','description','qty','unit','manufacturer'];
-  const PLABELS=['Item','Drawing #','Revision','Part #','Dwg Name','Cust PN','Description','QTY','Units','Manufacturer'];
+  const PCOLS=['item','drawing_number','revision','part_number','drawing_name','atlantium_pn','description','qty','unit','manufacturer','pin_count','crimp_tool_pn','crimp_tool_price'];
+  const PLABELS=['Item','Drawing #','Revision','MNF P/N','Dwg Name','Cust PN','Description','QTY','Units','Manufacturer','Pins','Crimp Tool PN','Crimp Tool $'];
 
   // Expand modal for comfortable editing
   const modalEl=body.closest('.modal');
@@ -1622,6 +1631,18 @@ function _normalizeBOMRows(rows){
   return rows;
 }
 
+// The Database (parts_cache) is a master catalog, not a per-order tally — it
+// folds M into MM and EA into PC (the RFQ/BOM drawing view and Sales Desk
+// still keep M/EA distinct, since those drive the length/labor-time rules).
+// Since every Database row's qty is always forced to 1 (see below), this is a
+// pure relabel with no quantity to rescale.
+function _dbNormalizeUnit(rawUnit){
+  const u=_normalizeUnit(rawUnit);
+  if(u==='m') return 'mm';
+  if(u==='ea') return 'pc';
+  return u;
+}
+
 // AI BOM extraction sometimes returns a length value as a single QTY string
 // like "500mm" or "2.5M" instead of a separate qty + unit — split it: the
 // numeric part goes into qty, the unit (normalized to 'mm' or 'm') goes into
@@ -1666,21 +1687,27 @@ async function saveBOMToPartStock(rows, rfqName=''){
     try{
       const snap=await getDoc(ref);
       if(snap.exists()){
-        // Merge — only fill in fields that are currently empty
+        // Merge — only fill in fields that are currently empty. QTY is the
+        // one exception: the Database always shows 1 (it's a master catalog,
+        // not a per-order tally), so every save re-pins it regardless.
         const d=snap.data();
-        const patch={updatedAt:serverTimestamp()};
+        const patch={updatedAt:serverTimestamp(), qty:1};
         if(r.description && !d.description) patch.description=r.description;
         if(r.drawing_number && !d.drawing_number) patch.drawing_number=r.drawing_number;
         if(r.manufacturer && !d.manufacturer) patch.manufacturer=r.manufacturer;
-        if(r.unit && !d.unit) patch.unit=r.unit;
+        if(r.unit && !d.unit) patch.unit=_dbNormalizeUnit(r.unit);
         if(r.atlantium_pn && !d.atlantium_pn) patch.atlantium_pn=r.atlantium_pn;
+        if(r.pin_count && !d.pin_count) patch.pin_count=r.pin_count;
+        if(r.crimp_tool_pn && !d.crimp_tool_pn) patch.crimp_tool_pn=r.crimp_tool_pn;
+        if(r.crimp_tool_price && !d.crimp_tool_price) patch.crimp_tool_price=r.crimp_tool_price;
         if(rfqName && !(d.rfq_names||[]).includes(rfqName)) patch.rfq_names=arrayUnion(rfqName);
-        if(Object.keys(patch).length>1) await updateDoc(ref,patch);
+        await updateDoc(ref,patch);
       } else {
         await setDoc(ref,{
           part_number:pn, description:r.description||'',
           drawing_number:r.drawing_number||'', manufacturer:r.manufacturer||'',
-          unit:r.unit||'', atlantium_pn:r.atlantium_pn||'',
+          unit:_dbNormalizeUnit(r.unit)||'', atlantium_pn:r.atlantium_pn||'', qty:1,
+          pin_count:r.pin_count||'', crimp_tool_pn:r.crimp_tool_pn||'', crimp_tool_price:r.crimp_tool_price||'',
           price:'', distributor:'', stock:'', price_description:'',
           rfq_names: rfqName ? [rfqName] : [],
           updatedAt:serverTimestamp()
@@ -1765,6 +1792,9 @@ COLUMN MAPPING (column names may vary between drawings):
 - "drawing_number" → drawing number — look for: DWG NO, DRAWING NO, DRAWING #
 - "drawing_name" → drawing title or assembly name
 - "unit" → unit of measure — look for: UNIT, UOM, U/M — the ONLY valid values are: "pc", "mm", "M", "cm", "ea", "gm" (grams — also written "GR"). If the column shows anything else, leave "unit" as empty string "" rather than inventing or guessing a unit.
+- "pin_count" → for connector parts only: the number of pins/positions/contacts (look for a POS, PINS, CONTACTS, WAY column, or a count embedded in the part number/description of a known connector series). Empty string "" if the row isn't a connector or the count isn't known — do not guess.
+- "crimp_tool_pn" → ONLY if pin_count is set: the manufacturer's standard hand-crimp or contact-insertion tool part number typically used to terminate/insert pins into that specific connector, based on your knowledge of that connector manufacturer's tooling. Empty string "" if you aren't reasonably confident — never invent a plausible-looking part number.
+- "crimp_tool_price" → ONLY if crimp_tool_pn is set: that tool's approximate list price in USD (a plain number, no currency symbol). Empty string "" if unknown.
 
 QTY RULE: If there are multiple quantity columns (e.g. for different product sizes), take the FIRST one only.
 
@@ -1775,7 +1805,7 @@ RULES:
 4. Keep descriptions exactly as written
 
 Return ONLY a valid JSON array, no explanations.
-Example: [{"item":"1","atlantium_pn":"EL0015700","part_number":"VN01 036 0005 1 C","drawing_number":"601-1201-021","drawing_name":"Main Assembly","description":"MALE CRIMPING CONTACT PIN (2.5), UL","qty":"3","unit":"pc","manufacturer":"AMPHENOL"}]
+Example: [{"item":"1","atlantium_pn":"EL0015700","part_number":"VN01 036 0005 1 C","drawing_number":"601-1201-021","drawing_name":"Main Assembly","description":"MALE CRIMPING CONTACT PIN (2.5), UL","qty":"3","unit":"pc","manufacturer":"AMPHENOL","pin_count":"","crimp_tool_pn":"","crimp_tool_price":""}]
 If no BOM is found, return: []
 
 PDF TEXT (file: ${filename}):`;
@@ -1796,6 +1826,9 @@ For each row extract:
 - "qty": quantity as a number string
 - "unit": unit of measure — the ONLY valid values are: pc, mm, M, cm, ea, gm (grams — also written GR). If it's anything else, use empty string "" instead of guessing.
 - "manufacturer": manufacturer name if shown, else empty string
+- "pin_count": for connector parts only — the number of pins/positions/contacts, read from a POS/PINS/CONTACTS/WAY column if the drawing has one, or inferred from a count embedded in the part number/description of a known connector series. Empty string "" if the row isn't a connector or the count isn't known — do not guess.
+- "crimp_tool_pn": ONLY if pin_count is set — the manufacturer's standard hand-crimp or contact-insertion tool part number typically used to terminate/insert pins into that specific connector, based on your knowledge of that connector manufacturer's tooling. Empty string "" if you aren't reasonably confident — never invent a plausible-looking part number.
+- "crimp_tool_price": ONLY if crimp_tool_pn is set — that tool's approximate list price in USD (a plain number, no currency symbol). Empty string "" if unknown.
 
 RULES:
 1. Extract EVERY data row — do NOT stop early or truncate the list
@@ -1804,7 +1837,7 @@ RULES:
 4. If a column is missing or empty for a row, use empty string ""
 
 Return ONLY a valid JSON array, no explanation.
-Example: [{"item":"1","part_number":"M27500-20SC2S23","drawing_number":"","drawing_name":"","description":"CABLE 20AWG TWISTED PAIR","qty":"10000","unit":"mm","manufacturer":"","atlantium_pn":""}]
+Example: [{"item":"1","part_number":"M27500-20SC2S23","drawing_number":"","drawing_name":"","description":"CABLE 20AWG TWISTED PAIR","qty":"10000","unit":"mm","manufacturer":"","atlantium_pn":"","pin_count":"","crimp_tool_pn":"","crimp_tool_price":""}]
 If no BOM is found, return: []`;
 
 let _dbgLastAI='';
@@ -2091,7 +2124,7 @@ async function runFCCheckModal(items, mode){
       <div style="max-height:340px;overflow:auto;margin-top:12px">
         <table style="width:100%;font-size:12px" id="fc-res-table">
           <thead><tr style="position:sticky;top:0;background:#fff">
-            <th>Part #</th><th>QTY</th><th>Price</th><th>Distributor</th><th>Stock</th><th>Status</th>
+            <th>MNF P/N</th><th>QTY</th><th>Price</th><th>Distributor</th><th>Stock</th><th>Status</th>
           </tr></thead>
           <tbody id="fc-res-tbody">
             ${items.map((it,i)=>`<tr id="fc-row-${i}">
@@ -2129,7 +2162,12 @@ async function runFCCheckModal(items, mode){
     if(stEl) stEl.textContent=`Checking ${i+1}/${total}: ${it.part_number}`;
     setStatus('⏳');
     try{
-      const res=await _fcFetchPart(it.part_number, _fcTargetQty(it.qty, it.unit));
+      // Labels/markers aren't real electronic components — FindChips has
+      // nothing useful to say about them, so skip the network lookup
+      // entirely and use a fixed nominal price instead.
+      const res = /\b(label|marker)\b/i.test(it.description||'')
+        ? {price:'$0.2', distributor:'', stock:'', url:''}
+        : await _fcFetchPart(it.part_number, _fcTargetQty(it.qty, it.unit));
       if(!res||res.price==='Not found'){
         setStatus('Not found','var(--muted)');
         const pd=document.getElementById(`fc-p-${i}`); if(pd) pd.textContent='—';
@@ -2148,7 +2186,7 @@ async function runFCCheckModal(items, mode){
               await updateDoc(doc(db,'companies',companyId,'parts_cache',partId),{
                 price:priceNum, distributor:res.distributor||'',
                 stock:res.stock||'', findchips_url:res.url||'',
-                updatedAt:serverTimestamp()
+                updatedAt:serverTimestamp(), qty:1
               });
               const ap=allParts.find(p=>p._id===partId);
               if(ap){ap.price=priceNum;ap.distributor=res.distributor||'';ap.stock=res.stock||'';ap.findchips_url=res.url||'';}
@@ -2169,7 +2207,7 @@ async function runFCCheckModal(items, mode){
                 await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),{
                   price:priceNum, distributor:res.distributor||'',
                   stock:res.stock||'', findchips_url:res.url||'',
-                  updatedAt:serverTimestamp()
+                  updatedAt:serverTimestamp(), qty:1
                 });
                 existing.price=priceNum; existing.distributor=res.distributor||'';
                 existing.stock=res.stock||''; existing.findchips_url=res.url||'';
@@ -2178,12 +2216,12 @@ async function runFCCheckModal(items, mode){
                 const ref=doc(db,'companies',companyId,'parts_cache',key);
                 await setDoc(ref,{
                   part_number:pn, description:'', drawing_number:'', manufacturer:'',
-                  unit:'', atlantium_pn:'',
+                  unit:'', atlantium_pn:'', qty:1,
                   price:priceNum, distributor:res.distributor||'', stock:res.stock||'',
                   price_description:'', findchips_url:res.url||'',
                   updatedAt:serverTimestamp()
                 },{merge:true});
-                allParts.push({_id:key, part_number:pn, price:priceNum,
+                allParts.push({_id:key, part_number:pn, price:priceNum, qty:1,
                   distributor:res.distributor||'', stock:res.stock||'', findchips_url:res.url||''});
               }
             }
@@ -2218,6 +2256,7 @@ async function runFCCheckModal(items, mode){
 const _PN_HEADER_HINTS=['part number','part_number','partnumber','pn','p/n','מק"ט','מקט','catalog','item number','item no','cat no','cat#'];
 const _PRICE_HEADER_HINTS=['price','unit price','מחיר','cost','rate'];
 const _CURRENCY_HEADER_HINTS=['currency','curr','מטבע'];
+const _UNIT_HEADER_HINTS=['unit','units','uom','u/m','יחידה','יחידות'];
 
 function _priorityFindCol(headers, hints){
   const norm=headers.map(h=>String(h||'').trim().toLowerCase());
@@ -2261,7 +2300,7 @@ function openPriorityImportModal(){
       <div class="drop-zone" id="pi-drop-zone" tabindex="0">
         <span class="icon-big">📊</span>
         <strong>Drop Excel file here</strong>
-        <p>.xlsx, .xls or .csv — expects a Part Number column and a Price column</p>
+        <p>.xlsx, .xls or .csv — expects a MNF P/N column and a Price column</p>
         <input type="file" id="pi-file-input" accept=".xlsx,.xls,.csv" style="display:none">
       </div>
     </div>
@@ -2321,6 +2360,7 @@ function renderPrioritySheetMapping(sheetsData, activeSheetName, body, foot){
   let pnCol=_priorityFindCol(headers,_PN_HEADER_HINTS);
   let prCol=_priorityFindCol(headers,_PRICE_HEADER_HINTS);
   let curCol=_priorityFindCol(headers,_CURRENCY_HEADER_HINTS);
+  let unitCol=_priorityFindCol(headers,_UNIT_HEADER_HINTS);
   const headerDetected = pnCol>=0 || prCol>=0;
   if(pnCol<0) pnCol=0;
   if(prCol<0) prCol=(pnCol===1?0:1);
@@ -2328,8 +2368,10 @@ function renderPrioritySheetMapping(sheetsData, activeSheetName, body, foot){
 
   const colLabel=(h,i)=>{ const t=String(h||'').trim(); return t?esc(t):`(Column ${i+1})`; };
   const colOpts=(selected)=>headers.map((h,i)=>`<option value="${i}" ${i===selected?'selected':''}>${colLabel(h,i)}</option>`).join('');
-  const curOpts=(selected)=>`<option value="-1" ${selected<0?'selected':''}>— None (detect from price text, default USD) —</option>`+
+  const noneOpts=(selected,label)=>`<option value="-1" ${selected<0?'selected':''}>${label}</option>`+
     headers.map((h,i)=>`<option value="${i}" ${i===selected?'selected':''}>${colLabel(h,i)}</option>`).join('');
+  const curOpts=(selected)=>noneOpts(selected,'— None (detect from price text, default USD) —');
+  const unitOpts=(selected)=>noneOpts(selected,'— None —');
   const sampleRows=(headerDetected?rows.slice(1):rows).slice(0,3);
 
   body.innerHTML=`
@@ -2341,7 +2383,7 @@ function renderPrioritySheetMapping(sheetsData, activeSheetName, body, foot){
       </select>
     </div>`:''}
     <div class="form-field" style="margin-top:10px">
-      <label>Part Number column (מק"ט)</label>
+      <label>MNF P/N column (מק"ט)</label>
       <select class="form-input" id="pi-pn-col">${colOpts(pnCol)}</select>
     </div>
     <div class="form-field" style="margin-top:10px">
@@ -2351,6 +2393,10 @@ function renderPrioritySheetMapping(sheetsData, activeSheetName, body, foot){
     <div class="form-field" style="margin-top:10px">
       <label>Currency column (optional)</label>
       <select class="form-input" id="pi-cur-col">${curOpts(curCol)}</select>
+    </div>
+    <div class="form-field" style="margin-top:10px">
+      <label>Units column (optional)</label>
+      <select class="form-input" id="pi-unit-col">${unitOpts(unitCol)}</select>
     </div>
     <div class="form-field" style="margin-top:10px">
       <label style="display:flex;align-items:center;gap:6px;text-transform:none;font-weight:400;font-size:12px">
@@ -2377,8 +2423,9 @@ function renderPrioritySheetMapping(sheetsData, activeSheetName, body, foot){
     const pnColSel=parseInt(document.getElementById('pi-pn-col').value);
     const prColSel=parseInt(document.getElementById('pi-price-col').value);
     const curColSel=parseInt(document.getElementById('pi-cur-col').value);
+    const unitColSel=parseInt(document.getElementById('pi-unit-col').value);
     const skipHeader=document.getElementById('pi-has-header').checked;
-    if(pnColSel===prColSel){ toast('Part Number and Price columns must be different','error'); return; }
+    if(pnColSel===prColSel){ toast('MNF P/N and Price columns must be different','error'); return; }
 
     const btn=document.getElementById('pi-map-continue');
     btn.disabled=true; btn.textContent='Converting…';
@@ -2392,11 +2439,12 @@ function renderPrioritySheetMapping(sheetsData, activeSheetName, body, foot){
       const rawCur = curColSel>=0 ? r[curColSel] : '';
       const usd=await _convertToUSD(rawPrice, rawCur);
       if(usd===null) continue;
-      parsed.push({part_number:pn, priority_price:usd, _raw:String(rawPrice)});
+      const unit = unitColSel>=0 ? String(r[unitColSel]||'').trim() : '';
+      parsed.push({part_number:pn, priority_price:usd, unit, _raw:String(rawPrice)});
     }
 
     if(!parsed.length){
-      body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No valid Part Number + Price rows were detected with this mapping.</p>`;
+      body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No valid MNF P/N + Price rows were detected with this mapping.</p>`;
       foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
       return;
     }
@@ -2412,6 +2460,7 @@ function showPriorityPreview(rows, body, foot){
   const tBody=rows.map((r,i)=>`<tr data-i="${i}">
     <td contenteditable="true" data-k="part_number" data-i="${i}" style="min-width:140px">${esc(r.part_number)}</td>
     <td contenteditable="true" data-k="priority_price" data-i="${i}" style="min-width:90px">${esc(String(r.priority_price))}</td>
+    <td contenteditable="true" data-k="unit" data-i="${i}" style="min-width:70px">${esc(r.unit||'')}</td>
     <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
   </tr>`).join('');
 
@@ -2421,13 +2470,13 @@ function showPriorityPreview(rows, body, foot){
       <span>${rows.length} rows parsed (prices converted to $) — click any cell to edit before saving</span>
     </div>
     <div class="table-wrap" style="max-height:calc(85vh - 175px);overflow:auto"><table>
-      <thead><tr><th>Part Number</th><th>Priority Price ($)</th><th></th></tr></thead>
+      <thead><tr><th>MNF P/N</th><th>Priority Price ($)</th><th>Units</th><th></th></tr></thead>
       <tbody id="pi-preview-tbody">${tBody}</tbody>
     </table></div>`;
 
   foot.innerHTML=`
     <button class="btn btn-ghost" id="pi-cancel">Cancel</button>
-    <button class="btn btn-green" id="pi-save">💾 Save to Part Stock (${rows.length} rows)</button>`;
+    <button class="btn btn-green" id="pi-save">💾 Save to Database (${rows.length} rows)</button>`;
 
   document.getElementById('pi-cancel').addEventListener('click',closeModal);
   document.getElementById('pi-save').addEventListener('click', async()=>{
@@ -2435,7 +2484,8 @@ function showPriorityPreview(rows, body, foot){
     document.querySelectorAll('#pi-preview-tbody tr').forEach(tr=>{
       const pn=tr.querySelector('[data-k="part_number"]')?.textContent.trim()||'';
       const pr=parseFloat(tr.querySelector('[data-k="priority_price"]')?.textContent.trim())||0;
-      if(pn) finalRows.push({part_number:pn, priority_price:pr});
+      const unit=tr.querySelector('[data-k="unit"]')?.textContent.trim()||'';
+      if(pn) finalRows.push({part_number:pn, priority_price:pr, unit});
     });
     if(!finalRows.length){ toast('No rows to save','error'); return; }
     const btn=document.getElementById('pi-save');
@@ -2445,7 +2495,7 @@ function showPriorityPreview(rows, body, foot){
       toast(`Priority Import: ${updated} updated, ${created} created`,'success');
       closeModal();
       allParts=[]; renderPartStock();
-    }catch(e){ toast('Save error: '+e.message,'error'); btn.disabled=false; btn.textContent=`💾 Save to Part Stock (${finalRows.length} rows)`; }
+    }catch(e){ toast('Save error: '+e.message,'error'); btn.disabled=false; btn.textContent=`💾 Save to Database (${finalRows.length} rows)`; }
   });
 }
 
@@ -2458,21 +2508,22 @@ async function savePriorityImport(rows){
     const pn=r.part_number.trim();
     if(!pn) continue;
     const existing=allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
+    const unit=_dbNormalizeUnit(r.unit);
     try{
       if(existing){
-        await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),{
-          priority_price:r.priority_price, updatedAt:serverTimestamp()
-        });
-        existing.priority_price=r.priority_price;
+        const patch={priority_price:r.priority_price, updatedAt:serverTimestamp(), qty:1};
+        if(unit) patch.unit=unit;
+        await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id), patch);
+        existing.priority_price=r.priority_price; if(unit) existing.unit=unit;
         updated++;
       } else {
         const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
         await setDoc(doc(db,'companies',companyId,'parts_cache',key),{
           part_number:pn, description:'', drawing_number:'', manufacturer:'',
-          unit:'', atlantium_pn:'', price:'', distributor:'', stock:'', price_description:'',
+          unit, atlantium_pn:'', price:'', distributor:'', stock:'', price_description:'', qty:1,
           priority_price:r.priority_price, updatedAt:serverTimestamp()
         },{merge:true});
-        allParts.push({_id:key, part_number:pn, priority_price:r.priority_price});
+        allParts.push({_id:key, part_number:pn, priority_price:r.priority_price, unit, qty:1});
         created++;
       }
     }catch(e){ console.warn('[PriorityImport] save error:',pn,e.message); }
@@ -2844,7 +2895,7 @@ function openRoutingsModal(){
 // SALES DESK
 // ══════════════════════════════════════════════════════════════════════════════
 const _SD_DEFAULT_COLS=[
-  {k:'part_number',    l:'Part #',          w:'110px'},
+  {k:'part_number',    l:'MNF P/N',          w:'110px'},
   {k:'drawing_number', l:'Drawing #',       w:'100px'},
   {k:'description',    l:'Description',     w:'190px',wrap:true},
   {k:'qty',            l:'QTY',             w:'75px'},
@@ -2895,13 +2946,26 @@ function _sdRecalcLaborTotal(r){
   return r.labor_total;
 }
 function _sdRecalcRow(r){ _sdRecalcTotal(r); _sdRecalcLaborTotal(r); return r; }
+const _SD_UNIT_OPTIONS=['','pc','mm','m','cm','ea','gm'];
 function _sdCellHTML(k,r,i){
   const fcPrice=parseFloat(r.price)||0, prPrice=parseFloat(r.priority_price)||0;
   let fcC='',prC='';
   if(fcPrice&&prPrice){fcC=fcPrice<=prPrice?'price-green':'price-red';prC=prPrice<=fcPrice?'price-green':'price-red';}
   switch(k){
+    // part_number/drawing_number/description/unit are editable text fields
+    // (not just for manually-added blank rows — any row can be corrected
+    // by hand) so a user can add a row and type its data in directly.
+    case 'part_number': return `<input type="text" class="sd-part-number" data-i="${i}" value="${esc(r.part_number||'')}"
+           placeholder="Part #" style="width:100%;min-width:80px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
+    case 'drawing_number': return `<input type="text" class="sd-drawing-number" data-i="${i}" value="${esc(r.drawing_number||'')}"
+           style="width:100%;min-width:70px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
+    case 'description': return `<input type="text" class="sd-description" data-i="${i}" value="${esc(r.description||'')}"
+           style="width:100%;min-width:140px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
     case 'qty': return `<input type="number" class="sd-qty" data-i="${i}" value="${r.qty??''}" min="0.001" step="any"
            style="width:60px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
+    case 'unit': return `<select class="sd-unit" data-i="${i}" style="padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px">
+           ${_SD_UNIT_OPTIONS.map(u=>`<option value="${u}" ${String(r.unit||'')===u?'selected':''}>${u||'—'}</option>`).join('')}
+         </select>`;
     case 'price': return fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:'';
     case 'priority_price': return prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:'';
     case 'total': return `<strong>$${(r.total||0).toFixed(2)}</strong>`;
@@ -2937,14 +3001,20 @@ let _sdFilterQ='';
 let _sdProfitPct=40;
 let _sdLaborRateMin=0.5; // USD/minute — user-editable in Settings; mirrors Windows' $0.50/min default
 function _sdLaborRatePerMin(){ return parseFloat(_sdLaborRateMin)||0; }
+// Cost Summary's Labor Time (min) field normally just mirrors the auto-summed
+// total of every row's Labor Total — but the user can type their own total
+// directly into that field, which "locks" it as an override so Labor Cost is
+// calculated from their number instead. Clearing the field goes back to auto.
+let _sdLaborMinutesOverride=null;
 
 function _sdComputeSummary(){
-  let partsTotal=0, laborMinutes=0;
-  for(const r of sdItems){ partsTotal+=r.total||0; laborMinutes+=r.labor_total||0; }
+  let partsTotal=0, autoLaborMinutes=0;
+  for(const r of sdItems){ partsTotal+=r.total||0; autoLaborMinutes+=r.labor_total||0; }
+  const laborMinutes = _sdLaborMinutesOverride!=null ? _sdLaborMinutesOverride : autoLaborMinutes;
   const laborCost=laborMinutes*_sdLaborRatePerMin();
   const subtotal=partsTotal+laborCost;
   const final=subtotal*(1+_sdProfitPct/100);
-  return {partsTotal, laborCost, subtotal, final};
+  return {partsTotal, laborMinutes, autoLaborMinutes, laborCost, subtotal, final};
 }
 
 async function renderSalesDesk(){
@@ -2954,12 +3024,18 @@ async function renderSalesDesk(){
   const SD_COLS=loadColOrder('salesdesk',_SD_DEFAULT_COLS);
 
   const _sdUpdateSummaryUI=()=>{
-    const {partsTotal,laborCost,subtotal,final}=_sdComputeSummary();
+    const {partsTotal,laborMinutes,laborCost,subtotal,final}=_sdComputeSummary();
     const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent='$'+v.toFixed(2); };
     set('sd-parts-total',partsTotal);
     set('sd-labor-total',laborCost);
     set('sd-subtotal',subtotal);
     set('sd-final',final);
+    // Only sync the Labor Time input while it's tracking the auto-sum — once
+    // the user has typed their own value (_sdLaborMinutesOverride set), leave
+    // the field alone so it doesn't get overwritten mid-edit or reset by an
+    // unrelated row change elsewhere in the BOM.
+    const ltInp=document.getElementById('sd-labor-minutes');
+    if(ltInp && _sdLaborMinutesOverride==null) ltInp.value = laborMinutes ? +laborMinutes.toFixed(2) : '';
   };
 
   const renderSD=()=>{
@@ -2993,6 +3069,20 @@ async function renderSalesDesk(){
       const i=+inp.dataset.i, lt=parseFloat(inp.value)||0;
       sdItems[i].labor_time=lt; _sdRecalcLaborTotal(sdItems[i]); renderSD();
     }));
+    document.querySelectorAll('.sd-part-number').forEach(inp=>inp.addEventListener('change',()=>{
+      sdItems[+inp.dataset.i].part_number=inp.value.trim();
+    }));
+    document.querySelectorAll('.sd-drawing-number').forEach(inp=>inp.addEventListener('change',()=>{
+      sdItems[+inp.dataset.i].drawing_number=inp.value.trim();
+    }));
+    document.querySelectorAll('.sd-description').forEach(inp=>inp.addEventListener('change',()=>{
+      sdItems[+inp.dataset.i].description=inp.value.trim();
+    }));
+    document.querySelectorAll('.sd-unit').forEach(sel=>sel.addEventListener('change',()=>{
+      const i=+sel.dataset.i;
+      sdItems[i].unit=sel.value;
+      _sdRecalcRow(sdItems[i]); renderSD();
+    }));
     document.querySelectorAll('#sd-tbody .btn-red').forEach(btn=>btn.addEventListener('click',()=>{
       sdItems.splice(+btn.dataset.i,1); renderSD();
     }));
@@ -3003,10 +3093,9 @@ async function renderSalesDesk(){
       <div class="sd-panel">
         <div class="sd-panel-title">BOM Items</div>
         <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap">
-          <button class="btn btn-blue" id="btn-sd-addpick">📦 Add from Part Stock</button>
-          <button class="btn btn-blue" id="btn-sd-file">📎 From File (BOM)</button>
-          <button class="btn btn-blue" id="btn-sd-bydwg">📋 By Drawing #</button>
-          <button class="btn btn-blue" id="btn-sd-byrfq">🗂️ By RFQ</button>
+          <button class="btn btn-blue" id="btn-sd-addpick">📦 Add from Database</button>
+          <button class="btn btn-blue" id="btn-sd-file">📎 New Drawing</button>
+          <button class="btn btn-blue" id="btn-sd-newrow">➕ New Row</button>
           <button class="btn btn-green" id="btn-sd-fc" style="white-space:nowrap">🔍 FindChips</button>
           <button class="btn btn-red" id="btn-sd-clear">Clear All</button>
         </div>
@@ -3032,7 +3121,12 @@ async function renderSalesDesk(){
           <div class="sd-panel-title">Cost Summary</div>
           <div style="padding:6px 0">
             <div class="summary-row"><span>Parts Total</span><span id="sd-parts-total">$0.00</span></div>
-            <div class="summary-row"><span id="sd-labor-cost-label" title="Auto-calculated: Σ(Labor Total min) × rate per minute — set the rate in Settings">Labor Cost</span><span id="sd-labor-total">$0.00</span></div>
+            <div class="summary-row">
+              <span title="Defaults to the sum of every row's Labor Total — type your own number to override it">Labor Time (min)</span>
+              <input type="number" id="sd-labor-minutes" min="0" step="any"
+                style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
+            </div>
+            <div class="summary-row"><span id="sd-labor-cost-label" title="Labor Time (min) above × rate per minute — set the rate in Settings">Labor Cost</span><span id="sd-labor-total">$0.00</span></div>
             <div class="summary-row"><span>Subtotal</span><span id="sd-subtotal">$0.00</span></div>
             <div class="summary-row">
               <span>Profit %</span>
@@ -3053,6 +3147,12 @@ async function renderSalesDesk(){
   makeColumnsReorderable(document.getElementById('sd-table'),'salesdesk',SD_COLS,()=>renderSalesDesk());
   wireScrollButtons('#sd-table-wrap','sd-scroll-left','sd-scroll-right');
   wireShiftCheck(document.getElementById('sd-table'),'.sd-check');
+
+  document.getElementById('sd-labor-minutes').addEventListener('input',debounce(e=>{
+    const v=e.target.value.trim();
+    _sdLaborMinutesOverride = v==='' ? null : (parseFloat(v)||0);
+    _sdUpdateSummaryUI();
+  },150));
 
   document.getElementById('sd-profit-pct').addEventListener('input',debounce(e=>{
     _sdProfitPct=parseFloat(e.target.value)||0;
@@ -3082,7 +3182,12 @@ async function renderSalesDesk(){
     });
   });
 
-  document.getElementById('btn-sd-clear').addEventListener('click',()=>{sdItems=[];_sdFilterQ='';renderSD();});
+  document.getElementById('btn-sd-clear').addEventListener('click',()=>{sdItems=[];_sdFilterQ='';_sdLaborMinutesOverride=null;renderSD();});
+  document.getElementById('btn-sd-newrow').addEventListener('click',()=>{
+    sdItems.push({part_number:'',description:'',drawing_number:'',qty:1,unit:'',
+      price:0,priority_price:0,total:0,labor_time:'',labor_total:0});
+    renderSD();
+  });
   document.getElementById('btn-sd-export').addEventListener('click',()=>exportSalesDeskExcel());
 
   // SD check-all toggle
@@ -3100,101 +3205,11 @@ async function renderSalesDesk(){
       : sdItems;
     const items=targets.filter(r=>r.part_number).map(r=>{
       const sdIdx=sdItems.indexOf(r);
-      return{part_number:r.part_number, qty:parseFloat(r.qty)||1, unit:r.unit||'', _sdIdx:sdIdx};
+      return{part_number:r.part_number, qty:parseFloat(r.qty)||1, unit:r.unit||'',
+        description:r.description||'', _sdIdx:sdIdx};
     });
     if(!items.length){toast('No parts to check','error');return;}
     runFCCheckModal(items,'sd');
-  });
-
-  // By Drawing # — pick a drawing number, add all matching parts from Part Stock
-  document.getElementById('btn-sd-bydwg').addEventListener('click',()=>{
-    const dwgNums=[...new Set(
-      allParts.map(p=>p.drawing_number||p.drawing_name).filter(Boolean)
-    )].sort((a,b)=>a.localeCompare(b));
-    if(!dwgNums.length){ toast('No drawing numbers found in Part Stock','error'); return; }
-    showModal(`<div class="modal modal-sm">
-      <div class="modal-head"><h3>Select Drawing #</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
-      <div class="modal-body">
-        <p style="margin-bottom:10px;color:var(--muted);font-size:12px">Select a drawing to add all its parts to Sales Desk:</p>
-        <div style="max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:4px">
-          ${dwgNums.map(d=>`<button class="btn btn-ghost dwg-pick" data-dwg="${esc(d)}" style="text-align:left;justify-content:flex-start">
-            ${esc(d)}
-            <span style="color:var(--muted);font-size:11px;margin-left:auto">${allParts.filter(p=>(p.drawing_number||p.drawing_name)===d).length} parts</span>
-          </button>`).join('')}
-        </div>
-      </div>
-      <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
-    </div>`);
-    document.querySelectorAll('.dwg-pick').forEach(btn=>btn.addEventListener('click',async()=>{
-      const dwg=btn.dataset.dwg;
-      const matching=allParts.filter(p=>(p.drawing_number||p.drawing_name)===dwg);
-      await loadRoutings();
-      for(const p of matching){
-        const qty=parseFloat(p.qty)||1;
-        const item={
-          part_number:p.part_number||'', description:p.description||'',
-          drawing_number:p.drawing_number||p.drawing_name||dwg||'',
-          qty, unit:p.unit||p.units||'pcs',
-          price:parseFloat(p.price)||0, priority_price:parseFloat(p.priority_price)||0, total:0,
-          labor_time:'', labor_total:0
-        };
-        const m=_matchLaborTime(item.description,_routings);
-        if(m) item.labor_time=m;
-        _sdRecalcRow(item);
-        sdItems.push(item);
-      }
-      closeModal();
-      renderSalesDesk();
-      toast(`Added ${matching.length} parts from drawing "${dwg}"`, 'success');
-      await _sdAutoMatchLabor();
-      renderSalesDesk();
-    }));
-  });
-
-  // By RFQ — pick an RFQ name, add all its parts from Part Stock. Mirrors
-  // "By Drawing #" above, but filters on each part's rfq_names array (which
-  // parts get whenever a BOM is saved to Part Stock from inside an RFQ) so a
-  // part shared across multiple RFQs still shows up under each one.
-  document.getElementById('btn-sd-byrfq').addEventListener('click',()=>{
-    const rfqNames=[...new Set(allParts.flatMap(p=>p.rfq_names||[]))].sort((a,b)=>a.localeCompare(b));
-    if(!rfqNames.length){ toast('No RFQ-linked parts found in Part Stock','error'); return; }
-    showModal(`<div class="modal modal-sm">
-      <div class="modal-head"><h3>Select RFQ</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
-      <div class="modal-body">
-        <p style="margin-bottom:10px;color:var(--muted);font-size:12px">Select an RFQ to add all its parts to Sales Desk:</p>
-        <div style="max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:4px">
-          ${rfqNames.map(n=>`<button class="btn btn-ghost rfq-pick" data-rfq="${esc(n)}" style="text-align:left;justify-content:flex-start">
-            ${esc(n)}
-            <span style="color:var(--muted);font-size:11px;margin-left:auto">${allParts.filter(p=>(p.rfq_names||[]).includes(n)).length} parts</span>
-          </button>`).join('')}
-        </div>
-      </div>
-      <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
-    </div>`);
-    document.querySelectorAll('.rfq-pick').forEach(btn=>btn.addEventListener('click',async()=>{
-      const rfqName=btn.dataset.rfq;
-      const matching=allParts.filter(p=>(p.rfq_names||[]).includes(rfqName));
-      await loadRoutings();
-      for(const p of matching){
-        const qty=parseFloat(p.qty)||1;
-        const item={
-          part_number:p.part_number||'', description:p.description||'',
-          drawing_number:p.drawing_number||p.drawing_name||'',
-          qty, unit:p.unit||p.units||'pcs',
-          price:parseFloat(p.price)||0, priority_price:parseFloat(p.priority_price)||0, total:0,
-          labor_time:'', labor_total:0
-        };
-        const m=_matchLaborTime(item.description,_routings);
-        if(m) item.labor_time=m;
-        _sdRecalcRow(item);
-        sdItems.push(item);
-      }
-      closeModal();
-      renderSalesDesk();
-      toast(`Added ${matching.length} parts from RFQ "${rfqName}"`, 'success');
-      await _sdAutoMatchLabor();
-      renderSalesDesk();
-    }));
   });
 
   // From File (BOM extraction for Sales Desk)
@@ -3212,7 +3227,7 @@ async function renderSalesDesk(){
 // onAdd(parts, qtyOverride, hadSelection) is called once, after the modal closes.
 function openPartPickerModal(onAdd){
   showModal(`<div class="modal" style="width:min(96vw,1100px)">
-    <div class="modal-head"><h3>📦 Select from Part Stock</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>📦 Select from Database</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
       <div class="toolbar" style="margin-bottom:8px">
         <label style="font-size:12px;color:var(--muted);white-space:nowrap">Filter by:</label>
@@ -3232,7 +3247,7 @@ function openPartPickerModal(onAdd){
         <table id="pp-table">
           <thead><tr>
             <th style="width:28px"><input type="checkbox" id="pp-check-all"></th>
-            <th>Part #</th><th>Drawing #</th><th>Drawing Name</th><th>Description</th>
+            <th>MNF P/N</th><th>Drawing #</th><th>Drawing Name</th><th>Description</th>
             <th>QTY</th><th>Units</th><th>FC Price</th><th>Priority Price</th>
           </tr></thead>
           <tbody id="pp-tbody"></tbody>
@@ -3439,7 +3454,7 @@ async function handleSDFiles(files){
 
   // Show editable preview — on Save: save to Part Stock + add to Sales Desk
   showBOMPreview(allRows, body, foot,
-    `💾 Save to Part Stock + Sales Desk (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
+    `💾 Save to Database + Sales Desk (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
     async(updatedRows)=>{
       await saveBOMToPartStock(updatedRows);
       await loadRoutings();
@@ -3493,8 +3508,8 @@ function exportPartStockExcel(rows, totalCount, cols){
   const ws=XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols']=exportCols.map(()=>({wch:16}));
   const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,ws,'Part Stock');
-  const fname=`PartStock_Export_${new Date().toISOString().slice(0,10)}.xlsx`;
+  XLSX.utils.book_append_sheet(wb,ws,'Database');
+  const fname=`Database_Export_${new Date().toISOString().slice(0,10)}.xlsx`;
   XLSX.writeFile(wb,fname);
   toast(`Exported ${rows.length} of ${totalCount} rows`,'success');
 }
@@ -3532,7 +3547,7 @@ function exportSalesDeskExcel(){
   if(!window.XLSX){ toast('Excel library not loaded — please reload the page','error'); return; }
 
   const {partsTotal,laborCost,subtotal,final}=_sdComputeSummary();
-  const headers=['Item','Drawing #','Part Number','Description','QTY','Units',
+  const headers=['Item','Drawing #','MNF P/N','Description','QTY','Units',
     'FC Price','Priority Price','Part Cost','Labor Time (min)','Labor Total (min)'];
   const aoa=[['SALES DESK — PRICE QUOTATION'],
     ['Generated', new Date().toLocaleString()],
@@ -4081,6 +4096,30 @@ async function cleanLegacyData(){
   }catch(e){ toast('Error: '+e.message,'error'); }
 }
 
+// One-time maintenance for the current company's Database (parts_cache): force
+// every row's QTY to 1 (it's a master catalog, not a per-order tally — see
+// saveBOMToPartStock/savePriorityImport, which now do this on every save) and
+// fold any leftover M→mm / EA→PC units (see _dbNormalizeUnit). This only needs
+// to be run once to catch rows that were saved before those functions were
+// updated — everything saved going forward already gets this automatically.
+async function normalizeDatabaseData(){
+  if(!confirm('Set QTY to 1 and normalize units (M→mm, EA→PC) for every part in the Database? This cannot be undone.')) return;
+  try{
+    const snap=await getDocs(collection(db,'companies',companyId,'parts_cache'));
+    let count=0;
+    for(const d of snap.docs){
+      const data=d.data();
+      const patch={qty:1};
+      const normUnit=_dbNormalizeUnit(data.unit);
+      if(normUnit && normUnit!==data.unit) patch.unit=normUnit;
+      await updateDoc(doc(db,'companies',companyId,'parts_cache',d.id),patch);
+      count++;
+    }
+    allParts=[];
+    toast(`Updated ${count} part(s) in the Database`,'success');
+  }catch(e){ toast('Error: '+e.message,'error'); }
+}
+
 // ── Companies section (list + New Company + Clean Legacy Data + Branding) ─────
 async function renderSettingsCompaniesSection(){
   const body=document.getElementById('stg-companies-body');
@@ -4094,6 +4133,7 @@ async function renderSettingsCompaniesSection(){
   body.innerHTML=`
     <div class="toolbar"><span class="count-badge">${companies.length} companies</span>
       <button class="btn btn-green btn-sm" id="btn-new-company" style="margin-left:auto">＋ New Company</button>
+      <button class="btn btn-red btn-sm" id="btn-normalize-db">🔧 Normalize Database (QTY=1, Units)</button>
       <button class="btn btn-red btn-sm" id="btn-clean-legacy">🗑 Clean Legacy Data</button></div>
     <div class="table-wrap"><table id="stg-companies-table">
       <thead><tr><th>Name</th><th>ID</th></tr></thead>
@@ -4116,6 +4156,7 @@ async function renderSettingsCompaniesSection(){
 
   document.getElementById('btn-new-company').addEventListener('click',()=>openNewCompanyModal());
   document.getElementById('btn-clean-legacy').addEventListener('click',()=>cleanLegacyData());
+  document.getElementById('btn-normalize-db').addEventListener('click',()=>normalizeDatabaseData());
 
   let _brdLogoB64='';
   const sel=document.getElementById('brd-company-sel');
