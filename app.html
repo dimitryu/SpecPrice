@@ -374,7 +374,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.24';
+const APP_VER   = '1.8.25';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3183,17 +3183,22 @@ async function _sdAutoMatchLabor(){
 // and a grand total across everything currently counted in the auto Labor Time.
 function openLaborBreakdownModal(){
   const {autoLaborMinutes}=_sdComputeSummary();
-  if(!_sdLaborBreakdowns.length){
+  // Only show drawings that still have at least one row in Sales Desk —
+  // once every row from a drawing is deleted, its breakdown no longer
+  // contributes to the total, so it's dropped from this view too (see
+  // _sdActiveGeneralLaborMinutes for the same rule applied to the total).
+  const activeBreakdowns = _sdLaborBreakdowns.filter(b=>sdItems.some(r=>String(r.drawing_number||'')===b.drawingName));
+  if(!activeBreakdowns.length){
     showModal(`<div class="modal modal-sm">
       <div class="modal-head"><h3>📋 Labor Time Breakdown</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
       <div class="modal-body">
-        <p style="color:var(--muted);font-size:13px">No AI cable-process analysis yet — import a drawing via "📎 New Drawing" to get a step-by-step manufacturing breakdown here.</p>
+        <p style="color:var(--muted);font-size:13px">No AI cable-process analysis for the parts currently in Sales Desk — import a drawing via "📎 New Drawing" to get a step-by-step manufacturing breakdown here.</p>
       </div>
       <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>
     </div>`);
     return;
   }
-  const sections = _sdLaborBreakdowns.map(b=>`
+  const sections = activeBreakdowns.map(b=>`
     <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)">
       <div style="font-weight:700;margin-bottom:6px">${esc(b.drawingName||'(drawing)')}</div>
       <table style="width:100%;font-size:12px;border-collapse:collapse">
@@ -3204,6 +3209,7 @@ function openLaborBreakdownModal(){
           ${b.steps.map(s=>`<tr><td style="padding:2px 4px">${esc(s.operation||'')}</td><td style="padding:2px 4px;text-align:right">${(parseFloat(s.minutes)||0).toFixed(1)}</td></tr>`).join('')}
         </tbody>
       </table>
+      ${b.generalMinutes ? `<div style="display:flex;justify-content:space-between;color:var(--muted);font-size:11px;margin-top:2px"><span>— of which general assembly/inspection (not tied to one part)</span><span>${b.generalMinutes.toFixed(1)} min</span></div>` : ''}
       <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:12px">
         <strong>Total (series, per unit)</strong><strong>${b.seriesTotal.toFixed(1)} min</strong>
       </div>
@@ -3211,14 +3217,10 @@ function openLaborBreakdownModal(){
         <span>Reference: single stand-alone cable</span><span>≈ ${b.singleUnitMinutes.toFixed(1)} min</span>
       </div>
     </div>`).join('');
-  const generalRow = _sdGeneralLaborMinutes>0
-    ? `<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:10px"><span>General assembly/inspection steps (not tied to one part)</span><span>${_sdGeneralLaborMinutes.toFixed(1)} min</span></div>`
-    : '';
   showModal(`<div class="modal" style="width:min(94vw,650px)">
     <div class="modal-head"><h3>📋 Labor Time Breakdown</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
     <div class="modal-body" style="max-height:70vh;overflow:auto">
       ${sections}
-      ${generalRow}
       <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;padding-top:8px;border-top:2px solid var(--border)">
         <span>Total Labor Time (auto)</span><span>${autoLaborMinutes.toFixed(1)} min</span>
       </div>
@@ -3239,20 +3241,36 @@ let _sdLaborMinutesOverride=null;
 // AI cable-manufacturing-process analysis (Sales Desk "New Drawing" import only —
 // see handleSDFiles/aiAnalyzeCableProcess). _sdLaborBreakdowns holds one entry per
 // analyzed drawing ({drawingName, steps:[{operation,minutes,row_idx}], seriesTotal,
-// singleUnitMinutes}) for the Cost Summary breakdown modal. _sdGeneralLaborMinutes
-// accumulates step time that wasn't attributed to any specific BOM row (general
-// assembly/inspection steps) so it still counts toward the total labor cost.
-// _sdPendingLaborByKey is a short-lived `${drawingName}|${part_number}` → minutes
-// map bridging handleSDFiles' per-file AI analysis to the row objects actually
-// created when the user confirms the BOM preview and the rows land in sdItems.
+// singleUnitMinutes, generalMinutes}) for the Cost Summary breakdown modal.
+// generalMinutes is step time that wasn't attributed to any specific BOM row
+// (general assembly/inspection) — it only counts toward the total labor time
+// while at least one row from THAT drawing is still present in sdItems (see
+// _sdActiveGeneralLaborMinutes), so deleting every row of a drawing correctly
+// drops its un-attributed time too, same as deleting a normal row drops its
+// own labor_total. _sdPendingLaborByKey is a short-lived
+// `${drawingName}|${part_number}` → minutes map bridging handleSDFiles' per-
+// file AI analysis to the row objects actually created when the user confirms
+// the BOM preview and the rows land in sdItems.
 let _sdLaborBreakdowns=[];
-let _sdGeneralLaborMinutes=0;
 let _sdPendingLaborByKey={};
+
+// Sums generalMinutes from every analyzed drawing that still has at least one
+// row present in sdItems — once every row belonging to a drawing is deleted
+// (individually, or via Clear All), that drawing's un-attributed step time
+// drops out of the total too.
+function _sdActiveGeneralLaborMinutes(){
+  let total=0;
+  for(const b of _sdLaborBreakdowns){
+    if(!b.generalMinutes) continue;
+    if(sdItems.some(r=>String(r.drawing_number||'')===b.drawingName)) total+=b.generalMinutes;
+  }
+  return total;
+}
 
 function _sdComputeSummary(){
   let partsTotal=0, autoLaborMinutes=0;
   for(const r of sdItems){ partsTotal+=r.total||0; autoLaborMinutes+=r.labor_total||0; }
-  autoLaborMinutes += _sdGeneralLaborMinutes;
+  autoLaborMinutes += _sdActiveGeneralLaborMinutes();
   const laborMinutes = _sdLaborMinutesOverride!=null ? _sdLaborMinutesOverride : autoLaborMinutes;
   const laborCost=laborMinutes*_sdLaborRatePerMin();
   const subtotal=partsTotal+laborCost;
@@ -3435,7 +3453,11 @@ async function renderSalesDesk(){
     });
   });
 
-  document.getElementById('btn-sd-clear').addEventListener('click',()=>{sdItems=[];_sdFilterQ='';_sdLaborMinutesOverride=null;renderSD();});
+  document.getElementById('btn-sd-clear').addEventListener('click',()=>{
+    sdItems=[];_sdFilterQ='';_sdLaborMinutesOverride=null;
+    _sdLaborBreakdowns=[];_sdPendingLaborByKey={};
+    renderSD();
+  });
   document.getElementById('btn-sd-newrow').addEventListener('click',()=>{
     sdItems.push({part_number:'',description:'',drawing_number:'',qty:1,unit:'',
       price:0,priority_price:0,total:0,labor_time:'',labor_total:0});
@@ -3690,8 +3712,10 @@ async function handleSDFiles(files){
       // time, assuming series/batch production. Each step's minutes get
       // attributed to whichever BOM row it belongs to (bridged via
       // _sdPendingLaborByKey, consumed when the rows are added to sdItems
-      // below) — steps not tied to one row add to _sdGeneralLaborMinutes so
-      // the assembly's total labor cost still accounts for them. The full
+      // below) — steps not tied to one row are kept as this breakdown's own
+      // generalMinutes so the assembly's total labor cost still accounts for
+      // them (only while a row from this drawing remains — see
+      // _sdActiveGeneralLaborMinutes). The full
       // breakdown (+ a single-unit reference time) is kept in
       // _sdLaborBreakdowns for the Cost Summary breakdown modal.
       if(extractedRows.length && (anthKey||geminiKey)){
@@ -3712,12 +3736,12 @@ async function handleSDFiles(files){
                 generalMinutes+=mins;
               }
             }
-            _sdGeneralLaborMinutes += generalMinutes;
             _sdLaborBreakdowns.push({
               drawingName: effectiveDwgName,
               steps: proc.steps,
               seriesTotal: parseFloat(proc.series_total_minutes) || proc.steps.reduce((a,s)=>a+(parseFloat(s.minutes)||0),0),
               singleUnitMinutes: parseFloat(proc.single_unit_minutes)||0,
+              generalMinutes,
             });
           }
         }catch(e){ console.warn('[SD] cable-process analysis failed:', e.message); }
