@@ -374,7 +374,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.22';
+const APP_VER   = '1.8.23';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1880,15 +1880,19 @@ function _parseAIJson(raw){
   catch(e){console.warn('[AI] parse error:',e.message,'at:',m[0].slice(0,200));return[];}
 }
 
+// Gemini first, Anthropic as fallback — per user feedback, Gemini reads
+// engineering drawings (BOM tables, pin counts, cable construction) noticeably
+// better than Anthropic for this task, so it's the preferred provider whenever
+// a Gemini key is configured.
 async function aiExtractBOM(text, isImage, imgData, filename){
-  if(anthKey){
-    try { return await _anthropicBOM(text, isImage, imgData, filename); }
+  if(geminiKey){
+    try { return await _geminiBOM(text, isImage, imgData, filename); }
     catch(e){
-      if(!geminiKey) throw e;
-      console.warn('Anthropic failed, using Gemini:', e.message);
+      if(!anthKey) throw e;
+      console.warn('Gemini failed, using Anthropic:', e.message);
     }
   }
-  if(geminiKey){ return await _geminiBOM(text, isImage, imgData, filename); }
+  if(anthKey){ return await _anthropicBOM(text, isImage, imgData, filename); }
   throw new Error('No AI API key configured. Add a Gemini or Anthropic key in Settings.');
 }
 
@@ -1925,6 +1929,97 @@ async function _geminiBOM(text, isImage, imgData, filename){
   console.log('[Gemini] parts:',data.candidates?.[0]?.content?.parts?.length,'raw(200):',raw.slice(0,200));
   _dbgLastAI=raw;
   return _parseAIJson(raw.trim());
+}
+
+// ── Sales Desk only: AI cable-manufacturing-process analysis ─────────────────
+// Given the SAME drawing content already used for BOM extraction, ask the AI
+// to work out the actual manufacturing steps needed to build this cable
+// assembly (cut/strip, crimp, insert, heat-shrink, label, test, etc.) and the
+// time each step takes — assuming SERIES/BATCH production (steady-state per-
+// unit time, not one-off setup time). Each step is attributed to whichever
+// extracted BOM row it belongs to (by index) so its time can be dropped
+// straight into that row's Labor Time; steps that aren't tied to one specific
+// part (general assembly/inspection) come back with row_idx:null. A separate,
+// higher single_unit_minutes figure is also returned purely as a reference
+// ("what would ONE stand-alone cable take, with no batch efficiency").
+function _cableProcessPrompt(rowsList){
+  return `You are a cable/wire-harness manufacturing process engineer. Look at this cable assembly drawing and work out the manufacturing steps required to build it, with the time (in minutes) each step takes.
+
+IMPORTANT: Assume SERIES/BATCH production — this is one of many identical units in an ongoing production run, so use realistic steady-state per-unit time (do NOT include one-off first-article setup/changeover time in these step times).
+
+The assembly's BOM rows are (index: description):
+${rowsList}
+
+For each manufacturing step (e.g. cut/strip the cable, crimp pins into a connector, insert contacts into a housing, heat-shrink a boot or tubing, apply a label, solder, twist/braid, final test/inspection, etc.), return:
+- "operation": short description of the step
+- "minutes": time in minutes for this step (a plain number), assuming series/batch production
+- "row_idx": the index (from the BOM list above) of the row this step's labor belongs to — or null if it's a general assembly/test step not tied to one specific part
+
+Also return:
+- "series_total_minutes": total minutes to build ONE unit as part of an ongoing production series (should equal the sum of every step's minutes)
+- "single_unit_minutes": a SEPARATE, higher reference estimate for building just ONE stand-alone cable with no batch efficiency (includes setup/changeover overhead a series run wouldn't need) — for comparison only, not used in the per-row times above
+
+Return ONLY valid JSON, no explanation, in exactly this shape:
+{"steps":[{"operation":"Strip and cut main cable","minutes":2,"row_idx":0},{"operation":"Crimp 8 pins into connector","minutes":4,"row_idx":1}],"series_total_minutes":6,"single_unit_minutes":15}
+
+If you can't confidently determine any steps from this drawing, return {"steps":[],"series_total_minutes":0,"single_unit_minutes":0}`;
+}
+function _parseCableProcessJson(raw){
+  const m=String(raw||'').match(/\{[\s\S]*\}/);
+  if(!m) return null;
+  try{
+    const obj=JSON.parse(m[0]);
+    if(!obj||!Array.isArray(obj.steps)) return null;
+    return obj;
+  }catch{ return null; }
+}
+async function _anthropicCableProcess(text, isImage, imgData, rowsList){
+  const prompt=_cableProcessPrompt(rowsList);
+  const messages = isImage ? [{role:'user',content:[
+    {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
+    {type:'text',text:prompt}
+  ]}] : [{role:'user', content: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000)}];
+  const resp = await fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
+             'anthropic-dangerous-allow-browser':'true','content-type':'application/json'},
+    body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:2048, messages})
+  });
+  if(!resp.ok){let m=`Anthropic error ${resp.status}`;
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
+  const data=await resp.json();
+  return _parseCableProcessJson(data.content[0].text.trim());
+}
+async function _geminiCableProcess(text, isImage, imgData, rowsList){
+  const prompt=_cableProcessPrompt(rowsList);
+  const parts = isImage
+    ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:prompt}]
+    : [{text: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000)}];
+  const resp = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+    {method:'POST',headers:{'content-type':'application/json'},
+     body:JSON.stringify({contents:[{parts}],generationConfig:{thinkingConfig:{thinkingBudget:0}}})}
+  );
+  if(!resp.ok){let m=`Gemini error ${resp.status}`;
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
+  const data=await resp.json();
+  const raw=(data.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
+  return _parseCableProcessJson(raw.trim());
+}
+async function aiAnalyzeCableProcess(text, isImage, imgData, rowsList){
+  if(!rowsList) return null;
+  if(geminiKey){
+    try { return await _geminiCableProcess(text, isImage, imgData, rowsList); }
+    catch(e){
+      if(!anthKey) return null;
+      console.warn('Gemini cable-process failed, using Anthropic:', e.message);
+    }
+  }
+  if(anthKey){
+    try { return await _anthropicCableProcess(text, isImage, imgData, rowsList); }
+    catch(e){ console.warn('Cable-process analysis failed:', e.message); return null; }
+  }
+  return null;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2963,7 +3058,17 @@ function _sdEffectivePrice(r){
   if(fc>0 && pr>0) return Math.min(fc,pr);
   return fc||pr||0;
 }
-function _sdRecalcTotal(r){ r.total=_sdEffectivePrice(r)*(parseFloat(r.qty)||1); return r.total; }
+// Part Cost is directly editable in the table (see _sdCellHTML 'total' case) —
+// r.manual_total, when set, is a straight user-typed override of the whole
+// line's cost (not a per-unit price), useful when there's no FC/Priority price
+// at all or when the user has a better number (e.g. a vendor quote). Clearing
+// the field goes back to the normal price×qty auto-calculation.
+function _sdRecalcTotal(r){
+  r.total = (r.manual_total!=null && r.manual_total!=='')
+    ? (parseFloat(r.manual_total)||0)
+    : _sdEffectivePrice(r)*(parseFloat(r.qty)||1);
+  return r.total;
+}
 // Labor Total = labor_time(min) × qty_for_labor, for "pc"-counted rows only —
 // mm/gr rows take the flat-1-minute path below instead, so this only ever
 // runs for a per-piece count.
@@ -3009,7 +3114,16 @@ function _sdCellHTML(k,r,i){
          </select>`;
     case 'price': return fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:'';
     case 'priority_price': return prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:'';
-    case 'total': return `<strong>$${(r.total||0).toFixed(2)}</strong>`;
+    // Part Cost is always editable — type a number to set/correct it directly
+    // (see _sdRecalcTotal). Highlighted cyan when there's no FC/Priority price
+    // and no manual override yet, so missing-price rows are easy to spot.
+    case 'total': {
+      const hasManual = r.manual_total!=null && r.manual_total!=='';
+      const noSourcePrice = !(fcPrice>0) && !(prPrice>0) && !hasManual;
+      return `<input type="number" class="sd-manual-total" data-i="${i}" value="${r.total?+r.total.toFixed(2):''}"
+             min="0" step="any" placeholder="0.00" title="${hasManual?'Manual price override — clear to go back to FC/Priority price':'No FC/Priority price — type one in manually'}"
+             style="width:78px;padding:2px 5px;border:1px solid ${noSourcePrice?'#06b6d4':'var(--border)'};border-radius:4px;font-size:12px;font-weight:700;text-align:right;${noSourcePrice?'background:#ecfeff;color:#0e7490':''}">`;
+    }
     case 'labor_time': return `<input type="number" class="sd-labor-time" data-i="${i}" value="${r.labor_time??''}" min="0" step="any"
            placeholder="min" style="width:60px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
     case 'labor_total': return r.labor_total?`${r.labor_total.toFixed(2)} min`:'';
@@ -3038,6 +3152,58 @@ async function _sdAutoMatchLabor(){
     }
   }
 }
+
+// Shows the manufacturing-step breakdown behind the Labor Time number — one
+// section per drawing analyzed by aiAnalyzeCableProcess (see handleSDFiles),
+// each listing every step + its minutes, the drawing's series (per-unit,
+// batch-production) total, and a separate reference figure for what a single
+// stand-alone cable would take. Also shows any general/unattributed step time
+// and a grand total across everything currently counted in the auto Labor Time.
+function openLaborBreakdownModal(){
+  const {autoLaborMinutes}=_sdComputeSummary();
+  if(!_sdLaborBreakdowns.length){
+    showModal(`<div class="modal modal-sm">
+      <div class="modal-head"><h3>📋 Labor Time Breakdown</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+      <div class="modal-body">
+        <p style="color:var(--muted);font-size:13px">No AI cable-process analysis yet — import a drawing via "📎 New Drawing" to get a step-by-step manufacturing breakdown here.</p>
+      </div>
+      <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>
+    </div>`);
+    return;
+  }
+  const sections = _sdLaborBreakdowns.map(b=>`
+    <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+      <div style="font-weight:700;margin-bottom:6px">${esc(b.drawingName||'(drawing)')}</div>
+      <table style="width:100%;font-size:12px;border-collapse:collapse">
+        <thead><tr style="text-align:left;color:var(--muted)">
+          <th style="padding:2px 4px">Operation</th><th style="padding:2px 4px;text-align:right;width:70px">Minutes</th>
+        </tr></thead>
+        <tbody>
+          ${b.steps.map(s=>`<tr><td style="padding:2px 4px">${esc(s.operation||'')}</td><td style="padding:2px 4px;text-align:right">${(parseFloat(s.minutes)||0).toFixed(1)}</td></tr>`).join('')}
+        </tbody>
+      </table>
+      <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:12px">
+        <strong>Total (series, per unit)</strong><strong>${b.seriesTotal.toFixed(1)} min</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between;color:var(--muted);font-size:12px">
+        <span>Reference: single stand-alone cable</span><span>≈ ${b.singleUnitMinutes.toFixed(1)} min</span>
+      </div>
+    </div>`).join('');
+  const generalRow = _sdGeneralLaborMinutes>0
+    ? `<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:10px"><span>General assembly/inspection steps (not tied to one part)</span><span>${_sdGeneralLaborMinutes.toFixed(1)} min</span></div>`
+    : '';
+  showModal(`<div class="modal" style="width:min(94vw,650px)">
+    <div class="modal-head"><h3>📋 Labor Time Breakdown</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" style="max-height:70vh;overflow:auto">
+      ${sections}
+      ${generalRow}
+      <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;padding-top:8px;border-top:2px solid var(--border)">
+        <span>Total Labor Time (auto)</span><span>${autoLaborMinutes.toFixed(1)} min</span>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>
+  </div>`);
+}
 let _sdFilterQ='';
 let _sdProfitPct=40;
 let _sdLaborRateMin=0.5; // USD/minute — user-editable in Settings; mirrors Windows' $0.50/min default
@@ -3048,9 +3214,23 @@ function _sdLaborRatePerMin(){ return parseFloat(_sdLaborRateMin)||0; }
 // calculated from their number instead. Clearing the field goes back to auto.
 let _sdLaborMinutesOverride=null;
 
+// AI cable-manufacturing-process analysis (Sales Desk "New Drawing" import only —
+// see handleSDFiles/aiAnalyzeCableProcess). _sdLaborBreakdowns holds one entry per
+// analyzed drawing ({drawingName, steps:[{operation,minutes,row_idx}], seriesTotal,
+// singleUnitMinutes}) for the Cost Summary breakdown modal. _sdGeneralLaborMinutes
+// accumulates step time that wasn't attributed to any specific BOM row (general
+// assembly/inspection steps) so it still counts toward the total labor cost.
+// _sdPendingLaborByKey is a short-lived `${drawingName}|${part_number}` → minutes
+// map bridging handleSDFiles' per-file AI analysis to the row objects actually
+// created when the user confirms the BOM preview and the rows land in sdItems.
+let _sdLaborBreakdowns=[];
+let _sdGeneralLaborMinutes=0;
+let _sdPendingLaborByKey={};
+
 function _sdComputeSummary(){
   let partsTotal=0, autoLaborMinutes=0;
   for(const r of sdItems){ partsTotal+=r.total||0; autoLaborMinutes+=r.labor_total||0; }
+  autoLaborMinutes += _sdGeneralLaborMinutes;
   const laborMinutes = _sdLaborMinutesOverride!=null ? _sdLaborMinutesOverride : autoLaborMinutes;
   const laborCost=laborMinutes*_sdLaborRatePerMin();
   const subtotal=partsTotal+laborCost;
@@ -3124,6 +3304,11 @@ async function renderSalesDesk(){
       sdItems[i].unit=sel.value;
       _sdRecalcRow(sdItems[i]); renderSD();
     }));
+    document.querySelectorAll('.sd-manual-total').forEach(inp=>inp.addEventListener('change',()=>{
+      const i=+inp.dataset.i, v=inp.value.trim();
+      sdItems[i].manual_total = v===''?null:v;
+      _sdRecalcRow(sdItems[i]); renderSD();
+    }));
     document.querySelectorAll('#sd-tbody .btn-red').forEach(btn=>btn.addEventListener('click',()=>{
       sdItems.splice(+btn.dataset.i,1); renderSD();
     }));
@@ -3163,7 +3348,10 @@ async function renderSalesDesk(){
           <div style="padding:6px 0">
             <div class="summary-row"><span>Parts Total</span><span id="sd-parts-total">$0.00</span></div>
             <div class="summary-row">
-              <span title="Defaults to the sum of every row's Labor Total — type your own number to override it">Labor Time (min)</span>
+              <span title="Defaults to the sum of every row's Labor Total — type your own number to override it" style="display:flex;align-items:center;gap:5px">
+                Labor Time (min)
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-sd-labor-breakdown" title="Show the manufacturing-step breakdown behind this number" style="padding:1px 6px;font-size:11px">📋</button>
+              </span>
               <input type="number" id="sd-labor-minutes" min="0" step="any"
                 style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
             </div>
@@ -3194,6 +3382,8 @@ async function renderSalesDesk(){
     _sdLaborMinutesOverride = v==='' ? null : (parseFloat(v)||0);
     _sdUpdateSummaryUI();
   },150));
+
+  document.getElementById('btn-sd-labor-breakdown')?.addEventListener('click',openLaborBreakdownModal);
 
   document.getElementById('sd-profit-pct').addEventListener('input',debounce(e=>{
     _sdProfitPct=parseFloat(e.target.value)||0;
@@ -3427,6 +3617,7 @@ async function handleSDFiles(files){
     try {
       let extractedRows=[];
       let _pdfText='', _pdfTextLen=0, _pdfImages=[];
+      let _procIsImage=false, _procImgData=null; // whichever image (if any) ended up being used — reused below for the cable-process analysis
 
       if(isPDF){
         setM('Reading PDF pages…',15);
@@ -3446,14 +3637,16 @@ async function handleSDFiles(files){
             if(!b64) continue;
             setM(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`,60+Math.round(35*pi/_pdfImages.length));
             const rows2=await aiExtractBOM('',true,{b64,mimeType:'image/png'},file.name);
-            if(rows2.length){extractedRows=rows2;break;}
+            if(rows2.length){extractedRows=rows2;_procIsImage=true;_procImgData={b64,mimeType:'image/png'};break;}
           }
         }
+        if(!_procIsImage && _pdfImages[0]){ _procIsImage=true; _procImgData={b64:_pdfImages[0],mimeType:'image/png'}; }
       } else {
         setM('Encoding image…',20);
         const {b64,mimeType}=await encodeImage(file);
         setM('Sending to AI (vision)…',50);
         extractedRows=await aiExtractBOM('',true,{b64,mimeType},file.name);
+        _procIsImage=true; _procImgData={b64,mimeType};
       }
 
       _normalizeBOMRows(extractedRows);
@@ -3469,6 +3662,44 @@ async function handleSDFiles(files){
         if(!r.revision) r.revision=fileRevision;
         _normalizeExtractedRow(r);
       });
+
+      // Sales-Desk-only: analyze the actual manufacturing steps this cable
+      // assembly needs (cut/strip, crimp, heat-shrink, label, test…) and their
+      // time, assuming series/batch production. Each step's minutes get
+      // attributed to whichever BOM row it belongs to (bridged via
+      // _sdPendingLaborByKey, consumed when the rows are added to sdItems
+      // below) — steps not tied to one row add to _sdGeneralLaborMinutes so
+      // the assembly's total labor cost still accounts for them. The full
+      // breakdown (+ a single-unit reference time) is kept in
+      // _sdLaborBreakdowns for the Cost Summary breakdown modal.
+      if(extractedRows.length && (anthKey||geminiKey)){
+        try{
+          setM('Analyzing cable manufacturing process…',95);
+          const rowsList=extractedRows.map((r,idx)=>`${idx}: ${r.description||r.part_number||''}`).join('\n');
+          const proc = await aiAnalyzeCableProcess(_procIsImage?'':_pdfText, _procIsImage, _procImgData, rowsList);
+          if(proc && proc.steps.length){
+            let generalMinutes=0;
+            for(const step of proc.steps){
+              const mins=parseFloat(step.minutes)||0;
+              if(!mins) continue;
+              const row = (step.row_idx!=null) ? extractedRows[step.row_idx] : null;
+              if(row){
+                const key=`${effectiveDwgName}|${row.part_number||row.description||step.row_idx}`;
+                _sdPendingLaborByKey[key]=(_sdPendingLaborByKey[key]||0)+mins;
+              } else {
+                generalMinutes+=mins;
+              }
+            }
+            _sdGeneralLaborMinutes += generalMinutes;
+            _sdLaborBreakdowns.push({
+              drawingName: effectiveDwgName,
+              steps: proc.steps,
+              seriesTotal: parseFloat(proc.series_total_minutes) || proc.steps.reduce((a,s)=>a+(parseFloat(s.minutes)||0),0),
+              singleUnitMinutes: parseFloat(proc.single_unit_minutes)||0,
+            });
+          }
+        }catch(e){ console.warn('[SD] cable-process analysis failed:', e.message); }
+      }
 
       if(!extractedRows.length){
         errors.push(`"${file.name}" — no BOM rows detected`);
@@ -3510,12 +3741,21 @@ async function handleSDFiles(files){
           price:match?parseFloat(match.price)||0:0, priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
           labor_time:'', labor_total:0
         };
-        const m=_matchLaborTime(item.description,_routings);
-        if(m) item.labor_time=m;
+        // Cable-process-analysis time (see handleSDFiles) wins over the generic
+        // keyword-based routing match, since it's derived from this specific
+        // drawing rather than a keyword guess.
+        const dwgKey=`${item.drawing_number}|${item.part_number||item.description}`;
+        if(_sdPendingLaborByKey[dwgKey]!=null){
+          item.labor_time = String(_sdPendingLaborByKey[dwgKey]);
+        } else {
+          const m=_matchLaborTime(item.description,_routings);
+          if(m) item.labor_time=m;
+        }
         _sdRecalcRow(item);
         sdItems.push(item);
         added++;
       }
+      _sdPendingLaborByKey={};
       toast(`Added ${added} parts to Sales Desk`,'success');
       closeModal();
       document.getElementById('sd-tbody')&&renderSalesDesk();
