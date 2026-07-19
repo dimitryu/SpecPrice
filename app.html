@@ -374,7 +374,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.21';
+const APP_VER   = '1.8.22';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1821,6 +1821,7 @@ COLUMN MAPPING (column names may vary between drawings):
 - "part_number" → manufacturer part number — look for: MANUFACTURER PN, MFR PN, MFG PN, PART NUMBER, PART NO, PN, P/N
 - "drawing_number" → drawing number — look for: DWG NO, DRAWING NO, DRAWING #
 - "drawing_name" → drawing title or assembly name
+- "qty" → quantity — look for: QTY, QUANTITY, NO. REQ'D, NO. OFF, AMOUNT. Return as a plain number string (e.g. "3", "2500"). This is REQUIRED for every row — do not leave it empty unless the drawing genuinely has no quantity column.
 - "unit" → unit of measure — look for: UNIT, UOM, U/M — the ONLY valid values are: "pc", "mm", "cm", "ea", "gm" (grams — also written "GR"), "M" (meters). If the column shows anything else, leave "unit" as empty string "" rather than inventing or guessing a unit.
 - "pin_count" → for connector parts only: the number of pins/positions/contacts (look for a POS, PINS, CONTACTS, WAY column, or a count embedded in the part number/description of a known connector series). Empty string "" if the row isn't a connector or the count isn't known — do not guess.
 - "price" → normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). The ONLY exception is a synthesized crimp-tool row — see rule 5 below.
