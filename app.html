@@ -374,7 +374,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.20';
+const APP_VER   = '1.8.21';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -460,7 +460,13 @@ function pickCompany(docs) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// Escapes for safe embedding in BOTH HTML text content AND double-quoted HTML
+// attributes (e.g. data-id="${esc(x)}"). Part numbers/descriptions routinely
+// contain a literal " (inch mark, e.g. 3/4", 1/4") — without escaping quotes,
+// that " prematurely closes the attribute and corrupts whatever follows it
+// (e.g. a checkbox's data-id gets truncated, breaking Delete Selected for that
+// row). Must escape & first so the entities below aren't double-escaped.
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function mkEl(tag,cls='',html=''){const e=document.createElement(tag);if(cls)e.className=cls;if(html)e.innerHTML=html;return e;}
 function fmtPrice(v){const n=parseFloat(v);return isNaN(n)||n===0?'':'$'+n.toFixed(4);}
 function fmtDate(v){if(!v)return'';try{const d=v.toDate?v.toDate():new Date(v);return d.toLocaleDateString('en-GB');}catch{return String(v);}}
@@ -790,8 +796,6 @@ const _PS_DEFAULT_COLS=[
   {k:'unit',          l:'Units',            w:'55px'},
   {k:'rfq_names',     l:'RFQ',             w:'140px',wrap:true},
   {k:'pin_count',       l:'Pins',           w:'55px'},
-  {k:'crimp_tool_pn',   l:'Crimp Tool PN',  w:'110px'},
-  {k:'crimp_tool_price',l:'Crimp Tool $',   w:'85px'},
   {k:'updatedAt',     l:'Updated',          w:'90px'},
   {k:'_fc',           l:'FindChips',        w:'80px'},
 ];
@@ -806,7 +810,6 @@ function _psCellHTML(k,p){
     case 'priority_price': return prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:'';
     case 'unit': return esc(p.unit||p.units||'');
     case 'rfq_names': return esc((p.rfq_names||[]).join(', '));
-    case 'crimp_tool_price': return p.crimp_tool_price ? fmtPrice(parseFloat(p.crimp_tool_price)||0) : '';
     case 'updatedAt': return fmtDate(p.updatedAt);
     case '_fc': return p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px">🔍 FC</a>`:'';
     default: return esc(p[k]);
@@ -822,7 +825,7 @@ async function renderPartStock(filter=''){
   const filtered=(filter||'').trim()
     ? allParts.filter(p=>predicate([p.part_number,p.drawing_number,p.drawing_name,p.atlantium_pn,p.description,
         p.manufacturer,p.distributor,p.qty,p.unit,p.units,(p.rfq_names||[]).join(' '),
-        p.pin_count,p.crimp_tool_pn,p.crimp_tool_price].map(v=>String(v||'')).join(' | ').toLowerCase()))
+        p.pin_count].map(v=>String(v||'')).join(' | ').toLowerCase()))
     : allParts;
 
   // Sort ALWAYS runs over the full filtered set (all matching parts across every page),
@@ -862,6 +865,7 @@ async function renderPartStock(filter=''){
       <button class="tbl-scroll-btn" id="ps-scroll-left" title="Scroll left">◀</button>
       <button class="tbl-scroll-btn" id="ps-scroll-right" title="Scroll right">▶</button>
       <select class="search-box" id="ps-page-size" style="flex:0 0 auto;min-width:auto;width:auto;padding:7px 9px">${pageSizeOpts}</select>
+      <button class="btn btn-ghost" id="btn-ps-refresh" style="white-space:nowrap;flex-shrink:0" title="Reload latest data from the database">🔄 Refresh</button>
       <button class="btn btn-blue" id="btn-ps-fc" style="white-space:nowrap;flex-shrink:0">🔍 Check FindChips</button>
       <button class="btn btn-ghost" id="btn-ps-priority" style="white-space:nowrap;flex-shrink:0">📥 Priority Import</button>
       <button class="btn btn-green" id="btn-ps-export" style="white-space:nowrap;flex-shrink:0">📊 Export to Excel</button>
@@ -918,6 +922,12 @@ async function renderPartStock(filter=''){
   // Check-all toggle (current page only)
   document.getElementById('ps-check-all')?.addEventListener('change',e=>{
     document.querySelectorAll('.ps-check').forEach(cb=>cb.checked=e.target.checked);
+  });
+
+  // Refresh — force a fresh read from Firestore (bypasses the in-memory allParts cache)
+  document.getElementById('btn-ps-refresh')?.addEventListener('click',()=>{
+    allParts=[];
+    renderPartStock(inp.value);
   });
 
   // FindChips button — check selected rows (or all matching rows across every page if none selected)
@@ -1205,8 +1215,6 @@ async function renderRFQDetail(projectId, projectName, searchQ=''){
     {k:'unit',          l:'Units',       w:'55px'},
     {k:'manufacturer',  l:'Manufacturer',w:'110px'},
     {k:'pin_count',       l:'Pins',           w:'55px'},
-    {k:'crimp_tool_pn',   l:'Crimp Tool PN',  w:'110px'},
-    {k:'crimp_tool_price',l:'Crimp Tool $',   w:'85px'},
   ];
   const BOM_COLS=loadColOrder('bom',_BOM_DEFAULT_COLS);
   const bomColspan=BOM_COLS.length+2;
@@ -1510,8 +1518,7 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
         if(!r.drawing_number) r.drawing_number=effectiveDwgName;
         if(!r.drawing_name) r.drawing_name=effectiveDwgName;
         if(!r.revision) r.revision=fileRevision;
-        _splitLengthQtyUnit(r);
-        r.unit=_normalizeUnit(r.unit);
+        _normalizeExtractedRow(r);
       });
 
       if(!extractedRows.length){
@@ -1563,8 +1570,8 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
 // showBOMPreview(rows, body, foot, btnLabel, saveCallback)
 // saveCallback(updatedRows) is called when user clicks Save
 function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
-  const PCOLS=['item','drawing_number','revision','part_number','drawing_name','atlantium_pn','description','qty','unit','manufacturer','pin_count','crimp_tool_pn','crimp_tool_price'];
-  const PLABELS=['Item','Drawing #','Revision','MNF P/N','Dwg Name','Cust PN','Description','QTY','Units','Manufacturer','Pins','Crimp Tool PN','Crimp Tool $'];
+  const PCOLS=['item','drawing_number','revision','part_number','drawing_name','atlantium_pn','description','qty','unit','manufacturer','pin_count','price'];
+  const PLABELS=['Item','Drawing #','Revision','MNF P/N','Dwg Name','Cust PN','Description','QTY','Units','Manufacturer','Pins','Price'];
 
   // Expand modal for comfortable editing
   const modalEl=body.closest('.modal');
@@ -1631,42 +1638,63 @@ function _normalizeBOMRows(rows){
   return rows;
 }
 
-// The Database (parts_cache) is a master catalog, not a per-order tally — it
-// folds M into MM and EA into PC (the RFQ/BOM drawing view and Sales Desk
-// still keep M/EA distinct, since those drive the length/labor-time rules).
-// Since every Database row's qty is always forced to 1 (see below), this is a
-// pure relabel with no quantity to rescale.
-function _dbNormalizeUnit(rawUnit){
-  const u=_normalizeUnit(rawUnit);
-  if(u==='m') return 'mm';
-  if(u==='ea') return 'pc';
-  return u;
+// ── System-wide unit canonicalization ─────────────────────────────────────────
+// The ENTIRE system (BOM/drawing extraction, RFQ, Sales Desk, Database, Priority
+// import) only ever stores exactly 3 canonical units, always lowercase:
+//   pc  — piece count
+//   mm  — millimeters (the sole length unit)
+//   gr  — grams (weight — treated like a length unit for LABOR/FC purposes)
+// Any other unit that's recognized coming in gets folded into one of these
+// three, rescaling QTY wherever the conversion actually changes the physical
+// quantity (M/m and cm really do need their qty rescaled — EA/GM are pure
+// relabels of the exact same count):
+//   M / m / meter(s)      → mm   (× 1000 — 1 m = 1000 mm)
+//   cm / centimeter(s)    → mm   (× 10   — 1 cm = 10 mm)
+//   EA / ea               → pc   (relabel only — same count)
+//   GR / gm / g / gram(s) → gr   (relabel only — already grams)
+//   pc / mm / gr          → unchanged (already canonical)
+//   anything else         → unit cleared to '' (never guessed)
+// This runs once, at the point a row FIRST enters the system (BOM extraction),
+// so qty is already correctly rescaled by the time it reaches the RFQ/BOM view,
+// Sales Desk, or the Database — the Database's own qty=1 pin (see
+// saveBOMToPartStock) happens independently and doesn't need to re-rescale.
+function _normalizeUnitQty(qty, rawUnit){
+  const u=String(rawUnit||'').trim().toLowerCase();
+  const n=parseFloat(qty);
+  const hasNum=!isNaN(n);
+  switch(u){
+    case 'pc': case 'mm': case 'gr': return {qty, unit:u};
+    case 'm': case 'meter': case 'meters':
+      return {qty: hasNum ? n*1000 : qty, unit:'mm'};
+    case 'cm': case 'centimeter': case 'centimeters':
+      return {qty: hasNum ? n*10 : qty, unit:'mm'};
+    case 'ea': return {qty, unit:'pc'};
+    case 'gm': case 'g': case 'gram': case 'grams':
+      return {qty, unit:'gr'};
+    default: return {qty, unit:''};
+  }
 }
-
-// AI BOM extraction sometimes returns a length value as a single QTY string
-// like "500mm" or "2.5M" instead of a separate qty + unit — split it: the
-// numeric part goes into qty, the unit (normalized to 'mm' or 'm') goes into
-// the unit field, overwriting whatever unit was there (the suffix embedded in
-// QTY is the more authoritative signal, since it came from the same cell).
-function _splitLengthQtyUnit(r){
+// AI BOM extraction sometimes returns a length/weight value as a single QTY
+// string like "500mm", "2.5M" or "10cm" instead of a separate qty + unit —
+// detect a unit suffix embedded directly in the QTY string first (it's the
+// more authoritative signal, since it came from the same cell), then run
+// whatever unit we ended up with (embedded or from the row's own "unit"
+// field) through the canonical normalizer above.
+function _normalizeExtractedRow(r){
+  let qty=r.qty, unit=r.unit;
   const raw=String(r.qty??'').trim();
-  if(!raw) return;
-  let m=raw.match(/^([\d.,]+)\s*mm$/i);
-  if(m){ r.qty=parseFloat(m[1].replace(/,/g,''))||raw; r.unit='mm'; return; }
-  m=raw.match(/^([\d.,]+)\s*m$/i);
-  if(m){ r.qty=parseFloat(m[1].replace(/,/g,''))||raw; r.unit='m'; return; }
+  const m=raw.match(/^([\d.,]+)\s*([a-zA-Z]+)$/);
+  if(m){ qty=parseFloat(m[1].replace(/,/g,''))||raw; unit=m[2]; }
+  const norm=_normalizeUnitQty(qty, unit);
+  r.qty=norm.qty; r.unit=norm.unit;
 }
-// Units recognized from drawing extraction: pc, mm, M, cm, ea, gm (grams —
-// "GR" is accepted as an alias for gm). Anything else that ends up in the
-// extracted UNIT field isn't a real unit of measure — almost always a
-// mis-extraction — so it's cleared rather than kept and treated as if it
-// meant something downstream (labor calc, FC lookup, etc.).
-const _VALID_UNITS=['pc','mm','m','cm','ea','gm'];
-function _normalizeUnit(raw){
-  const s=String(raw||'').trim().toLowerCase();
-  if(!s) return '';
-  if(s==='gr') return 'gm';
-  return _VALID_UNITS.includes(s) ? s : '';
+// Database-layer safety net: by the time a row reaches saveBOMToPartStock it
+// should already be canonical (normalized at extraction time above), but this
+// re-runs the same fold defensively for any path that might bypass it (manual
+// entry, older cached rows, etc). Qty is ignored here since the Database always
+// pins qty to 1 regardless (see saveBOMToPartStock) — only the unit label matters.
+function _dbNormalizeUnit(rawUnit){
+  return _normalizeUnitQty(1, rawUnit).unit;
 }
 
 // ── Save BOM rows to Part Stock (parts_cache) ─────────────────────────────────
@@ -1698,8 +1726,10 @@ async function saveBOMToPartStock(rows, rfqName=''){
         if(r.unit && !d.unit) patch.unit=_dbNormalizeUnit(r.unit);
         if(r.atlantium_pn && !d.atlantium_pn) patch.atlantium_pn=r.atlantium_pn;
         if(r.pin_count && !d.pin_count) patch.pin_count=r.pin_count;
-        if(r.crimp_tool_pn && !d.crimp_tool_pn) patch.crimp_tool_pn=r.crimp_tool_pn;
-        if(r.crimp_tool_price && !d.crimp_tool_price) patch.crimp_tool_price=r.crimp_tool_price;
+        // r.price only ever arrives set on a synthesized crimp-tool BOM row (see
+        // _BOM_TEXT_PROMPT/_BOM_VISION_PROMPT rule 5) — fill it in as the part's
+        // FC-price field if the Database doesn't already have a price for it.
+        if(r.price && !d.price) patch.price=parseFloat(r.price)||'';
         if(rfqName && !(d.rfq_names||[]).includes(rfqName)) patch.rfq_names=arrayUnion(rfqName);
         await updateDoc(ref,patch);
       } else {
@@ -1707,8 +1737,8 @@ async function saveBOMToPartStock(rows, rfqName=''){
           part_number:pn, description:r.description||'',
           drawing_number:r.drawing_number||'', manufacturer:r.manufacturer||'',
           unit:_dbNormalizeUnit(r.unit)||'', atlantium_pn:r.atlantium_pn||'', qty:1,
-          pin_count:r.pin_count||'', crimp_tool_pn:r.crimp_tool_pn||'', crimp_tool_price:r.crimp_tool_price||'',
-          price:'', distributor:'', stock:'', price_description:'',
+          pin_count:r.pin_count||'',
+          price:r.price?(parseFloat(r.price)||''):'', distributor:'', stock:'', price_description:'',
           rfq_names: rfqName ? [rfqName] : [],
           updatedAt:serverTimestamp()
         });
@@ -1791,10 +1821,9 @@ COLUMN MAPPING (column names may vary between drawings):
 - "part_number" → manufacturer part number — look for: MANUFACTURER PN, MFR PN, MFG PN, PART NUMBER, PART NO, PN, P/N
 - "drawing_number" → drawing number — look for: DWG NO, DRAWING NO, DRAWING #
 - "drawing_name" → drawing title or assembly name
-- "unit" → unit of measure — look for: UNIT, UOM, U/M — the ONLY valid values are: "pc", "mm", "M", "cm", "ea", "gm" (grams — also written "GR"). If the column shows anything else, leave "unit" as empty string "" rather than inventing or guessing a unit.
+- "unit" → unit of measure — look for: UNIT, UOM, U/M — the ONLY valid values are: "pc", "mm", "cm", "ea", "gm" (grams — also written "GR"), "M" (meters). If the column shows anything else, leave "unit" as empty string "" rather than inventing or guessing a unit.
 - "pin_count" → for connector parts only: the number of pins/positions/contacts (look for a POS, PINS, CONTACTS, WAY column, or a count embedded in the part number/description of a known connector series). Empty string "" if the row isn't a connector or the count isn't known — do not guess.
-- "crimp_tool_pn" → ONLY if pin_count is set: the manufacturer's standard hand-crimp or contact-insertion tool part number typically used to terminate/insert pins into that specific connector, based on your knowledge of that connector manufacturer's tooling. Empty string "" if you aren't reasonably confident — never invent a plausible-looking part number.
-- "crimp_tool_price" → ONLY if crimp_tool_pn is set: that tool's approximate list price in USD (a plain number, no currency symbol). Empty string "" if unknown.
+- "price" → normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). The ONLY exception is a synthesized crimp-tool row — see rule 5 below.
 
 QTY RULE: If there are multiple quantity columns (e.g. for different product sizes), take the FIRST one only.
 
@@ -1803,9 +1832,10 @@ RULES:
 2. Skip header rows, total/summary rows, and blank rows
 3. If a column is missing, leave it as empty string ""
 4. Keep descriptions exactly as written
+5. If a row has a "pin_count" value (a connector whose pins need to be crimped/inserted), ALSO add ONE EXTRA ROW to the output array — right after that connector's row — for the required crimping/insertion tool, based on your knowledge of that connector manufacturer's tooling. Only add it if you're reasonably confident of the exact tool part number (never invent a plausible-looking one — if unsure, skip the extra row entirely). For that extra row: "part_number" = the tool's manufacturer part number, "description" = a short description that includes the word "TOOL" (e.g. "CRIMP TOOL for <connector series>"), "qty"="1", "unit"="pc", "price" = the tool's approximate USD list price (plain number, no currency symbol), "pin_count"="" (the tool itself isn't a connector), and leave "item" as empty string "".
 
 Return ONLY a valid JSON array, no explanations.
-Example: [{"item":"1","atlantium_pn":"EL0015700","part_number":"VN01 036 0005 1 C","drawing_number":"601-1201-021","drawing_name":"Main Assembly","description":"MALE CRIMPING CONTACT PIN (2.5), UL","qty":"3","unit":"pc","manufacturer":"AMPHENOL","pin_count":"","crimp_tool_pn":"","crimp_tool_price":""}]
+Example: [{"item":"1","atlantium_pn":"EL0015700","part_number":"VN01 036 0005 1 C","drawing_number":"601-1201-021","drawing_name":"Main Assembly","description":"MALE CRIMPING CONTACT PIN (2.5), UL","qty":"3","unit":"pc","manufacturer":"AMPHENOL","pin_count":"4","price":""},{"item":"","atlantium_pn":"","part_number":"CT-2000","drawing_number":"601-1201-021","drawing_name":"Main Assembly","description":"CRIMP TOOL for VN01 series","qty":"1","unit":"pc","manufacturer":"AMPHENOL","pin_count":"","price":"85"}]
 If no BOM is found, return: []
 
 PDF TEXT (file: ${filename}):`;
@@ -1827,17 +1857,17 @@ For each row extract:
 - "unit": unit of measure — the ONLY valid values are: pc, mm, M, cm, ea, gm (grams — also written GR). If it's anything else, use empty string "" instead of guessing.
 - "manufacturer": manufacturer name if shown, else empty string
 - "pin_count": for connector parts only — the number of pins/positions/contacts, read from a POS/PINS/CONTACTS/WAY column if the drawing has one, or inferred from a count embedded in the part number/description of a known connector series. Empty string "" if the row isn't a connector or the count isn't known — do not guess.
-- "crimp_tool_pn": ONLY if pin_count is set — the manufacturer's standard hand-crimp or contact-insertion tool part number typically used to terminate/insert pins into that specific connector, based on your knowledge of that connector manufacturer's tooling. Empty string "" if you aren't reasonably confident — never invent a plausible-looking part number.
-- "crimp_tool_price": ONLY if crimp_tool_pn is set — that tool's approximate list price in USD (a plain number, no currency symbol). Empty string "" if unknown.
+- "price": normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). The ONLY exception is a synthesized crimp-tool row — see rule 5 below.
 
 RULES:
 1. Extract EVERY data row — do NOT stop early or truncate the list
 2. Skip header rows (ITEM, PART NUMBER, DESCRIPTION, QTY, UNIT) and blank rows
 3. Read part numbers character by character — they are precise: do NOT guess or correct them
 4. If a column is missing or empty for a row, use empty string ""
+5. If a row has a "pin_count" value (a connector whose pins need to be crimped/inserted), ALSO add ONE EXTRA ROW to the output array — right after that connector's row — for the required crimping/insertion tool, based on your knowledge of that connector manufacturer's tooling. Only add it if you're reasonably confident of the exact tool part number (never invent a plausible-looking one — if unsure, skip the extra row entirely). For that extra row: "part_number" = the tool's manufacturer part number, "description" = a short description that includes the word "TOOL" (e.g. "CRIMP TOOL for <connector series>"), "qty"="1", "unit"="pc", "price" = the tool's approximate USD list price (plain number, no currency symbol), "pin_count"="" (the tool itself isn't a connector), and leave "item" as empty string "".
 
 Return ONLY a valid JSON array, no explanation.
-Example: [{"item":"1","part_number":"M27500-20SC2S23","drawing_number":"","drawing_name":"","description":"CABLE 20AWG TWISTED PAIR","qty":"10000","unit":"mm","manufacturer":"","atlantium_pn":"","pin_count":"","crimp_tool_pn":"","crimp_tool_price":""}]
+Example: [{"item":"1","part_number":"M27500-20SC2S23","drawing_number":"","drawing_name":"","description":"CABLE 20AWG TWISTED PAIR","qty":"10000","unit":"mm","manufacturer":"","atlantium_pn":"","pin_count":"","price":""},{"item":"","part_number":"CT-2000","drawing_number":"","drawing_name":"","description":"CRIMP TOOL for VN01 series","qty":"1","unit":"pc","manufacturer":"AMPHENOL","atlantium_pn":"","pin_count":"","price":"85"}]
 If no BOM is found, return: []`;
 
 let _dbgLastAI='';
@@ -2017,19 +2047,18 @@ function _fcParsePriceBreaks(texts){
 }
 
 // FindChips lists length-based parts (cables, wire, etc.) in FEET, but our BOMs
-// store length quantities in mm or m. Before searching FindChips for a
-// length-unit part, convert the local qty to feet so the nearest price-break
-// match is against the right scale — otherwise e.g. a 2500mm cable would be
-// searched as "2500" and match a price break meant for 2500 feet, not 2500mm
-// (~8.2 ft). Non-length units (pcs, ea, etc. or no unit) pass through unchanged.
+// store length quantities in mm (the system's sole canonical length unit —
+// see _normalizeUnitQty). Before searching FindChips for a length-unit part,
+// convert the local qty to feet so the nearest price-break match is against
+// the right scale — otherwise e.g. a 2500mm cable would be searched as "2500"
+// and match a price break meant for 2500 feet, not 2500mm (~8.2 ft).
+// gr (grams) is treated the same as mm here per business rule — it's a bulk-
+// material quantity, not a per-piece count, so it gets the same non-"pc"
+// lookup treatment. "pc" (and anything unrecognized) passes through unchanged.
 function _fcTargetQty(qty, unit){
   const u=String(unit||'').trim().toLowerCase();
   const n=parseFloat(qty)||0;
-  if(u==='mm') return Math.max(1, Math.round(n*0.00328084));
-  // gm/gr (grams) is treated the same as meters here, per business rule —
-  // these are bulk-material quantities, not per-piece counts, and should be
-  // looked up the same way length-based (m) rows are.
-  if(u==='m'||u==='meter'||u==='meters'||u==='gm'||u==='gr') return Math.max(1, Math.round(n*3.28084));
+  if(u==='mm'||u==='gr') return Math.max(1, Math.round(n*0.00328084));
   return Math.max(1, Math.round(n)||1);
 }
 
@@ -2256,7 +2285,27 @@ async function runFCCheckModal(items, mode){
 const _PN_HEADER_HINTS=['part number','part_number','partnumber','pn','p/n','מק"ט','מקט','catalog','item number','item no','cat no','cat#'];
 const _PRICE_HEADER_HINTS=['price','unit price','מחיר','cost','rate'];
 const _CURRENCY_HEADER_HINTS=['currency','curr','מטבע'];
-const _UNIT_HEADER_HINTS=['unit','units','uom','u/m','יחידה','יחידות'];
+const _UNIT_HEADER_HINTS=['unit','units','uom','u/m','יחידה','יחידות',"יח'",'יח'];
+
+// Priority ERP exports label their units column ("יח'") with these Hebrew/
+// English tokens rather than pc/mm/gr directly — map them to our 3 canonical
+// units. This is a straight label mapping (not a qty rescale): Priority
+// import rows carry a per-part unit-of-measure label, not a quantity value.
+//   יח' / יח / K / טר  → pc
+//   מטר (meter)        → mm
+//   רגל (foot)         → mm
+//   מל                 → gr
+// Anything else falls back to the general system-wide canonical fold (covers
+// the case where Priority already exported pc/mm/gr/M/EA/cm/etc. directly).
+function _priorityMapUnit(raw){
+  const s=String(raw||'').trim();
+  if(!s) return '';
+  if(s==="יח'"||s==='יח'||s.toLowerCase()==='k'||s==='טר') return 'pc';
+  if(s==='מטר') return 'mm';
+  if(s==='רגל') return 'mm';
+  if(s==='מל') return 'gr';
+  return _normalizeUnitQty(1, s).unit;
+}
 
 function _priorityFindCol(headers, hints){
   const norm=headers.map(h=>String(h||'').trim().toLowerCase());
@@ -2439,7 +2488,7 @@ function renderPrioritySheetMapping(sheetsData, activeSheetName, body, foot){
       const rawCur = curColSel>=0 ? r[curColSel] : '';
       const usd=await _convertToUSD(rawPrice, rawCur);
       if(usd===null) continue;
-      const unit = unitColSel>=0 ? String(r[unitColSel]||'').trim() : '';
+      const unit = unitColSel>=0 ? _priorityMapUnit(r[unitColSel]) : '';
       parsed.push({part_number:pn, priority_price:usd, unit, _raw:String(rawPrice)});
     }
 
@@ -2914,30 +2963,21 @@ function _sdEffectivePrice(r){
   return fc||pr||0;
 }
 function _sdRecalcTotal(r){ r.total=_sdEffectivePrice(r)*(parseFloat(r.qty)||1); return r.total; }
-// Labor Total = labor_time(min) × qty_for_labor. QTY ending in mm/cm (or a Units
-// column of mm/cm) is converted to whole meters first — matches the Windows rule.
+// Labor Total = labor_time(min) × qty_for_labor, for "pc"-counted rows only —
+// mm/gr rows take the flat-1-minute path below instead, so this only ever
+// runs for a per-piece count.
 function _sdLaborQtyMultiplier(r){
-  const qtyRaw=String(r.qty??'').trim().toLowerCase();
-  const unit=String(r.unit||'').trim().toLowerCase();
   const qtyNum=parseFloat(r.qty)||0;
-  if(qtyRaw.endsWith('mm')||unit==='mm'){
-    const num=parseFloat(qtyRaw.replace(/[^\d.]/g,''))||qtyNum||0;
-    return Math.max(1, Math.ceil(num/1000));
-  }
-  if(qtyRaw.endsWith('cm')||unit==='cm'){
-    const num=parseFloat(qtyRaw.replace(/[^\d.]/g,''))||qtyNum||0;
-    return Math.max(1, Math.ceil(num/100));
-  }
   return qtyNum>0 ? qtyNum : 1;
 }
 function _sdRecalcLaborTotal(r){
-  // Length-unit rows (mm or m — cable/wire etc.) and bulk-weight rows (gm/gr,
-  // treated the same as meters per business rule) always take a flat 1
+  // Length rows (mm — the system's sole canonical length unit) and bulk-weight
+  // rows (gr, treated the same as mm per business rule) always take a flat 1
   // minute of labor, regardless of length/weight or whatever labor_time a
   // routing match found — prepping this kind of material takes roughly the
   // same setup time no matter the quantity, so labor doesn't scale here.
   const unit=String(r.unit||'').trim().toLowerCase();
-  if(unit==='mm'||unit==='m'||unit==='gm'||unit==='gr'){
+  if(unit==='mm'||unit==='gr'){
     r.labor_total = 1;
     return r.labor_total;
   }
@@ -2946,7 +2986,7 @@ function _sdRecalcLaborTotal(r){
   return r.labor_total;
 }
 function _sdRecalcRow(r){ _sdRecalcTotal(r); _sdRecalcLaborTotal(r); return r; }
-const _SD_UNIT_OPTIONS=['','pc','mm','m','cm','ea','gm'];
+const _SD_UNIT_OPTIONS=['','pc','mm','gr'];
 function _sdCellHTML(k,r,i){
   const fcPrice=parseFloat(r.price)||0, prPrice=parseFloat(r.priority_price)||0;
   let fcC='',prC='';
@@ -3426,8 +3466,7 @@ async function handleSDFiles(files){
         if(!r.drawing_number) r.drawing_number=effectiveDwgName;
         if(!r.drawing_name) r.drawing_name=effectiveDwgName;
         if(!r.revision) r.revision=fileRevision;
-        _splitLengthQtyUnit(r);
-        r.unit=_normalizeUnit(r.unit);
+        _normalizeExtractedRow(r);
       });
 
       if(!extractedRows.length){
@@ -4103,7 +4142,7 @@ async function cleanLegacyData(){
 // to be run once to catch rows that were saved before those functions were
 // updated — everything saved going forward already gets this automatically.
 async function normalizeDatabaseData(){
-  if(!confirm('Set QTY to 1 and normalize units (M→mm, EA→PC) for every part in the Database? This cannot be undone.')) return;
+  if(!confirm('Set QTY to 1 and normalize units (M/cm→mm, EA→pc, GM→gr) for every part in the Database? This cannot be undone.')) return;
   try{
     const snap=await getDocs(collection(db,'companies',companyId,'parts_cache'));
     let count=0;
