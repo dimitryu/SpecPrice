@@ -375,7 +375,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.28';
+const APP_VER   = '1.8.29';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3745,7 +3745,17 @@ async function handleSDFiles(files){
                 // multiplies it by this row's own quantity when the row lands
                 // in sdItems (same model as a routing keyword match), so this
                 // must stay per-unit, not pre-multiplied.
-                const key=`${effectiveDwgName}|${row.part_number||row.description||step.row_idx}`;
+                // IMPORTANT: key on row.drawing_number (what item.drawing_number
+                // will actually be set to below), NOT effectiveDwgName (the
+                // filename-derived guess) — if the AI extracted its own
+                // drawing_number from the drawing itself (e.g. "WLS - 122 - 011")
+                // that differs from the filename's formatting, using
+                // effectiveDwgName here would silently never match the lookup
+                // key built from item.drawing_number in the save callback below,
+                // so the per-unit rate would be lost (silently falling back to
+                // a generic routing-keyword match) and the breakdown modal would
+                // never find this drawing's rows either.
+                const key=`${row.drawing_number||effectiveDwgName}|${row.part_number||row.description||step.row_idx}`;
                 _sdPendingLaborByKey[key]=(_sdPendingLaborByKey[key]||0)+perUnitMins;
                 const rowUnit=String(row.unit||'').trim().toLowerCase();
                 const rowQty=parseFloat(row.qty)||1;
@@ -3762,7 +3772,12 @@ async function handleSDFiles(files){
               }
             }
             _sdLaborBreakdowns.push({
-              drawingName: effectiveDwgName,
+              // Same reasoning as the key fix above: use the actual (possibly
+              // AI-extracted) drawing_number that rows will carry into sdItems,
+              // not the filename-derived guess, so this breakdown is found by
+              // _sdActiveGeneralLaborMinutes / openLaborBreakdownModal (both of
+              // which match against sdItems' real drawing_number field).
+              drawingName: extractedRows[0]?.drawing_number || effectiveDwgName,
               steps: displaySteps,
               // Always the row-tied sum + general (both already reflecting
               // real per-assembly quantities) — this keeps "Total (series,
@@ -3813,7 +3828,16 @@ async function handleSDFiles(files){
           part_number:r.part_number||r.item||'', description:r.description||'',
           drawing_number:r.drawing_number||match?.drawing_number||match?.drawing_name||'',
           qty, unit:r.unit||match?.unit||match?.units||'pcs',
-          price:match?parseFloat(match.price)||0:0, priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
+          // A crimp/insertion TOOL row is synthesized fresh by the AI during
+          // drawing extraction (see _BOM_TEXT_PROMPT/_BOM_VISION_PROMPT rule 5)
+          // and carries its own approximate price on r.price — it generally
+          // won't be found in the Database (allParts/match) yet since it was
+          // just created by saveBOMToPartStock a few lines above and the local
+          // allParts cache hasn't been refreshed. Prefer r.price when present
+          // so the tool's price shows up immediately instead of appearing as
+          // $0.00 until the next Database refresh.
+          price:r.price?(parseFloat(r.price)||0):(match?parseFloat(match.price)||0:0),
+          priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
           labor_time:'', labor_total:0
         };
         // Cable-process-analysis time (see handleSDFiles) wins over the generic
