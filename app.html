@@ -375,7 +375,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.29';
+const APP_VER   = '1.8.30';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1968,13 +1968,16 @@ ${rowsList}
 For each manufacturing step (e.g. cut/strip the cable, crimp pins into a connector, insert contacts into a housing, heat-shrink a boot or tubing, apply a label, solder, twist/braid, final test/inspection, etc.), return:
 - "operation": short description of the step
 - "row_idx": the index (from the BOM list above) of the row this step's labor belongs to — or null if it's a general assembly/test step not tied to one specific part
-- "minutes": time in minutes for ONE OCCURRENCE of this step (a plain number) — CRITICAL: if row_idx is set and this operation repeats once per unit of that row's quantity (e.g. crimping each of 8 contacts on a row with qty=8), report the time for ONE repetition only (e.g. time to crimp ONE contact), NOT the total for all of them — the app multiplies this by that row's quantity itself. If the operation happens only ONCE for that row regardless of its quantity (e.g. one cable is cut once even though its length is 230mm, one housing is assembled once), report that one-time value instead. For row_idx:null (general) steps, always report the actual one-time total (there's no row quantity to divide by).
+- "unit_minutes": time in minutes for ONE SINGLE OCCURRENCE of this step (a plain number) — e.g. the time to crimp exactly ONE contact, strip exactly ONE wire, apply exactly ONE label. Always the time for one repetition, never a pre-multiplied total.
+- "qty_in_drawing": how many times this exact operation must be repeated to build ONE complete assembly, READ DIRECTLY FROM THE DRAWING (e.g. count the actual pins/contacts/wires shown, not the BOM row's own quantity field, which may describe something else entirely — a connector housing row might have BOM qty=1 while its pins are crimped 20 times). Use 1 for a step that happens exactly once regardless of any part count (e.g. one cable is cut once even though its length is 230mm, one housing is assembled once, one final inspection). For row_idx:null (general) steps this is almost always 1.
+
+CRITICAL: unit_minutes and qty_in_drawing must be reported SEPARATELY and never combined into one number — the app computes unit_minutes × qty_in_drawing itself.
 
 Also return:
-- "single_unit_minutes": a reference estimate (in total, already accounting for repeat operations like crimping every contact) for building just ONE stand-alone cable with no batch efficiency (includes setup/changeover overhead a series run wouldn't need) — for comparison only.
+- "single_unit_minutes": a reference estimate (in total, already accounting for every repeat operation like crimping every contact) for building just ONE stand-alone cable with no batch efficiency (includes setup/changeover overhead a series run wouldn't need) — for comparison only.
 
 Return ONLY valid JSON, no explanation, in exactly this shape:
-{"steps":[{"operation":"Strip and cut main cable","minutes":2,"row_idx":0},{"operation":"Crimp one contact","minutes":0.5,"row_idx":1}],"single_unit_minutes":15}
+{"steps":[{"operation":"Strip and cut main cable","unit_minutes":2,"qty_in_drawing":1,"row_idx":0},{"operation":"Crimp one contact","unit_minutes":0.15,"qty_in_drawing":20,"row_idx":1}],"single_unit_minutes":15}
 
 If you can't confidently determine any steps from this drawing, return {"steps":[],"single_unit_minutes":0}`;
 }
@@ -3091,12 +3094,9 @@ function _sdLaborQtyMultiplier(r){
   return qtyNum>0 ? qtyNum : 1;
 }
 function _sdRecalcLaborTotal(r){
-  // Labor Time (whether from a routing keyword match or the AI cable-process
-  // analysis — see handleSDFiles) is always a PER-UNIT rate that scales with
-  // the row's own quantity (e.g. "crimp one contact" × 8 contacts) — the
-  // analysis is expected to report per-occurrence time, not an already-
-  // multiplied total, precisely so this multiplication is correct rather than
-  // double-counting.
+  // Labor Time from a routing keyword match is always a PER-UNIT rate that
+  // scales with the row's own Sales-Desk quantity (e.g. "apply label" × 8
+  // identical rows) — that multiplication happens below.
   // Length rows (mm — the system's sole canonical length unit) and bulk-weight
   // rows (gr, treated the same as mm per business rule) always take a flat 1
   // minute of labor, regardless of length/weight or whatever labor_time a
@@ -3108,6 +3108,17 @@ function _sdRecalcLaborTotal(r){
     return r.labor_total;
   }
   const lt=parseFloat(r.labor_time)||0;
+  if(r._laborFixedTotal){
+    // Sourced from the AI cable-process analysis (see handleSDFiles), where
+    // labor_time already equals unit_minutes × qty_in_drawing — the AI's own
+    // count of how many times the operation repeats in the drawing, read
+    // directly off the drawing itself. Do NOT re-multiply by this row's own
+    // qty column: that column may represent a different quantity concept
+    // entirely (e.g. "1 connector housing" whose pins are crimped 20 times),
+    // so multiplying again here would silently inflate the total.
+    r.labor_total = lt;
+    return r.labor_total;
+  }
   r.labor_total = lt>0 ? lt*_sdLaborQtyMultiplier(r) : 0;
   return r.labor_total;
 }
@@ -3201,10 +3212,13 @@ function openLaborBreakdownModal(){
       <div style="font-weight:700;margin-bottom:6px">${esc(b.drawingName||'(drawing)')}</div>
       <table style="width:100%;font-size:12px;border-collapse:collapse">
         <thead><tr style="text-align:left;color:var(--muted)">
-          <th style="padding:2px 4px">Operation</th><th style="padding:2px 4px;text-align:right;width:70px">Minutes</th>
+          <th style="padding:2px 4px">Operation</th>
+          <th style="padding:2px 4px;text-align:right;width:60px">Per op</th>
+          <th style="padding:2px 4px;text-align:center;width:30px">×Qty</th>
+          <th style="padding:2px 4px;text-align:right;width:60px">Total</th>
         </tr></thead>
         <tbody>
-          ${b.steps.map(s=>`<tr><td style="padding:2px 4px">${esc(s.operation||'')}</td><td style="padding:2px 4px;text-align:right">${(parseFloat(s.minutes)||0).toFixed(1)}</td></tr>`).join('')}
+          ${b.steps.map(s=>`<tr><td style="padding:2px 4px">${esc(s.operation||'')}</td><td style="padding:2px 4px;text-align:right;color:var(--muted)">${s.unitMinutes!=null?(parseFloat(s.unitMinutes)||0).toFixed(2):'—'}</td><td style="padding:2px 4px;text-align:center;color:var(--muted)">${s.qty!=null?s.qty:'—'}</td><td style="padding:2px 4px;text-align:right">${(parseFloat(s.minutes)||0).toFixed(1)}</td></tr>`).join('')}
         </tbody>
       </table>
       ${b.generalMinutes ? `<div style="display:flex;justify-content:space-between;color:var(--muted);font-size:11px;margin-top:2px"><span>— of which general assembly/inspection (not tied to one part)</span><span>${b.generalMinutes.toFixed(1)} min</span></div>` : ''}
@@ -3235,6 +3249,11 @@ function _sdLaborRatePerMin(){ return parseFloat(_sdLaborRateMin)||0; }
 // directly into that field, which "locks" it as an override so Labor Cost is
 // calculated from their number instead. Clearing the field goes back to auto.
 let _sdLaborMinutesOverride=null;
+// Same override pattern as Labor Time (min) above, but for the Tools line —
+// normally the auto-summed Part Cost of every TOOL row, but the user can type
+// their own number (e.g. a vendor quote for the actual crimp tool purchase)
+// to override it. Clearing the field goes back to auto.
+let _sdToolsTotalOverride=null;
 
 // AI cable-manufacturing-process analysis (Sales Desk "New Drawing" import only —
 // see handleSDFiles/aiAnalyzeCableProcess). _sdLaborBreakdowns holds one entry per
@@ -3273,17 +3292,18 @@ function _sdActiveGeneralLaborMinutes(){
 function _sdIsToolRow(r){ return /\btool\b/i.test(String(r.description||'')); }
 
 function _sdComputeSummary(){
-  let partsTotal=0, toolsTotal=0, autoLaborMinutes=0;
+  let partsTotal=0, autoToolsTotal=0, autoLaborMinutes=0;
   for(const r of sdItems){
-    if(_sdIsToolRow(r)) toolsTotal+=r.total||0; else partsTotal+=r.total||0;
+    if(_sdIsToolRow(r)) autoToolsTotal+=r.total||0; else partsTotal+=r.total||0;
     autoLaborMinutes+=r.labor_total||0;
   }
   autoLaborMinutes += _sdActiveGeneralLaborMinutes();
   const laborMinutes = _sdLaborMinutesOverride!=null ? _sdLaborMinutesOverride : autoLaborMinutes;
   const laborCost=laborMinutes*_sdLaborRatePerMin();
+  const toolsTotal = _sdToolsTotalOverride!=null ? _sdToolsTotalOverride : autoToolsTotal;
   const subtotal=partsTotal+toolsTotal+laborCost;
   const final=subtotal*(1+_sdProfitPct/100);
-  return {partsTotal, toolsTotal, laborMinutes, autoLaborMinutes, laborCost, subtotal, final};
+  return {partsTotal, toolsTotal, autoToolsTotal, laborMinutes, autoLaborMinutes, laborCost, subtotal, final};
 }
 
 async function renderSalesDesk(){
@@ -3296,14 +3316,15 @@ async function renderSalesDesk(){
     const {partsTotal,toolsTotal,laborMinutes,laborCost,subtotal,final}=_sdComputeSummary();
     const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent='$'+v.toFixed(2); };
     set('sd-parts-total',partsTotal);
-    set('sd-tools-total',toolsTotal);
     set('sd-labor-total',laborCost);
     set('sd-subtotal',subtotal);
     set('sd-final',final);
-    // Only sync the Labor Time input while it's tracking the auto-sum — once
-    // the user has typed their own value (_sdLaborMinutesOverride set), leave
-    // the field alone so it doesn't get overwritten mid-edit or reset by an
-    // unrelated row change elsewhere in the BOM.
+    // Only sync these inputs while they're tracking the auto-sum — once the
+    // user has typed their own value (override set), leave the field alone so
+    // it doesn't get overwritten mid-edit or reset by an unrelated row change
+    // elsewhere in the BOM.
+    const toolsInp=document.getElementById('sd-tools-total');
+    if(toolsInp && _sdToolsTotalOverride==null) toolsInp.value = toolsTotal ? +toolsTotal.toFixed(2) : '';
     const ltInp=document.getElementById('sd-labor-minutes');
     if(ltInp && _sdLaborMinutesOverride==null) ltInp.value = laborMinutes ? +laborMinutes.toFixed(2) : '';
   };
@@ -3396,7 +3417,11 @@ async function renderSalesDesk(){
           <div class="sd-panel-title">Cost Summary</div>
           <div style="padding:6px 0">
             <div class="summary-row"><span>Parts Total</span><span id="sd-parts-total">$0.00</span></div>
-            <div class="summary-row"><span title="Crimp/insertion tool rows added automatically from drawing analysis (description contains TOOL) — a one-time purchase for the job, kept separate from per-cable Parts Total">Tools</span><span id="sd-tools-total">$0.00</span></div>
+            <div class="summary-row">
+              <span title="Defaults to the sum of every TOOL row's Part Cost (crimp/insertion tools added automatically from drawing analysis) — type your own number to override it, e.g. a vendor quote">Tools</span>
+              <span style="display:flex;align-items:center;gap:2px">$<input type="number" id="sd-tools-total" min="0" step="any"
+                style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right"></span>
+            </div>
             <div class="summary-row">
               <span title="Defaults to the sum of every row's Labor Total — type your own number to override it" style="display:flex;align-items:center;gap:5px">
                 Labor Time (min)
@@ -3433,6 +3458,12 @@ async function renderSalesDesk(){
     _sdUpdateSummaryUI();
   },150));
 
+  document.getElementById('sd-tools-total').addEventListener('input',debounce(e=>{
+    const v=e.target.value.trim();
+    _sdToolsTotalOverride = v==='' ? null : (parseFloat(v)||0);
+    _sdUpdateSummaryUI();
+  },150));
+
   document.getElementById('btn-sd-labor-breakdown')?.addEventListener('click',openLaborBreakdownModal);
 
   document.getElementById('sd-profit-pct').addEventListener('input',debounce(e=>{
@@ -3464,7 +3495,7 @@ async function renderSalesDesk(){
   });
 
   document.getElementById('btn-sd-clear').addEventListener('click',()=>{
-    sdItems=[];_sdFilterQ='';_sdLaborMinutesOverride=null;
+    sdItems=[];_sdFilterQ='';_sdLaborMinutesOverride=null;_sdToolsTotalOverride=null;
     _sdLaborBreakdowns=[];_sdPendingLaborByKey={};
     renderSD();
   });
@@ -3737,14 +3768,25 @@ async function handleSDFiles(files){
             let generalMinutes=0, rowTiedMinutes=0;
             const displaySteps=[]; // per-assembly totals (already multiplied) — for the breakdown modal
             for(const step of proc.steps){
-              const perUnitMins=parseFloat(step.minutes)||0;
-              if(!perUnitMins) continue;
+              const unitMins=parseFloat(step.unit_minutes)||0;
+              if(!unitMins) continue;
+              // qty_in_drawing is the AI's own count of how many times this
+              // operation actually repeats in ONE assembly, read directly from
+              // the drawing (e.g. 20 contacts crimped) — deliberately NOT the
+              // BOM row's own qty field, which can describe a different thing
+              // entirely (e.g. a connector-housing row with BOM qty=1 whose
+              // pins still get crimped 20 times). The app does this
+              // multiplication itself (never trusts AI arithmetic).
+              const qtyInDrawing=parseFloat(step.qty_in_drawing)||1;
+              const totalMins=unitMins*qtyInDrawing;
               const row = (step.row_idx!=null) ? extractedRows[step.row_idx] : null;
               if(row){
-                // _sdPendingLaborByKey stores the PER-UNIT rate — _sdRecalcRow
-                // multiplies it by this row's own quantity when the row lands
-                // in sdItems (same model as a routing keyword match), so this
-                // must stay per-unit, not pre-multiplied.
+                // _sdPendingLaborByKey now stores an ALREADY-COMPUTED TOTAL
+                // (unit_minutes × qty_in_drawing) for this row, not a rate to
+                // be multiplied again — the save callback below marks the
+                // resulting item with _laborFixedTotal so _sdRecalcLaborTotal
+                // uses it as-is instead of re-multiplying by the Sales-Desk
+                // table's own (possibly unrelated) qty column.
                 // IMPORTANT: key on row.drawing_number (what item.drawing_number
                 // will actually be set to below), NOT effectiveDwgName (the
                 // filename-derived guess) — if the AI extracted its own
@@ -3752,23 +3794,21 @@ async function handleSDFiles(files){
                 // that differs from the filename's formatting, using
                 // effectiveDwgName here would silently never match the lookup
                 // key built from item.drawing_number in the save callback below,
-                // so the per-unit rate would be lost (silently falling back to
-                // a generic routing-keyword match) and the breakdown modal would
+                // so the total would be lost (silently falling back to a
+                // generic routing-keyword match) and the breakdown modal would
                 // never find this drawing's rows either.
                 const key=`${row.drawing_number||effectiveDwgName}|${row.part_number||row.description||step.row_idx}`;
-                _sdPendingLaborByKey[key]=(_sdPendingLaborByKey[key]||0)+perUnitMins;
+                _sdPendingLaborByKey[key]=(_sdPendingLaborByKey[key]||0)+totalMins;
                 const rowUnit=String(row.unit||'').trim().toLowerCase();
-                const rowQty=parseFloat(row.qty)||1;
                 // Mirror _sdRecalcLaborTotal's rules for what the breakdown
                 // modal displays, so it matches what Cost Summary will
-                // actually add up: mm/gr rows are flat 1 min regardless of
-                // qty; pc rows multiply the per-unit rate by qty.
-                const contribution = (rowUnit==='mm'||rowUnit==='gr') ? 1 : perUnitMins*rowQty;
+                // actually add up: mm/gr rows are flat 1 min regardless of qty.
+                const contribution = (rowUnit==='mm'||rowUnit==='gr') ? 1 : totalMins;
                 rowTiedMinutes+=contribution;
-                displaySteps.push({operation:step.operation, minutes:contribution});
+                displaySteps.push({operation:step.operation, unitMinutes:unitMins, qty:qtyInDrawing, minutes:contribution});
               } else {
-                generalMinutes+=perUnitMins;
-                displaySteps.push({operation:step.operation, minutes:perUnitMins});
+                generalMinutes+=totalMins;
+                displaySteps.push({operation:step.operation, unitMinutes:unitMins, qty:qtyInDrawing, minutes:totalMins});
               }
             }
             _sdLaborBreakdowns.push({
@@ -3842,12 +3882,15 @@ async function handleSDFiles(files){
         };
         // Cable-process-analysis time (see handleSDFiles) wins over the generic
         // keyword-based routing match, since it's derived from this specific
-        // drawing rather than a keyword guess. It's a per-unit rate (per one
-        // occurrence of the operation), same as a routing match — _sdRecalcRow
-        // below multiplies it by this row's own quantity as usual.
+        // drawing rather than a keyword guess. It's already a FIXED TOTAL
+        // (unit_minutes × qty_in_drawing, computed in handleSDFiles from the
+        // AI's own count of drawing repeats) — _laborFixedTotal tells
+        // _sdRecalcLaborTotal to use it as-is instead of multiplying again by
+        // this row's own qty column (see that function for why).
         const dwgKey=`${item.drawing_number}|${item.part_number||item.description}`;
         if(_sdPendingLaborByKey[dwgKey]!=null){
           item.labor_time = String(_sdPendingLaborByKey[dwgKey]);
+          item._laborFixedTotal = true;
         } else {
           const m=_matchLaborTime(item.description,_routings);
           if(m) item.labor_time=m;
