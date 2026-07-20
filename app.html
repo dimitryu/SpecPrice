@@ -375,7 +375,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.31';
+const APP_VER   = '1.8.32';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3265,6 +3265,17 @@ function openLaborBreakdownModal(){
   </div>`);
 }
 let _sdFilterQ='';
+// Independent sort state for the Sales Desk table (separate from Part Stock's
+// sortCol/sortAsc, which is a different table with different columns).
+let _sdSortCol=null, _sdSortAsc=true;
+const _SD_NUMERIC_COLS=new Set(['qty','price','priority_price','total','labor_time']);
+// The 'labor_time' column now displays/edits the row's final total (see
+// _sdCellHTML/_sdRecalcLaborTotal), stored on r.labor_total, not r.labor_time
+// itself — sort on the value actually shown to the user.
+function _sdSortValue(r,k){
+  if(k==='labor_time') return parseFloat(r.labor_total)||0;
+  return r[k];
+}
 let _sdProfitPct=40;
 let _sdLaborRateMin=0.5; // USD/minute — user-editable in Settings; mirrors Windows' $0.50/min default
 function _sdLaborRatePerMin(){ return parseFloat(_sdLaborRateMin)||0; }
@@ -3360,6 +3371,14 @@ async function renderSalesDesk(){
       const r=sdItems[i];
       return predicate(_SD_DEFAULT_COLS.map(c=>String(r[c.k]||'')).join(' | ').toLowerCase());
     });
+    if(_sdSortCol){
+      visibleIdx.sort((ia,ib)=>{
+        let va=_sdSortValue(sdItems[ia],_sdSortCol), vb=_sdSortValue(sdItems[ib],_sdSortCol);
+        if(_SD_NUMERIC_COLS.has(_sdSortCol)){ va=parseFloat(va)||0; vb=parseFloat(vb)||0; }
+        else { va=String(va||'').toLowerCase(); vb=String(vb||'').toLowerCase(); }
+        return _sdSortAsc?(va<vb?-1:va>vb?1:0):(va<vb?1:va>vb?-1:0);
+      });
+    }
     const tbody=visibleIdx.map(i=>{
       const r=sdItems[i];
       return `<tr data-i="${i}">
@@ -3426,7 +3445,11 @@ async function renderSalesDesk(){
           <button class="btn btn-green" id="btn-sd-fc" style="white-space:nowrap">🔍 FindChips</button>
           <button class="btn btn-red" id="btn-sd-clear">Clear All</button>
         </div>
-        <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap;align-items:center;justify-content:flex-end">
+        <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap;align-items:center">
+          <div class="search-wrap" style="flex:1;min-width:180px">
+            <input class="search-box" id="sd-search" placeholder='Search — supports AND / OR / NOT / "phrase" / (...)' value="${esc(_sdFilterQ)}">
+            <button type="button" class="search-clear" id="sd-search-clear" title="Clear">✕</button>
+          </div>
           <button class="tbl-scroll-btn" id="sd-scroll-left" title="Scroll left">◀</button>
           <button class="tbl-scroll-btn" id="sd-scroll-right" title="Scroll right">▶</button>
           <span class="count-badge" id="sd-flt-count" style="white-space:nowrap">${sdItems.length} parts</span>
@@ -3435,7 +3458,7 @@ async function renderSalesDesk(){
           <table style="width:100%" id="sd-table">
             <thead><tr>
               <th style="width:28px"><input type="checkbox" id="sd-check-all" title="Select all"></th>
-              ${SD_COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}" title="Drag to reorder">${c.l}</th>`).join('')}
+              ${SD_COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}" title="Click to sort — drag to reorder">${c.l}${c.k===_sdSortCol?(_sdSortAsc?' ▲':' ▼'):''}</th>`).join('')}
               <th style="width:40px"></th>
             </tr></thead>
             <tbody id="sd-tbody"></tbody>
@@ -3483,6 +3506,21 @@ async function renderSalesDesk(){
   makeColumnsReorderable(document.getElementById('sd-table'),'salesdesk',SD_COLS,()=>renderSalesDesk());
   wireScrollButtons('#sd-table-wrap','sd-scroll-left','sd-scroll-right');
   wireShiftCheck(document.getElementById('sd-table'),'.sd-check');
+  document.querySelectorAll('#sd-table thead th[data-col]').forEach(th=>th.addEventListener('click',()=>{
+    const k=th.dataset.col;
+    if(_sdSortCol===k) _sdSortAsc=!_sdSortAsc; else { _sdSortCol=k; _sdSortAsc=true; }
+    renderSalesDesk();
+  }));
+
+  // Search box — same AND/OR/NOT/"phrase"/(...) boolean query syntax as the
+  // Database table (see parseBoolQuery); renderSD() already reads _sdFilterQ
+  // and filters sdItems by it on every call, this just exposes it in the UI.
+  const sdSearchInp=document.getElementById('sd-search');
+  wireSearchClear('sd-search','sd-search-clear');
+  sdSearchInp.addEventListener('input',debounce(()=>{
+    _sdFilterQ=sdSearchInp.value;
+    renderSD();
+  },200));
 
   document.getElementById('sd-labor-minutes').addEventListener('input',debounce(e=>{
     const v=e.target.value.trim();
