@@ -280,6 +280,7 @@
       <button id="btn-home" title="Home" style="display:none">🏠</button>
       <h2 id="page-title">Home</h2>
       <div id="topbar-actions" style="display:flex;gap:8px"></div>
+      <div id="topbar-info" style="display:flex;align-items:center;gap:8px;margin-right:10px;font-size:11px;color:#94A3B8;white-space:nowrap"></div>
     </div>
     <div id="content"></div>
   </div>
@@ -374,7 +375,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.27';
+const APP_VER   = '1.8.28';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -413,6 +414,8 @@ onAuthStateChanged(auth, async user => {
   } catch(e) { splashErr(e.isDisabled ? e.message : ('Company load error: ' + e.message)); return; }
   document.getElementById('splash').style.display = 'none';
   document.getElementById('shell').style.display = 'flex';
+  const infoEl = document.getElementById('topbar-info');
+  if (infoEl) infoEl.innerHTML = `<span>👤 ${esc(currentUserEmail)}</span><span style="color:#CBD5E1">|</span><span>v${APP_VER}</span>`;
   route('home');
 });
 
@@ -3262,15 +3265,25 @@ function _sdActiveGeneralLaborMinutes(){
   return total;
 }
 
+// A row is a crimp/insertion TOOL line (synthesized by the AI during drawing
+// extraction — see _BOM_TEXT_PROMPT/_BOM_VISION_PROMPT rule 5) if its
+// description contains the word "TOOL". These get broken out into their own
+// "Tools" line in Cost Summary instead of being folded silently into Parts
+// Total, since a tool is a one-time purchase for the job, not a per-cable part.
+function _sdIsToolRow(r){ return /\btool\b/i.test(String(r.description||'')); }
+
 function _sdComputeSummary(){
-  let partsTotal=0, autoLaborMinutes=0;
-  for(const r of sdItems){ partsTotal+=r.total||0; autoLaborMinutes+=r.labor_total||0; }
+  let partsTotal=0, toolsTotal=0, autoLaborMinutes=0;
+  for(const r of sdItems){
+    if(_sdIsToolRow(r)) toolsTotal+=r.total||0; else partsTotal+=r.total||0;
+    autoLaborMinutes+=r.labor_total||0;
+  }
   autoLaborMinutes += _sdActiveGeneralLaborMinutes();
   const laborMinutes = _sdLaborMinutesOverride!=null ? _sdLaborMinutesOverride : autoLaborMinutes;
   const laborCost=laborMinutes*_sdLaborRatePerMin();
-  const subtotal=partsTotal+laborCost;
+  const subtotal=partsTotal+toolsTotal+laborCost;
   const final=subtotal*(1+_sdProfitPct/100);
-  return {partsTotal, laborMinutes, autoLaborMinutes, laborCost, subtotal, final};
+  return {partsTotal, toolsTotal, laborMinutes, autoLaborMinutes, laborCost, subtotal, final};
 }
 
 async function renderSalesDesk(){
@@ -3280,9 +3293,10 @@ async function renderSalesDesk(){
   const SD_COLS=loadColOrder('salesdesk',_SD_DEFAULT_COLS);
 
   const _sdUpdateSummaryUI=()=>{
-    const {partsTotal,laborMinutes,laborCost,subtotal,final}=_sdComputeSummary();
+    const {partsTotal,toolsTotal,laborMinutes,laborCost,subtotal,final}=_sdComputeSummary();
     const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent='$'+v.toFixed(2); };
     set('sd-parts-total',partsTotal);
+    set('sd-tools-total',toolsTotal);
     set('sd-labor-total',laborCost);
     set('sd-subtotal',subtotal);
     set('sd-final',final);
@@ -3382,6 +3396,7 @@ async function renderSalesDesk(){
           <div class="sd-panel-title">Cost Summary</div>
           <div style="padding:6px 0">
             <div class="summary-row"><span>Parts Total</span><span id="sd-parts-total">$0.00</span></div>
+            <div class="summary-row"><span title="Crimp/insertion tool rows added automatically from drawing analysis (description contains TOOL) — a one-time purchase for the job, kept separate from per-cable Parts Total">Tools</span><span id="sd-tools-total">$0.00</span></div>
             <div class="summary-row">
               <span title="Defaults to the sum of every row's Labor Total — type your own number to override it" style="display:flex;align-items:center;gap:5px">
                 Labor Time (min)
