@@ -375,7 +375,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.30';
+const APP_VER   = '1.8.31';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3066,7 +3066,6 @@ const _SD_DEFAULT_COLS=[
   {k:'priority_price', l:'Priority Price',  w:'95px'},
   {k:'total',          l:'Part Cost',       w:'85px'},
   {k:'labor_time',     l:'Labor Time',      w:'85px'},
-  {k:'labor_total',    l:'Labor Total',     w:'90px'},
 ];
 // Part Cost uses the LOWER of FC/Priority price when both exist (mirrors the
 // Windows app's _update_row_total), not just "whichever is present".
@@ -3094,6 +3093,12 @@ function _sdLaborQtyMultiplier(r){
   return qtyNum>0 ? qtyNum : 1;
 }
 function _sdRecalcLaborTotal(r){
+  // The Labor Time column in the table is directly user-editable (see
+  // _sdCellHTML 'labor_time' case) — once the user types their own number,
+  // r._laborManualOverride is set and that number is used as-is here,
+  // exactly like Part Cost's manual_total override. Clearing the field goes
+  // back to the auto-calculation below.
+  if(r._laborManualOverride) return r.labor_total;
   // Labor Time from a routing keyword match is always a PER-UNIT rate that
   // scales with the row's own Sales-Desk quantity (e.g. "apply label" × 8
   // identical rows) — that multiplication happens below.
@@ -3155,9 +3160,17 @@ function _sdCellHTML(k,r,i){
              min="0" step="any" placeholder="0.00" title="${hasManual?'Manual price override — clear to go back to FC/Priority price':'No FC/Priority price — type one in manually'}"
              style="width:78px;padding:2px 5px;border:1px solid ${noSourcePrice?'#06b6d4':'var(--border)'};border-radius:4px;font-size:12px;font-weight:700;text-align:right;${noSourcePrice?'background:#ecfeff;color:#0e7490':''}">`;
     }
-    case 'labor_time': return `<input type="number" class="sd-labor-time" data-i="${i}" value="${r.labor_time??''}" min="0" step="any"
-           placeholder="min" style="width:60px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
-    case 'labor_total': return r.labor_total?`${r.labor_total.toFixed(2)} min`:'';
+    // Labor Time shows/edits the row's actual total minutes directly (what
+    // used to be the separate read-only "Labor Total" column) — type a number
+    // to override the auto-calculated value (see _sdRecalcLaborTotal); clear
+    // it to go back to auto (routing match, AI cable-process analysis, or the
+    // flat 1 min mm/gr rule).
+    case 'labor_time': {
+      const hasManual = !!r._laborManualOverride;
+      return `<input type="number" class="sd-labor-time" data-i="${i}" value="${r.labor_total?+r.labor_total.toFixed(2):''}" min="0" step="any"
+           placeholder="min" title="${hasManual?'Manual override — clear to go back to the auto-calculated value':'Auto-calculated — type your own number to override it'}"
+           style="width:65px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
+    }
     default: return esc(r[k]);
   }
 }
@@ -3168,6 +3181,7 @@ async function _sdAutoMatchLabor(){
   if(!_routings.length) return;
   const stillUnmatched=[];
   sdItems.forEach((r,i)=>{
+    if(r._laborManualOverride) return;
     if(String(r.labor_time||'').trim()) return;
     const desc=String(r.description||'').trim();
     if(!desc) return;
@@ -3221,9 +3235,19 @@ function openLaborBreakdownModal(){
           ${b.steps.map(s=>`<tr><td style="padding:2px 4px">${esc(s.operation||'')}</td><td style="padding:2px 4px;text-align:right;color:var(--muted)">${s.unitMinutes!=null?(parseFloat(s.unitMinutes)||0).toFixed(2):'—'}</td><td style="padding:2px 4px;text-align:center;color:var(--muted)">${s.qty!=null?s.qty:'—'}</td><td style="padding:2px 4px;text-align:right">${(parseFloat(s.minutes)||0).toFixed(1)}</td></tr>`).join('')}
         </tbody>
       </table>
-      ${b.generalMinutes ? `<div style="display:flex;justify-content:space-between;color:var(--muted);font-size:11px;margin-top:2px"><span>— of which general assembly/inspection (not tied to one part)</span><span>${b.generalMinutes.toFixed(1)} min</span></div>` : ''}
+      ${b.generalMinutes ? (()=>{
+        const rowTied = b.rowTiedMinutes!=null ? b.rowTiedMinutes : (b.seriesTotal-b.generalMinutes);
+        // Spelled out as an explicit addition (not just an "of which" aside)
+        // so it's visible at a glance that the general assembly/inspection
+        // time is already counted INTO the total below, not sitting on top
+        // of it as a separate add-on.
+        return `<div style="margin-top:4px;font-size:11px;color:var(--muted)">
+          <div style="display:flex;justify-content:space-between"><span>Row-tied operations</span><span>${rowTied.toFixed(1)} min</span></div>
+          <div style="display:flex;justify-content:space-between"><span>+ General assembly/inspection (not tied to one part)</span><span>${b.generalMinutes.toFixed(1)} min</span></div>
+        </div>`;
+      })() : ''}
       <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:12px">
-        <strong>Total (series, per unit)</strong><strong>${b.seriesTotal.toFixed(1)} min</strong>
+        <strong>= Total (series, per unit)</strong><strong>${b.seriesTotal.toFixed(1)} min</strong>
       </div>
       <div style="display:flex;justify-content:space-between;color:var(--muted);font-size:12px">
         <span>Reference: single stand-alone cable</span><span>≈ ${b.singleUnitMinutes.toFixed(1)} min</span>
@@ -3357,8 +3381,15 @@ async function renderSalesDesk(){
       sdItems[i].qty=qty; _sdRecalcRow(sdItems[i]); renderSD();
     }));
     document.querySelectorAll('.sd-labor-time').forEach(inp=>inp.addEventListener('change',()=>{
-      const i=+inp.dataset.i, lt=parseFloat(inp.value)||0;
-      sdItems[i].labor_time=lt; _sdRecalcLaborTotal(sdItems[i]); renderSD();
+      const i=+inp.dataset.i, v=inp.value.trim(), r=sdItems[i];
+      if(v===''){
+        r._laborManualOverride=false;
+        _sdRecalcLaborTotal(r);
+      } else {
+        r._laborManualOverride=true;
+        r.labor_total=parseFloat(v)||0;
+      }
+      renderSD();
     }));
     document.querySelectorAll('.sd-part-number').forEach(inp=>inp.addEventListener('change',()=>{
       sdItems[+inp.dataset.i].part_number=inp.value.trim();
@@ -3448,6 +3479,7 @@ async function renderSalesDesk(){
     </div>`);
 
   renderSD();
+  makeTableResizable(document.getElementById('sd-table'));
   makeColumnsReorderable(document.getElementById('sd-table'),'salesdesk',SD_COLS,()=>renderSalesDesk());
   wireScrollButtons('#sd-table-wrap','sd-scroll-left','sd-scroll-right');
   wireShiftCheck(document.getElementById('sd-table'),'.sd-check');
@@ -3823,8 +3855,16 @@ async function handleSDFiles(files){
               // real per-assembly quantities) — this keeps "Total (series,
               // per unit)" exactly equal to what Cost Summary's Labor Time
               // actually adds up, so the two numbers can never disagree.
+              rowTiedMinutes,
               seriesTotal: rowTiedMinutes + generalMinutes,
-              singleUnitMinutes: parseFloat(proc.single_unit_minutes)||0,
+              // The single-stand-alone-cable reference is meant to include
+              // extra one-off setup/changeover overhead that a batch run
+              // doesn't pay per-unit — so it should logically never be LOWER
+              // than the series per-unit total. The AI's own estimate is a
+              // separate, independent guess (not derived from the steps
+              // above), so it can come back inconsistent; floor it at the
+              // series total so the two numbers never contradict each other.
+              singleUnitMinutes: Math.max(parseFloat(proc.single_unit_minutes)||0, rowTiedMinutes+generalMinutes),
               generalMinutes,
             });
           }
@@ -3972,7 +4012,7 @@ function exportSalesDeskExcel(){
 
   const {partsTotal,laborCost,subtotal,final}=_sdComputeSummary();
   const headers=['Item','Drawing #','MNF P/N','Description','QTY','Units',
-    'FC Price','Priority Price','Part Cost','Labor Time (min)','Labor Total (min)'];
+    'FC Price','Priority Price','Part Cost','Labor Time (min)'];
   const aoa=[['SALES DESK — PRICE QUOTATION'],
     ['Generated', new Date().toLocaleString()],
     [],
@@ -3981,7 +4021,7 @@ function exportSalesDeskExcel(){
     aoa.push([i+1, r.drawing_number||'', r.part_number||'', r.description||'',
       parseFloat(r.qty)||0, r.unit||'',
       parseFloat(r.price)||'', parseFloat(r.priority_price)||'',
-      +(r.total||0).toFixed(2), r.labor_time||'', +(r.labor_total||0).toFixed(2)]);
+      +(r.total||0).toFixed(2), +(r.labor_total||0).toFixed(2)]);
   });
   aoa.push([]);
   aoa.push(['','','','','','','','','Parts Total', +partsTotal.toFixed(2)]);
@@ -3991,8 +4031,8 @@ function exportSalesDeskExcel(){
   aoa.push(['','','','','','','','','FINAL PRICE', +final.toFixed(2)]);
 
   const ws=XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols']=[{wch:6},{wch:16},{wch:20},{wch:38},{wch:8},{wch:8},{wch:12},{wch:14},{wch:12},{wch:14},{wch:14}];
-  ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:10}}];
+  ws['!cols']=[{wch:6},{wch:16},{wch:20},{wch:38},{wch:8},{wch:8},{wch:12},{wch:14},{wch:12},{wch:14}];
+  ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:9}}];
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'Quote');
   const fname=`SalesDesk_Quote_${new Date().toISOString().slice(0,10)}.xlsx`;
