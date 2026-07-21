@@ -375,7 +375,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.32';
+const APP_VER   = '1.8.33';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3067,22 +3067,45 @@ const _SD_DEFAULT_COLS=[
   {k:'total',          l:'Part Cost',       w:'85px'},
   {k:'labor_time',     l:'Labor Time',      w:'85px'},
 ];
-// Part Cost uses the LOWER of FC/Priority price when both exist (mirrors the
-// Windows app's _update_row_total), not just "whichever is present".
-function _sdEffectivePrice(r){
-  const fc=parseFloat(r.price)||0, pr=parseFloat(r.priority_price)||0;
-  if(fc>0 && pr>0) return Math.min(fc,pr);
-  return fc||pr||0;
+// Length constants for "mm"-unit (length) rows — Priority lists cable/wire
+// pricing per METER, while FindChips/FC lists it per FOOT (see _fcTargetQty,
+// which already converts mm→feet the same way when looking FC prices up).
+// A flat qty×price would overshoot by ~1000x for Priority and ~305x for FC
+// if the row's mm quantity were multiplied straight against either price
+// without first converting it into the unit that price is actually quoted in.
+const MM_PER_METER=1000, MM_PER_FOOT=304.8;
+// Actual dollar cost of this row if priced from `priceField` ('price'=FC,
+// 'priority_price'=Priority) — for "pc" (and any other non-length) rows the
+// price is already per-piece, so qty multiplies directly; for "mm" rows the
+// qty is converted into whatever unit that price source is quoted in first.
+function _sdLineCost(r, priceField){
+  const price=parseFloat(r[priceField])||0;
+  if(!price) return 0;
+  const qty=parseFloat(r.qty)||1;
+  const unit=String(r.unit||'').trim().toLowerCase();
+  if(unit==='mm'){
+    if(priceField==='priority_price') return price*(qty/MM_PER_METER);
+    if(priceField==='price') return price*(qty/MM_PER_FOOT);
+  }
+  return price*qty;
 }
 // Part Cost is directly editable in the table (see _sdCellHTML 'total' case) —
 // r.manual_total, when set, is a straight user-typed override of the whole
 // line's cost (not a per-unit price), useful when there's no FC/Priority price
 // at all or when the user has a better number (e.g. a vendor quote). Clearing
-// the field goes back to the normal price×qty auto-calculation.
+// the field goes back to the normal auto-calculation below.
+// When both FC and Priority prices exist, Part Cost uses whichever produces
+// the LOWER actual dollar cost for this row (mirrors the Windows app's
+// _update_row_total) — compared on real cost, not on the two sources' raw
+// per-unit numbers, since those aren't on the same unit basis for mm rows.
 function _sdRecalcTotal(r){
-  r.total = (r.manual_total!=null && r.manual_total!=='')
-    ? (parseFloat(r.manual_total)||0)
-    : _sdEffectivePrice(r)*(parseFloat(r.qty)||1);
+  if(r.manual_total!=null && r.manual_total!==''){
+    r.total=parseFloat(r.manual_total)||0;
+    return r.total;
+  }
+  const fcHas=(parseFloat(r.price)||0)>0, prHas=(parseFloat(r.priority_price)||0)>0;
+  const fcCost=fcHas?_sdLineCost(r,'price'):0, prCost=prHas?_sdLineCost(r,'priority_price'):0;
+  r.total = (fcHas&&prHas) ? Math.min(fcCost,prCost) : (fcHas?fcCost:(prHas?prCost:0));
   return r.total;
 }
 // Labor Total = labor_time(min) × qty_for_labor, for "pc"-counted rows only —
