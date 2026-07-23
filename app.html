@@ -375,7 +375,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.33';
+const APP_VER   = '1.8.34';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3385,6 +3385,15 @@ async function renderSalesDesk(){
     if(toolsInp && _sdToolsTotalOverride==null) toolsInp.value = toolsTotal ? +toolsTotal.toFixed(2) : '';
     const ltInp=document.getElementById('sd-labor-minutes');
     if(ltInp && _sdLaborMinutesOverride==null) ltInp.value = laborMinutes ? +laborMinutes.toFixed(2) : '';
+    // Flag to the user, right under FINAL PRICE, whenever Tools pricing is
+    // actually contributing to it — easy to miss otherwise since Tools is
+    // just one line among several in Cost Summary.
+    const toolsNote=document.getElementById('sd-tools-note');
+    if(toolsNote){
+      toolsNote.style.display = toolsTotal>0 ? 'block' : 'none';
+      const amtEl=document.getElementById('sd-tools-note-amt');
+      if(amtEl) amtEl.textContent='$'+toolsTotal.toFixed(2);
+    }
   };
 
   const renderSD=()=>{
@@ -3518,6 +3527,9 @@ async function renderSalesDesk(){
           <div class="summary-total">
             <span>FINAL PRICE</span>
             <span id="sd-final">$0.00</span>
+          </div>
+          <div id="sd-tools-note" style="display:none;font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:5px 8px;margin-top:6px">
+            ⚠ Final price includes <strong id="sd-tools-note-amt">$0.00</strong> for Tools (crimp/insertion tools)
           </div>
         </div>
         <button class="btn btn-green" style="width:100%;padding:10px;justify-content:center" id="btn-sd-export">📊 Export to Excel</button>
