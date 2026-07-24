@@ -376,7 +376,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.37';
+const APP_VER   = '1.8.38';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1813,19 +1813,31 @@ async function extractPDFPages(file){
     // PNG can produce a base64 payload of tens of MB. Some environments/
     // proxies then fail the AI provider's fetch() outright before any HTTP
     // response comes back, surfacing as an unhelpful generic "Failed to
-    // fetch" instead of a diagnosable API error. Capping the longer side to
-    // ~2200px and using JPEG (much smaller than PNG for this kind of dense
-    // line-art content, while staying plenty legible for AI vision) keeps
-    // the payload predictable regardless of the source sheet's physical size. --
-    try{
+    // fetch" instead of a diagnosable API error. A first pass caps the longer
+    // side to ~1600px at moderate JPEG quality; if the resulting base64 is
+    // STILL large (dense line-art can defeat JPEG compression — lots of thin
+    // sharp edges compress worse than photos), a second pass re-renders at a
+    // smaller size/quality. This matters because a blind retry of an
+    // identical oversized payload fails the exact same way every time — the
+    // size itself has to come down, not just the attempt count. --
+    const _renderAt=async(maxDim,quality)=>{
       const baseVp = page.getViewport({scale:1});
-      const MAX_DIM=2200;
-      const scale = Math.min(2.5, MAX_DIM/Math.max(baseVp.width, baseVp.height));
+      const scale = Math.min(2.5, maxDim/Math.max(baseVp.width, baseVp.height));
       const vp = page.getViewport({scale});
       const canvas = document.createElement('canvas');
       canvas.width=vp.width; canvas.height=vp.height;
       await page.render({canvasContext:canvas.getContext('2d'), viewport:vp}).promise;
-      pageImages.push(canvas.toDataURL('image/jpeg',0.88).split(',')[1]);
+      return canvas.toDataURL('image/jpeg',quality).split(',')[1];
+    };
+    try{
+      let b64 = await _renderAt(1600,0.75);
+      // base64 is ~4/3 the binary size; ~2,600,000 chars ≈ ~1.95MB binary
+      if(b64.length>2600000){
+        console.warn('[PDF render] page',i,'still large at',(b64.length/1e6).toFixed(1),'MB base64 — re-rendering smaller');
+        b64 = await _renderAt(1100,0.6);
+      }
+      console.log('[PDF render] page',i,'final image size:',(b64.length/1e6).toFixed(2),'MB base64');
+      pageImages.push(b64);
     }catch(e){ pageImages.push(null); }
   }
   return {pageTexts, pageImages};
@@ -1940,12 +1952,26 @@ function _parseAIJson(raw){
 // response (4xx/5xx): those are genuine API errors (bad key, rate limit,
 // oversized request) that a retry wouldn't fix.
 async function _fetchWithRetry(url, opts){
-  try{ return await fetch(url, opts); }
+  // A 60s timeout turns an indefinite hang (e.g. a large image upload stalling
+  // on a slow connection) into a clear, bounded failure instead of the tab
+  // just spinning forever — and it's a DIFFERENT error class (AbortError) from
+  // the network-level TypeError this function otherwise retries, so the two
+  // failure modes stay distinguishable in the message shown to the user.
+  const withTimeout = (o)=>({...o, signal:o.signal||AbortSignal.timeout(60000)});
+  try{ return await fetch(url, withTimeout(opts)); }
   catch(e){
+    if(e && e.name==='TimeoutError'){
+      throw new Error('The AI provider took too long to respond (60s timeout) — the image may be too large, or the connection too slow. Try again or use a smaller/simpler drawing file.');
+    }
     if(!(e instanceof TypeError)) throw e;
     await new Promise(res=>setTimeout(res,1200));
-    try{ return await fetch(url, opts); }
-    catch(e2){ throw new Error(`Network error reaching the AI provider — check your internet connection and try again. (${e2.message})`); }
+    try{ return await fetch(url, withTimeout(opts)); }
+    catch(e2){
+      if(e2 && e2.name==='TimeoutError'){
+        throw new Error('The AI provider took too long to respond (60s timeout) — the image may be too large, or the connection too slow. Try again or use a smaller/simpler drawing file.');
+      }
+      throw new Error(`Network error reaching the AI provider — check your internet connection and try again. (${e2.message})`);
+    }
   }
 }
 
