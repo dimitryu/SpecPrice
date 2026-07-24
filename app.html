@@ -376,7 +376,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.39';
+const APP_VER   = '1.8.40';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2017,7 +2017,7 @@ async function _anthropicBOM(text, isImage, imgData, filename){
   const resp = await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
     method:'POST',
     headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
-             'anthropic-dangerous-allow-browser':'true','content-type':'application/json'},
+             'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
     body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:4096, messages})
   });
   if(!resp.ok){let m=`Anthropic error ${resp.status}`;
@@ -2097,7 +2097,7 @@ async function _anthropicCableProcess(text, isImage, imgData, rowsList){
   const resp = await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
     method:'POST',
     headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
-             'anthropic-dangerous-allow-browser':'true','content-type':'application/json'},
+             'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
     body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:2048, messages})
   });
   if(!resp.ok){let m=`Anthropic error ${resp.status}`;
@@ -3256,7 +3256,7 @@ Return ONLY a valid JSON object mapping the row number (as a string) to the dura
       const resp=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',
         headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
-                 'anthropic-dangerous-allow-browser':'true','content-type':'application/json'},
+                 'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
         body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:1024,
           messages:[{role:'user',content:prompt}]})
       });
