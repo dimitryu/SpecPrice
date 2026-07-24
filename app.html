@@ -376,7 +376,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.38';
+const APP_VER   = '1.8.39';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1669,6 +1669,28 @@ function _normalizeBOMRows(rows){
   rows.forEach(r=>{
     if(!r.drawing_number && r.drawing_name) r.drawing_number=r.drawing_name;
   });
+  // A crimp/insertion TOOL row is synthesized fresh by the AI for EVERY
+  // connector row that needs one (see _BOM_TEXT_PROMPT/_BOM_VISION_PROMPT rule
+  // 5) — so a drawing with two different connectors that both happen to take
+  // the SAME hand tool (e.g. two MICROFIT 3.0 connectors both needing the same
+  // extraction tool) correctly produces two synthesized rows sharing one part
+  // number, from the AI's per-connector point of view. But a tool is a
+  // durable, one-time purchase, not a consumable that scales with how many
+  // connectors use it — so the BOM should only ever list it once. Collapse
+  // repeated TOOL rows that share a part number down to their first
+  // occurrence; rows with no part_number are left alone (no reliable key to
+  // dedupe on, and removing the wrong one would silently drop a real tool).
+  const seenToolPn = new Set();
+  const deduped = rows.filter(r=>{
+    if(!_sdIsToolRow(r)) return true;
+    const pn=String(r.part_number||'').trim().toLowerCase();
+    if(!pn) return true;
+    if(seenToolPn.has(pn)) return false;
+    seenToolPn.add(pn);
+    return true;
+  });
+  rows.length=0;
+  rows.push(...deduped);
   return rows;
 }
 
