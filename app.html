@@ -376,7 +376,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.36';
+const APP_VER   = '1.8.37';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1517,7 +1517,7 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
             const b64=_pdfImages[pi];
             if(!b64) continue;
             setMsg(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`, 60+Math.round(35*pi/_pdfImages.length));
-            const rows=await aiExtractBOM('',true,{b64,mimeType:'image/png'},file.name);
+            const rows=await aiExtractBOM('',true,{b64,mimeType:'image/jpeg'},file.name);
             if(rows.length){ extractedRows=rows; break; }
           }
         }
@@ -1807,13 +1807,25 @@ async function extractPDFPages(file){
     }
     if(line) lines.push(line);
     pageTexts.push(lines.join('\n'));
-    // -- Render page as PNG at 2.5x zoom (matches Windows app 3x approach) --
+    // -- Render page as JPEG, capped to a max dimension (matches Windows app's
+    // 3x-zoom intent, but a large-format drawing sheet — e.g. a multi-servo
+    // harness assembly on an E/D-size sheet — rendered at a flat 2.5x zoom as
+    // PNG can produce a base64 payload of tens of MB. Some environments/
+    // proxies then fail the AI provider's fetch() outright before any HTTP
+    // response comes back, surfacing as an unhelpful generic "Failed to
+    // fetch" instead of a diagnosable API error. Capping the longer side to
+    // ~2200px and using JPEG (much smaller than PNG for this kind of dense
+    // line-art content, while staying plenty legible for AI vision) keeps
+    // the payload predictable regardless of the source sheet's physical size. --
     try{
-      const vp = page.getViewport({scale:2.5});
+      const baseVp = page.getViewport({scale:1});
+      const MAX_DIM=2200;
+      const scale = Math.min(2.5, MAX_DIM/Math.max(baseVp.width, baseVp.height));
+      const vp = page.getViewport({scale});
       const canvas = document.createElement('canvas');
       canvas.width=vp.width; canvas.height=vp.height;
       await page.render({canvasContext:canvas.getContext('2d'), viewport:vp}).promise;
-      pageImages.push(canvas.toDataURL('image/png').split(',')[1]);
+      pageImages.push(canvas.toDataURL('image/jpeg',0.88).split(',')[1]);
     }catch(e){ pageImages.push(null); }
   }
   return {pageTexts, pageImages};
@@ -1919,6 +1931,24 @@ function _parseAIJson(raw){
 // engineering drawings (BOM tables, pin counts, cable construction) noticeably
 // better than Anthropic for this task, so it's the preferred provider whenever
 // a Gemini key is configured.
+// Retries a fetch() once after a short delay if it fails at the network
+// level (a TypeError — connection refused, CORS block, DNS failure, offline)
+// rather than coming back with a normal HTTP response. That kind of failure
+// surfaces to the user as an unhelpful generic "Failed to fetch" with no
+// status code at all, and is often just a transient blip — a single retry
+// resolves most of them. Deliberately does NOT retry on a real HTTP error
+// response (4xx/5xx): those are genuine API errors (bad key, rate limit,
+// oversized request) that a retry wouldn't fix.
+async function _fetchWithRetry(url, opts){
+  try{ return await fetch(url, opts); }
+  catch(e){
+    if(!(e instanceof TypeError)) throw e;
+    await new Promise(res=>setTimeout(res,1200));
+    try{ return await fetch(url, opts); }
+    catch(e2){ throw new Error(`Network error reaching the AI provider — check your internet connection and try again. (${e2.message})`); }
+  }
+}
+
 async function aiExtractBOM(text, isImage, imgData, filename){
   if(geminiKey){
     try { return await _geminiBOM(text, isImage, imgData, filename); }
@@ -1936,7 +1966,7 @@ async function _anthropicBOM(text, isImage, imgData, filename){
     {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
     {type:'text',text:_BOM_VISION_PROMPT}
   ]}] : [{role:'user', content: _BOM_TEXT_PROMPT(filename)+'\n'+text.slice(0,30000)}];
-  const resp = await fetch('https://api.anthropic.com/v1/messages',{
+  const resp = await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
     method:'POST',
     headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
              'anthropic-dangerous-allow-browser':'true','content-type':'application/json'},
@@ -1952,7 +1982,7 @@ async function _geminiBOM(text, isImage, imgData, filename){
   const parts = isImage
     ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:_BOM_VISION_PROMPT}]
     : [{text: _BOM_TEXT_PROMPT(filename)+'\n'+text.slice(0,30000)}];
-  const resp = await fetch(
+  const resp = await _fetchWithRetry(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
     {method:'POST',headers:{'content-type':'application/json'},
      body:JSON.stringify({contents:[{parts}],generationConfig:{thinkingConfig:{thinkingBudget:0}}})}
@@ -2016,7 +2046,7 @@ async function _anthropicCableProcess(text, isImage, imgData, rowsList){
     {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
     {type:'text',text:prompt}
   ]}] : [{role:'user', content: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000)}];
-  const resp = await fetch('https://api.anthropic.com/v1/messages',{
+  const resp = await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
     method:'POST',
     headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
              'anthropic-dangerous-allow-browser':'true','content-type':'application/json'},
@@ -2032,7 +2062,7 @@ async function _geminiCableProcess(text, isImage, imgData, rowsList){
   const parts = isImage
     ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:prompt}]
     : [{text: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000)}];
-  const resp = await fetch(
+  const resp = await _fetchWithRetry(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
     {method:'POST',headers:{'content-type':'application/json'},
      body:JSON.stringify({contents:[{parts}],generationConfig:{thinkingConfig:{thinkingBudget:0}}})}
@@ -4105,11 +4135,11 @@ async function handleSDFiles(files){
             const b64=_pdfImages[pi];
             if(!b64) continue;
             setM(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`,60+Math.round(35*pi/_pdfImages.length));
-            const rows2=await aiExtractBOM('',true,{b64,mimeType:'image/png'},file.name);
-            if(rows2.length){extractedRows=rows2;_procIsImage=true;_procImgData={b64,mimeType:'image/png'};break;}
+            const rows2=await aiExtractBOM('',true,{b64,mimeType:'image/jpeg'},file.name);
+            if(rows2.length){extractedRows=rows2;_procIsImage=true;_procImgData={b64,mimeType:'image/jpeg'};break;}
           }
         }
-        if(!_procIsImage && _pdfImages[0]){ _procIsImage=true; _procImgData={b64:_pdfImages[0],mimeType:'image/png'}; }
+        if(!_procIsImage && _pdfImages[0]){ _procIsImage=true; _procImgData={b64:_pdfImages[0],mimeType:'image/jpeg'}; }
       } else {
         setM('Encoding image…',20);
         const {b64,mimeType}=await encodeImage(file);
