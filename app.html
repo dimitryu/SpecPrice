@@ -376,7 +376,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.35';
+const APP_VER   = '1.8.36';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -796,6 +796,7 @@ const _PS_DEFAULT_COLS=[
   {k:'price',         l:'FC Price',         w:'85px'},
   {k:'distributor',   l:'Distributor',      w:'110px'},
   {k:'priority_price',l:'Priority Price',   w:'95px'},
+  {k:'own_stock',     l:'Stock',            w:'60px'},
   {k:'qty',           l:'QTY',              w:'55px'},
   {k:'unit',          l:'Units',            w:'55px'},
   {k:'rfq_names',     l:'RFQ',             w:'140px',wrap:true},
@@ -816,6 +817,13 @@ function _psCellHTML(k,p){
     case 'rfq_names': return esc((p.rfq_names||[]).join(', '));
     case 'updatedAt': return fmtDate(p.updatedAt);
     case '_fc': return p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px">🔍 FC</a>`:'';
+    // Whether WE physically stock/own this part (distinct from `stock`, which
+    // is a FindChips distributor inventory count) — auto-checked for items
+    // brought in via Import Data → Tools Catalog (see saveToolsImport), but
+    // toggleable by hand for any part. Sales Desk reads this flag to decide
+    // whether a synthesized crimp/insertion TOOL row is already owned and
+    // should be excluded from the final price (see handleSDFiles).
+    case 'own_stock': return `<input type="checkbox" class="ps-stock-toggle" data-id="${esc(p._id)}" ${p.own_stock?'checked':''} title="We already have this in stock">`;
     default: return esc(p[k]);
   }
 }
@@ -927,6 +935,16 @@ async function renderPartStock(filter=''){
   document.getElementById('ps-check-all')?.addEventListener('change',e=>{
     document.querySelectorAll('.ps-check').forEach(cb=>cb.checked=e.target.checked);
   });
+
+  // Stock toggle — hand-editable per part, independent of the Tools Catalog
+  // import that auto-checks it (see saveToolsImport / _psCellHTML 'own_stock').
+  document.querySelectorAll('.ps-stock-toggle').forEach(cb=>cb.addEventListener('change',async()=>{
+    const id=cb.dataset.id, val=cb.checked;
+    try{
+      await updateDoc(doc(db,'companies',companyId,'parts_cache',id),{own_stock:val, updatedAt:serverTimestamp()});
+      const p=allParts.find(p=>p._id===id); if(p) p.own_stock=val;
+    }catch(e){ toast('Error: '+e.message,'error'); cb.checked=!val; }
+  }));
 
   // Refresh — force a fresh read from Firestore (bypasses the in-memory allParts cache)
   document.getElementById('btn-ps-refresh')?.addEventListener('click',()=>{
@@ -2913,6 +2931,10 @@ function showToolsPreview(rows, body, foot){
 // This is deliberately a straight overwrite of description (unlike BOM saves,
 // which only fill it in if blank) since the user is explicitly (re-)importing
 // a tools catalog and expects its descriptions to take effect.
+// own_stock is always set true here — items brought in via this specific
+// import are, by definition, tools the company already has in stock (see the
+// "Stock" column in _psCellHTML, and Sales Desk's ownership check in
+// handleSDFiles, which excludes own_stock=true tool rows from the final price).
 async function saveToolsImport(rows){
   await loadParts();
   let updated=0, created=0;
@@ -2923,17 +2945,17 @@ async function saveToolsImport(rows){
     try{
       if(existing){
         await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),
-          {description:r.description||'', updatedAt:serverTimestamp(), qty:1});
-        existing.description=r.description||'';
+          {description:r.description||'', own_stock:true, updatedAt:serverTimestamp(), qty:1});
+        existing.description=r.description||''; existing.own_stock=true;
         updated++;
       } else {
         const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
         await setDoc(doc(db,'companies',companyId,'parts_cache',key),{
           part_number:pn, description:r.description||'', drawing_number:'', manufacturer:'',
           unit:'', atlantium_pn:'', price:'', priority_price:'', distributor:'', stock:'', price_description:'', qty:1,
-          updatedAt:serverTimestamp()
+          own_stock:true, updatedAt:serverTimestamp()
         },{merge:true});
-        allParts.push({_id:key, part_number:pn, description:r.description||'', qty:1});
+        allParts.push({_id:key, part_number:pn, description:r.description||'', own_stock:true, qty:1});
         created++;
       }
     }catch(e){ console.warn('[ToolsImport] save error:',pn,e.message); }
@@ -3428,7 +3450,7 @@ function _sdCellHTML(k,r,i){
       const hasManual = r.manual_total!=null && r.manual_total!=='';
       const noSourcePrice = !(fcPrice>0) && !(prPrice>0) && !hasManual;
       const ownedNote = r._toolOwned
-        ? `<div style="font-size:9px;color:#1F8B4C;font-weight:700;white-space:nowrap" title="This tool's part number already exists in the Database — not charged in the final price">✓ owned</div>`
+        ? `<div style="font-size:9px;color:#1F8B4C;font-weight:700;white-space:nowrap" title="This tool is marked in Stock in the Database — not charged in the final price">✓ in stock</div>`
         : '';
       return `<input type="number" class="sd-manual-total" data-i="${i}" value="${r.total?+r.total.toFixed(2):''}"
              min="0" step="any" placeholder="0.00" title="${hasManual?'Manual price override — clear to go back to FC/Priority price':'No FC/Priority price — type one in manually'}"
@@ -4227,22 +4249,22 @@ async function handleSDFiles(files){
   showBOMPreview(allRows, body, foot,
     `💾 Save to Database + Sales Desk (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
     async(updatedRows)=>{
-      // Snapshot which TOOL rows (see _sdIsToolRow) already have a matching
-      // part number in the Database — BEFORE saveBOMToPartStock below, which
+      // Snapshot which TOOL rows (see _sdIsToolRow) match a part in the
+      // Database that's flagged own_stock=true (the "Stock" column — see
+      // _psCellHTML/saveToolsImport) — BEFORE saveBOMToPartStock below, which
       // creates/updates a Database entry for every row here INCLUDING new
       // tool rows. Checking after that save would make every freshly-
-      // synthesized tool look like it "already existed". A tool the customer
-      // already owns (was already in the Database beforehand) shouldn't be
-      // charged again in this quote's final price — see _sdComputeSummary,
-      // which skips r._toolOwned rows entirely.
+      // synthesized tool look like it already existed. A tool the company
+      // already has in stock shouldn't be charged again in this quote's final
+      // price — see _sdComputeSummary, which skips r._toolOwned rows entirely.
       const ownedToolPns=new Set();
       const toolsFound=[], toolsMissing=[];
       for(const r of updatedRows){
         if(!_sdIsToolRow(r)) continue;
         const pn=(r.part_number||'').trim();
         const pnLower=pn.toLowerCase();
-        const existed = pnLower ? allParts.some(p=>String(p.part_number||'').toLowerCase()===pnLower) : false;
-        if(existed){ ownedToolPns.add(pnLower); toolsFound.push(pn||r.description||'(unnamed tool)'); }
+        const inStock = pnLower ? allParts.some(p=>String(p.part_number||'').toLowerCase()===pnLower && p.own_stock) : false;
+        if(inStock){ ownedToolPns.add(pnLower); toolsFound.push(pn||r.description||'(unnamed tool)'); }
         else toolsMissing.push(pn||r.description||'(unnamed tool)');
       }
 
@@ -4308,11 +4330,11 @@ async function handleSDFiles(files){
 function showToolsAvailabilityModal(found, missing){
   const list=(items)=>`<ul style="margin:4px 0 0;padding-left:18px;font-size:12px;line-height:1.6">${items.map(pn=>`<li>${esc(pn)}</li>`).join('')}</ul>`;
   const foundHtml = found.length ? `<div style="margin-bottom:12px">
-    <div style="font-weight:700;color:#1F8B4C">✓ Already in Database — excluded from final price</div>
+    <div style="font-weight:700;color:#1F8B4C">✓ Already in Stock — excluded from final price</div>
     ${list(found)}
   </div>` : '';
   const missingHtml = missing.length ? `<div>
-    <div style="font-weight:700;color:#E53E3E">⚠ Not found in Database — priced normally</div>
+    <div style="font-weight:700;color:#E53E3E">⚠ Not in Stock — priced normally</div>
     ${list(missing)}
   </div>` : '';
   showModal(`<div class="modal modal-sm">
