@@ -376,7 +376,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.41';
+const APP_VER   = '1.8.42';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3470,31 +3470,37 @@ function _sdRecalcLaborTotal(r){
   // exactly like Part Cost's manual_total override. Clearing the field goes
   // back to the auto-calculation below.
   if(r._laborManualOverride) return r.labor_total;
-  // Labor Time from a routing keyword match is always a PER-UNIT rate that
-  // scales with the row's own Sales-Desk quantity (e.g. "apply label" × 8
-  // identical rows) — that multiplication happens below.
+  const lt=parseFloat(r.labor_time)||0;
+  // A row's labor_time can ALSO be a genuine AI-computed total from the
+  // cable-process analysis (see handleSDFiles), where it already equals
+  // unit_minutes × qty_in_drawing — the sum of every manufacturing step the
+  // AI tied to this specific row (e.g. the main cable row is exactly where
+  // "cut and strip", "braid shield", etc. land). That real, drawing-derived
+  // total must win over the mm/gr flat-1-minute floor below — checking unit
+  // FIRST would silently throw away legitimate computed minutes just because
+  // the row happens to be measured in mm/gr, which is exactly the case for a
+  // cable/wire row. Do NOT re-multiply by this row's own qty column either:
+  // that column may represent a different quantity concept entirely (e.g.
+  // "1 connector housing" whose pins are crimped 20 times), so multiplying
+  // again here would silently inflate the total.
+  if(r._laborFixedTotal){
+    r.labor_total = lt;
+    return r.labor_total;
+  }
   // Length rows (mm — the system's sole canonical length unit) and bulk-weight
-  // rows (gr, treated the same as mm per business rule) always take a flat 1
-  // minute of labor, regardless of length/weight or whatever labor_time a
-  // routing match found — prepping this kind of material takes roughly the
-  // same setup time no matter the quantity, so labor doesn't scale here.
+  // rows (gr, treated the same as mm per business rule) that DIDN'T get a real
+  // AI-computed total (e.g. a plain length-of-wire stock row with no process
+  // steps identified) always take a flat 1 minute of labor instead of scaling
+  // with a routing-match rate × the row's mm/gr quantity — prepping this kind
+  // of material takes roughly the same setup time no matter the quantity.
   const unit=String(r.unit||'').trim().toLowerCase();
   if(unit==='mm'||unit==='gr'){
     r.labor_total = 1;
     return r.labor_total;
   }
-  const lt=parseFloat(r.labor_time)||0;
-  if(r._laborFixedTotal){
-    // Sourced from the AI cable-process analysis (see handleSDFiles), where
-    // labor_time already equals unit_minutes × qty_in_drawing — the AI's own
-    // count of how many times the operation repeats in the drawing, read
-    // directly off the drawing itself. Do NOT re-multiply by this row's own
-    // qty column: that column may represent a different quantity concept
-    // entirely (e.g. "1 connector housing" whose pins are crimped 20 times),
-    // so multiplying again here would silently inflate the total.
-    r.labor_total = lt;
-    return r.labor_total;
-  }
+  // Labor Time from a routing keyword match is always a PER-UNIT rate that
+  // scales with the row's own Sales-Desk quantity (e.g. "apply label" × 8
+  // identical rows) — that multiplication happens here.
   r.labor_total = lt>0 ? lt*_sdLaborQtyMultiplier(r) : 0;
   return r.labor_total;
 }
