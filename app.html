@@ -57,6 +57,7 @@
     .btn-green  { background:#1F8B4C; color:#fff; }
     .btn-red    { background:#E53E3E; color:#fff; }
     .btn-ghost  { background:var(--blue-light); color:var(--blue-dark); }
+    .btn-purple { background:#7C3AED; color:#fff; }
     .btn-sm     { padding:4px 9px; font-size:11px; }
 
     /* ── Toolbar ── */
@@ -375,7 +376,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.34';
+const APP_VER   = '1.8.35';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -870,7 +871,7 @@ async function renderPartStock(filter=''){
       <select class="search-box" id="ps-page-size" style="flex:0 0 auto;min-width:auto;width:auto;padding:7px 9px">${pageSizeOpts}</select>
       <button class="btn btn-ghost" id="btn-ps-refresh" style="white-space:nowrap;flex-shrink:0" title="Reload latest data from the database">🔄 Refresh</button>
       <button class="btn btn-blue" id="btn-ps-fc" style="white-space:nowrap;flex-shrink:0">🔍 Check FindChips</button>
-      <button class="btn btn-ghost" id="btn-ps-priority" style="white-space:nowrap;flex-shrink:0">📥 Priority Import</button>
+      <button class="btn btn-purple" id="btn-ps-import" style="white-space:nowrap;flex-shrink:0">📥 Import Data</button>
       <button class="btn btn-green" id="btn-ps-export" style="white-space:nowrap;flex-shrink:0">📊 Export to Excel</button>
       <button class="btn btn-red" id="btn-ps-delsel" style="white-space:nowrap;flex-shrink:0">🗑 Delete Selected</button>
       <span class="count-badge">${totalItems} parts — page ${psPage}/${totalPages}</span>
@@ -947,9 +948,10 @@ async function renderPartStock(filter=''){
     runFCCheckModal(items,'parts');
   });
 
-  // Priority Import button
-  document.getElementById('btn-ps-priority')?.addEventListener('click',()=>{
-    openPriorityImportModal();
+  // Import Data button — lets the user choose which kind of import to run
+  // (Priority Prices or Tools Catalog) before opening that flow's own modal.
+  document.getElementById('btn-ps-import')?.addEventListener('click',()=>{
+    openImportDataModal();
   });
 
   // Export Excel — selected rows only, or all filtered rows (across every page) if none selected
@@ -2399,6 +2401,7 @@ const _PN_HEADER_HINTS=['part number','part_number','partnumber','pn','p/n','מ�
 const _PRICE_HEADER_HINTS=['price','unit price','מחיר','cost','rate'];
 const _CURRENCY_HEADER_HINTS=['currency','curr','מטבע'];
 const _UNIT_HEADER_HINTS=['unit','units','uom','u/m','יחידה','יחידות',"יח'",'יח'];
+const _DESC_HEADER_HINTS=['description','desc','product description','part description','name','item name','תיאור','תאור','שם פריט','שם מוצר'];
 
 // Priority ERP exports label their units column ("יח'") with these Hebrew/
 // English tokens rather than pc/mm/gr directly — map them to our 3 canonical
@@ -2453,6 +2456,28 @@ function _priorityScoreSheet(headers){
   if(_priorityFindCol(headers,_CURRENCY_HEADER_HINTS)>=0) score+=2;
   score += Math.min(headers.length,20)*0.1;
   return score;
+}
+
+// Entry point for the Database toolbar's "📥 Import Data" button — lets the
+// user pick which import flow to run before opening either one's own modal.
+// Replaces the old dedicated "Priority Import" button (still exactly the
+// same flow underneath, see openPriorityImportModal below).
+function openImportDataModal(){
+  showModal(`<div class="modal modal-sm">
+    <div class="modal-head"><h3>📥 Import Data</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:10px">
+      <p style="font-size:12px;color:var(--muted);margin:0">What would you like to import?</p>
+      <button class="btn btn-blue" id="import-data-priority" style="justify-content:flex-start;padding:12px;text-align:left">
+        💰 Priority Prices — update MNF P/N prices from a Priority export
+      </button>
+      <button class="btn btn-blue" id="import-data-tools" style="justify-content:flex-start;padding:12px;text-align:left">
+        🛠 Tools Catalog — import crimp/insertion tool part numbers + descriptions
+      </button>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+  </div>`);
+  document.getElementById('import-data-priority').addEventListener('click', openPriorityImportModal);
+  document.getElementById('import-data-tools').addEventListener('click', openToolsImportModal);
 }
 
 function openPriorityImportModal(){
@@ -2689,6 +2714,229 @@ async function savePriorityImport(rows){
         created++;
       }
     }catch(e){ console.warn('[PriorityImport] save error:',pn,e.message); }
+  }
+  return {updated, created};
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TOOLS CATALOG IMPORT — Excel (part_number + description) → Database ────────
+// Reuses _priorityParseSheet/_priorityFindCol (both generic despite the name)
+// with PN + Description column hints, mirroring the Priority Import flow's
+// structure (drop zone → sheet/column mapping → editable preview → save).
+// ══════════════════════════════════════════════════════════════════════════════
+function _toolsScoreSheet(headers){
+  let score=0;
+  if(_priorityFindCol(headers,_PN_HEADER_HINTS)>=0) score+=10;
+  if(_priorityFindCol(headers,_DESC_HEADER_HINTS)>=0) score+=10;
+  score += Math.min(headers.length,20)*0.1;
+  return score;
+}
+
+function openToolsImportModal(){
+  showModal(`<div class="modal">
+    <div class="modal-head"><h3>🛠 Tools Catalog Import</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" id="ti-modal-body">
+      <div class="drop-zone" id="ti-drop-zone" tabindex="0">
+        <span class="icon-big">📊</span>
+        <strong>Drop Excel file here</strong>
+        <p>.xlsx, .xls or .csv — expects an MNF P/N column and a Description column</p>
+        <input type="file" id="ti-file-input" accept=".xlsx,.xls,.csv" style="display:none">
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+  </div>`);
+
+  const dz=document.getElementById('ti-drop-zone');
+  const fi=document.getElementById('ti-file-input');
+  dz.addEventListener('click',()=>fi.click());
+  dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover');});
+  dz.addEventListener('dragleave',()=>dz.classList.remove('dragover'));
+  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');
+    if(e.dataTransfer.files[0]) handleToolsFile(e.dataTransfer.files[0]);
+  });
+  fi.addEventListener('change',()=>{ if(fi.files[0]) handleToolsFile(fi.files[0]); });
+}
+
+async function handleToolsFile(file){
+  const body=document.getElementById('ti-modal-body');
+  const foot=document.querySelector('#modal-bg .modal-foot');
+  body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="ti-msg">Reading file…</span></div>`;
+  foot.innerHTML='';
+
+  try{
+    if(!window.XLSX) throw new Error('Excel library not loaded — please reload the page and try again.');
+    const ab=await file.arrayBuffer();
+    const wb=XLSX.read(ab,{type:'array'});
+    if(!wb.SheetNames.length) throw new Error('No sheets found in this file.');
+
+    const sheetsData = wb.SheetNames.map(name=>{
+      const {rows, headers} = _priorityParseSheet(wb.Sheets[name]);
+      return {name, rows, headers, score:_toolsScoreSheet(headers)};
+    }).filter(s=>s.rows.length>0);
+    if(!sheetsData.length) throw new Error('The file appears to be empty.');
+    sheetsData.sort((a,b)=>b.score-a.score);
+
+    renderToolsSheetMapping(sheetsData, sheetsData[0].name, body, foot);
+  }catch(e){
+    body.innerHTML+=`<p style="color:red;margin-top:12px">Error: ${e.message}</p>`;
+    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+  }
+}
+
+// Suggest which column is MNF P/N and which is Description — whatever looks
+// like a part number goes to MNF P/N, whatever looks like a product
+// description goes to Description, per the user's request. Always confirmed
+// by the user before parsing, same as Priority Import's mapping step.
+function renderToolsSheetMapping(sheetsData, activeSheetName, body, foot){
+  const active = sheetsData.find(s=>s.name===activeSheetName) || sheetsData[0];
+  const {rows, headers} = active;
+
+  let pnCol=_priorityFindCol(headers,_PN_HEADER_HINTS);
+  let descCol=_priorityFindCol(headers,_DESC_HEADER_HINTS);
+  const headerDetected = pnCol>=0 || descCol>=0;
+  if(pnCol<0) pnCol=0;
+  if(descCol<0) descCol=(pnCol===1?0:1);
+  if(descCol===pnCol) descCol=(pnCol===0 && headers.length>1)?1:(pnCol>0?0:1);
+
+  const colLabel=(h,i)=>{ const t=String(h||'').trim(); return t?esc(t):`(Column ${i+1})`; };
+  const colOpts=(selected)=>headers.map((h,i)=>`<option value="${i}" ${i===selected?'selected':''}>${colLabel(h,i)}</option>`).join('');
+  const sampleRows=(headerDetected?rows.slice(1):rows).slice(0,3);
+
+  body.innerHTML=`
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">We suggest the following column mapping — confirm or change before importing:</p>
+    ${sheetsData.length>1?`<div class="form-field">
+      <label>Sheet</label>
+      <select class="form-input" id="ti-sheet-sel">
+        ${sheetsData.map(s=>`<option value="${esc(s.name)}" ${s.name===active.name?'selected':''}>${esc(s.name)} (${s.rows.length} rows, ${s.headers.length} cols)</option>`).join('')}
+      </select>
+    </div>`:''}
+    <div class="form-field" style="margin-top:10px">
+      <label>MNF P/N column</label>
+      <select class="form-input" id="ti-pn-col">${colOpts(pnCol)}</select>
+    </div>
+    <div class="form-field" style="margin-top:10px">
+      <label>Description column</label>
+      <select class="form-input" id="ti-desc-col">${colOpts(descCol)}</select>
+    </div>
+    <div class="form-field" style="margin-top:10px">
+      <label style="display:flex;align-items:center;gap:6px;text-transform:none;font-weight:400;font-size:12px">
+        <input type="checkbox" id="ti-has-header" ${headerDetected?'checked':''} style="width:auto">
+        First row is a header row (skip it)
+      </label>
+    </div>
+    ${sampleRows.length?`<div style="margin-top:12px">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Preview:</div>
+      <div class="table-wrap"><table style="font-size:11px">
+        <tbody>${sampleRows.map(r=>`<tr>${headers.map((_,i)=>`<td>${esc(String(r[i]??''))}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>
+    </div>`:''}`;
+
+  foot.innerHTML=`
+    <button class="btn btn-ghost" id="ti-map-cancel">Cancel</button>
+    <button class="btn btn-green" id="ti-map-continue">Continue →</button>`;
+
+  document.getElementById('ti-sheet-sel')?.addEventListener('change',e=>{
+    renderToolsSheetMapping(sheetsData, e.target.value, body, foot);
+  });
+  document.getElementById('ti-map-cancel').addEventListener('click',closeModal);
+  document.getElementById('ti-map-continue').addEventListener('click', ()=>{
+    const pnColSel=parseInt(document.getElementById('ti-pn-col').value);
+    const descColSel=parseInt(document.getElementById('ti-desc-col').value);
+    const skipHeader=document.getElementById('ti-has-header').checked;
+    if(pnColSel===descColSel){ toast('MNF P/N and Description columns must be different','error'); return; }
+
+    const dataRows=skipHeader?rows.slice(1):rows;
+    const parsed=[];
+    for(const r of dataRows){
+      const pn=String(r[pnColSel]||'').trim();
+      const desc=String(r[descColSel]||'').trim();
+      if(!pn) continue;
+      parsed.push({part_number:pn, description:desc});
+    }
+
+    if(!parsed.length){
+      body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No valid MNF P/N rows were detected with this mapping.</p>`;
+      foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+      return;
+    }
+
+    showToolsPreview(parsed, body, foot);
+  });
+}
+
+function showToolsPreview(rows, body, foot){
+  const modalEl=body.closest('.modal');
+  if(modalEl){ modalEl.style.width='min(94vw,700px)'; modalEl.style.maxWidth='700px'; }
+
+  const tBody=rows.map((r,i)=>`<tr data-i="${i}">
+    <td contenteditable="true" data-k="part_number" data-i="${i}" style="min-width:140px">${esc(r.part_number)}</td>
+    <td contenteditable="true" data-k="description" data-i="${i}" style="min-width:220px">${esc(r.description||'')}</td>
+    <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
+  </tr>`).join('');
+
+  body.innerHTML=`
+    <div class="ai-status" style="margin-bottom:10px">
+      <div style="width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1">✓</div>
+      <span>${rows.length} rows parsed — click any cell to edit before saving</span>
+    </div>
+    <div class="table-wrap" style="max-height:calc(85vh - 175px);overflow:auto"><table>
+      <thead><tr><th>MNF P/N</th><th>Description</th><th></th></tr></thead>
+      <tbody id="ti-preview-tbody">${tBody}</tbody>
+    </table></div>`;
+
+  foot.innerHTML=`
+    <button class="btn btn-ghost" id="ti-cancel">Cancel</button>
+    <button class="btn btn-green" id="ti-save">💾 Save to Database (${rows.length} rows)</button>`;
+
+  document.getElementById('ti-cancel').addEventListener('click',closeModal);
+  document.getElementById('ti-save').addEventListener('click', async()=>{
+    const finalRows=[];
+    document.querySelectorAll('#ti-preview-tbody tr').forEach(tr=>{
+      const pn=tr.querySelector('[data-k="part_number"]')?.textContent.trim()||'';
+      const desc=tr.querySelector('[data-k="description"]')?.textContent.trim()||'';
+      if(pn) finalRows.push({part_number:pn, description:desc});
+    });
+    if(!finalRows.length){ toast('No rows to save','error'); return; }
+    const btn=document.getElementById('ti-save');
+    btn.disabled=true; btn.textContent='Saving…';
+    try{
+      const {updated, created}=await saveToolsImport(finalRows);
+      toast(`Tools Catalog Import: ${updated} updated, ${created} created`,'success');
+      closeModal();
+      allParts=[]; renderPartStock();
+    }catch(e){ toast('Save error: '+e.message,'error'); btn.disabled=false; btn.textContent=`💾 Save to Database (${finalRows.length} rows)`; }
+  });
+}
+
+// Upsert tool part numbers + descriptions into parts_cache. Existing
+// part_number → update description; unknown part_number → create a new row.
+// This is deliberately a straight overwrite of description (unlike BOM saves,
+// which only fill it in if blank) since the user is explicitly (re-)importing
+// a tools catalog and expects its descriptions to take effect.
+async function saveToolsImport(rows){
+  await loadParts();
+  let updated=0, created=0;
+  for(const r of rows){
+    const pn=r.part_number.trim();
+    if(!pn) continue;
+    const existing=allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
+    try{
+      if(existing){
+        await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),
+          {description:r.description||'', updatedAt:serverTimestamp(), qty:1});
+        existing.description=r.description||'';
+        updated++;
+      } else {
+        const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
+        await setDoc(doc(db,'companies',companyId,'parts_cache',key),{
+          part_number:pn, description:r.description||'', drawing_number:'', manufacturer:'',
+          unit:'', atlantium_pn:'', price:'', priority_price:'', distributor:'', stock:'', price_description:'', qty:1,
+          updatedAt:serverTimestamp()
+        },{merge:true});
+        allParts.push({_id:key, part_number:pn, description:r.description||'', qty:1});
+        created++;
+      }
+    }catch(e){ console.warn('[ToolsImport] save error:',pn,e.message); }
   }
   return {updated, created};
 }
@@ -3179,9 +3427,12 @@ function _sdCellHTML(k,r,i){
     case 'total': {
       const hasManual = r.manual_total!=null && r.manual_total!=='';
       const noSourcePrice = !(fcPrice>0) && !(prPrice>0) && !hasManual;
+      const ownedNote = r._toolOwned
+        ? `<div style="font-size:9px;color:#1F8B4C;font-weight:700;white-space:nowrap" title="This tool's part number already exists in the Database — not charged in the final price">✓ owned</div>`
+        : '';
       return `<input type="number" class="sd-manual-total" data-i="${i}" value="${r.total?+r.total.toFixed(2):''}"
              min="0" step="any" placeholder="0.00" title="${hasManual?'Manual price override — clear to go back to FC/Priority price':'No FC/Priority price — type one in manually'}"
-             style="width:78px;padding:2px 5px;border:1px solid ${noSourcePrice?'#06b6d4':'var(--border)'};border-radius:4px;font-size:12px;font-weight:700;text-align:right;${noSourcePrice?'background:#ecfeff;color:#0e7490':''}">`;
+             style="width:78px;padding:2px 5px;border:1px solid ${noSourcePrice?'#06b6d4':'var(--border)'};border-radius:4px;font-size:12px;font-weight:700;text-align:right;${noSourcePrice?'background:#ecfeff;color:#0e7490':''}">${ownedNote}`;
     }
     // Labor Time shows/edits the row's actual total minutes directly (what
     // used to be the separate read-only "Labor Total" column) — type a number
@@ -3352,7 +3603,13 @@ function _sdIsToolRow(r){ return /\btool\b/i.test(String(r.description||'')); }
 function _sdComputeSummary(){
   let partsTotal=0, autoToolsTotal=0, autoLaborMinutes=0;
   for(const r of sdItems){
-    if(_sdIsToolRow(r)) autoToolsTotal+=r.total||0; else partsTotal+=r.total||0;
+    if(_sdIsToolRow(r)){
+      // A tool row whose part number already exists in the Database (see
+      // handleSDFiles' save callback, which checks this at import time) is
+      // one the customer already owns — excluded entirely from the final
+      // price, not counted here or in partsTotal.
+      if(!r._toolOwned) autoToolsTotal+=r.total||0;
+    } else partsTotal+=r.total||0;
     autoLaborMinutes+=r.labor_total||0;
   }
   autoLaborMinutes += _sdActiveGeneralLaborMinutes();
@@ -3970,6 +4227,25 @@ async function handleSDFiles(files){
   showBOMPreview(allRows, body, foot,
     `💾 Save to Database + Sales Desk (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
     async(updatedRows)=>{
+      // Snapshot which TOOL rows (see _sdIsToolRow) already have a matching
+      // part number in the Database — BEFORE saveBOMToPartStock below, which
+      // creates/updates a Database entry for every row here INCLUDING new
+      // tool rows. Checking after that save would make every freshly-
+      // synthesized tool look like it "already existed". A tool the customer
+      // already owns (was already in the Database beforehand) shouldn't be
+      // charged again in this quote's final price — see _sdComputeSummary,
+      // which skips r._toolOwned rows entirely.
+      const ownedToolPns=new Set();
+      const toolsFound=[], toolsMissing=[];
+      for(const r of updatedRows){
+        if(!_sdIsToolRow(r)) continue;
+        const pn=(r.part_number||'').trim();
+        const pnLower=pn.toLowerCase();
+        const existed = pnLower ? allParts.some(p=>String(p.part_number||'').toLowerCase()===pnLower) : false;
+        if(existed){ ownedToolPns.add(pnLower); toolsFound.push(pn||r.description||'(unnamed tool)'); }
+        else toolsMissing.push(pn||r.description||'(unnamed tool)');
+      }
+
       await saveBOMToPartStock(updatedRows);
       await loadRoutings();
       let added=0;
@@ -3991,7 +4267,8 @@ async function handleSDFiles(files){
           // $0.00 until the next Database refresh.
           price:r.price?(parseFloat(r.price)||0):(match?parseFloat(match.price)||0:0),
           priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
-          labor_time:'', labor_total:0
+          labor_time:'', labor_total:0,
+          _toolOwned: _sdIsToolRow(r) && ownedToolPns.has(pn),
         };
         // Cable-process-analysis time (see handleSDFiles) wins over the generic
         // keyword-based routing match, since it's derived from this specific
@@ -4018,8 +4295,31 @@ async function handleSDFiles(files){
       document.getElementById('sd-tbody')&&renderSalesDesk();
       await _sdAutoMatchLabor();
       document.getElementById('sd-tbody')&&renderSalesDesk();
+      if(toolsFound.length || toolsMissing.length) showToolsAvailabilityModal(toolsFound, toolsMissing);
     }
   );
+}
+
+// Shown right after a drawing import that included at least one crimp/
+// insertion TOOL row — tells the user which tool part numbers were already
+// found in the Database (and are therefore excluded from this quote's final
+// price, since the customer already has them) versus which weren't found
+// (and so are priced normally, like any other part).
+function showToolsAvailabilityModal(found, missing){
+  const list=(items)=>`<ul style="margin:4px 0 0;padding-left:18px;font-size:12px;line-height:1.6">${items.map(pn=>`<li>${esc(pn)}</li>`).join('')}</ul>`;
+  const foundHtml = found.length ? `<div style="margin-bottom:12px">
+    <div style="font-weight:700;color:#1F8B4C">✓ Already in Database — excluded from final price</div>
+    ${list(found)}
+  </div>` : '';
+  const missingHtml = missing.length ? `<div>
+    <div style="font-weight:700;color:#E53E3E">⚠ Not found in Database — priced normally</div>
+    ${list(missing)}
+  </div>` : '';
+  showModal(`<div class="modal modal-sm">
+    <div class="modal-head"><h3>🛠 Tool Availability</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">${foundHtml}${missingHtml}</div>
+    <div class="modal-foot"><button class="btn btn-blue" onclick="closeModal()">OK</button></div>
+  </div>`);
 }
 
 // ── Part Stock → Excel export (client-side via SheetJS) ───────────────────────
