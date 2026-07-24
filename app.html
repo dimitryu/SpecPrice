@@ -376,7 +376,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.40';
+const APP_VER   = '1.8.41';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3527,7 +3527,7 @@ function _sdCellHTML(k,r,i){
     case 'total': {
       const hasManual = r.manual_total!=null && r.manual_total!=='';
       const noSourcePrice = !(fcPrice>0) && !(prPrice>0) && !hasManual;
-      const ownedNote = r._toolOwned
+      const ownedNote = _sdIsToolOwned(r)
         ? `<div style="font-size:9px;color:#1F8B4C;font-weight:700;white-space:nowrap" title="This tool is marked in Stock in the Database — not charged in the final price">✓ in stock</div>`
         : '';
       return `<input type="number" class="sd-manual-total" data-i="${i}" value="${r.total?+r.total.toFixed(2):''}"
@@ -3700,15 +3700,31 @@ function _sdActiveGeneralLaborMinutes(){
 // Total, since a tool is a one-time purchase for the job, not a per-cable part.
 function _sdIsToolRow(r){ return /\btool\b/i.test(String(r.description||'')); }
 
+// Whether a TOOL row's part number is marked "in Stock" in the Database RIGHT
+// NOW — checked live against allParts every time it's needed (Cost Summary
+// calc, the Part Cost column's badge, the Cost Summary stock note), rather
+// than being decided once at import time and cached on the row. That matters
+// because the user can toggle a part's Stock checkbox in the Database at any
+// point AFTER a drawing's tool row is already sitting in the Sales Desk BOM —
+// the price exclusion has to react to that immediately, not require deleting
+// and re-importing the drawing to pick it up.
+function _sdIsToolOwned(r){
+  if(!_sdIsToolRow(r)) return false;
+  const pn=String(r.part_number||'').trim().toLowerCase();
+  if(!pn) return false;
+  return allParts.some(p=>String(p.part_number||'').trim().toLowerCase()===pn && p.own_stock);
+}
+
 function _sdComputeSummary(){
   let partsTotal=0, autoToolsTotal=0, autoLaborMinutes=0;
+  const ownedToolRows=[]; // currently-excluded TOOL rows, for the Cost Summary stock note
   for(const r of sdItems){
     if(_sdIsToolRow(r)){
-      // A tool row whose part number already exists in the Database (see
-      // handleSDFiles' save callback, which checks this at import time) is
-      // one the customer already owns — excluded entirely from the final
-      // price, not counted here or in partsTotal.
-      if(!r._toolOwned) autoToolsTotal+=r.total||0;
+      // A tool row whose part number is marked in Stock in the Database right
+      // now is one the customer already owns — excluded entirely from the
+      // final price, not counted here or in partsTotal.
+      if(_sdIsToolOwned(r)) ownedToolRows.push(r);
+      else autoToolsTotal+=r.total||0;
     } else partsTotal+=r.total||0;
     autoLaborMinutes+=r.labor_total||0;
   }
@@ -3718,7 +3734,7 @@ function _sdComputeSummary(){
   const toolsTotal = _sdToolsTotalOverride!=null ? _sdToolsTotalOverride : autoToolsTotal;
   const subtotal=partsTotal+toolsTotal+laborCost;
   const final=subtotal*(1+_sdProfitPct/100);
-  return {partsTotal, toolsTotal, autoToolsTotal, laborMinutes, autoLaborMinutes, laborCost, subtotal, final};
+  return {partsTotal, toolsTotal, autoToolsTotal, laborMinutes, autoLaborMinutes, laborCost, subtotal, final, ownedToolRows};
 }
 
 async function renderSalesDesk(){
@@ -3728,7 +3744,7 @@ async function renderSalesDesk(){
   const SD_COLS=loadColOrder('salesdesk',_SD_DEFAULT_COLS);
 
   const _sdUpdateSummaryUI=()=>{
-    const {partsTotal,toolsTotal,laborMinutes,laborCost,subtotal,final}=_sdComputeSummary();
+    const {partsTotal,toolsTotal,laborMinutes,laborCost,subtotal,final,ownedToolRows}=_sdComputeSummary();
     const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent='$'+v.toFixed(2); };
     set('sd-parts-total',partsTotal);
     set('sd-labor-total',laborCost);
@@ -3750,6 +3766,20 @@ async function renderSalesDesk(){
       toolsNote.style.display = toolsTotal>0 ? 'block' : 'none';
       const amtEl=document.getElementById('sd-tools-note-amt');
       if(amtEl) amtEl.textContent='$'+toolsTotal.toFixed(2);
+    }
+    // Inline (not a popup) note listing which TOOL rows are currently excluded
+    // from the price because they're marked in Stock in the Database — lives
+    // right here in Cost Summary and recomputes on every render, so toggling
+    // a part's Stock checkbox is reflected immediately without re-importing.
+    const stockNote=document.getElementById('sd-tools-stock-note');
+    if(stockNote){
+      if(ownedToolRows.length){
+        const names=ownedToolRows.map(r=>r.part_number||r.description||'tool').join(', ');
+        stockNote.style.display='block';
+        stockNote.innerHTML=`✓ ${ownedToolRows.length} tool${ownedToolRows.length>1?'s':''} excluded from price — already in Stock: <strong>${esc(names)}</strong>`;
+      } else {
+        stockNote.style.display='none';
+      }
     }
   };
 
@@ -3888,6 +3918,7 @@ async function renderSalesDesk(){
           <div id="sd-tools-note" style="display:none;font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:5px 8px;margin-top:6px">
             ⚠ Final price includes <strong id="sd-tools-note-amt">$0.00</strong> for Tools (crimp/insertion tools)
           </div>
+          <div id="sd-tools-stock-note" style="display:none;font-size:11px;color:#1F8B4C;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:4px;padding:5px 8px;margin-top:6px"></div>
         </div>
         <button class="btn btn-green" style="width:100%;padding:10px;justify-content:center" id="btn-sd-export">📊 Export to Excel</button>
       </div>
@@ -4327,25 +4358,6 @@ async function handleSDFiles(files){
   showBOMPreview(allRows, body, foot,
     `💾 Save to Database + Sales Desk (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
     async(updatedRows)=>{
-      // Snapshot which TOOL rows (see _sdIsToolRow) match a part in the
-      // Database that's flagged own_stock=true (the "Stock" column — see
-      // _psCellHTML/saveToolsImport) — BEFORE saveBOMToPartStock below, which
-      // creates/updates a Database entry for every row here INCLUDING new
-      // tool rows. Checking after that save would make every freshly-
-      // synthesized tool look like it already existed. A tool the company
-      // already has in stock shouldn't be charged again in this quote's final
-      // price — see _sdComputeSummary, which skips r._toolOwned rows entirely.
-      const ownedToolPns=new Set();
-      const toolsFound=[], toolsMissing=[];
-      for(const r of updatedRows){
-        if(!_sdIsToolRow(r)) continue;
-        const pn=(r.part_number||'').trim();
-        const pnLower=pn.toLowerCase();
-        const inStock = pnLower ? allParts.some(p=>String(p.part_number||'').toLowerCase()===pnLower && p.own_stock) : false;
-        if(inStock){ ownedToolPns.add(pnLower); toolsFound.push(pn||r.description||'(unnamed tool)'); }
-        else toolsMissing.push(pn||r.description||'(unnamed tool)');
-      }
-
       await saveBOMToPartStock(updatedRows);
       await loadRoutings();
       let added=0;
@@ -4368,7 +4380,10 @@ async function handleSDFiles(files){
           price:r.price?(parseFloat(r.price)||0):(match?parseFloat(match.price)||0:0),
           priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
           labor_time:'', labor_total:0,
-          _toolOwned: _sdIsToolRow(r) && ownedToolPns.has(pn),
+          // Whether this tool is already owned (in Stock) is no longer decided
+          // here once at import time — see _sdIsToolOwned, which checks the
+          // Database live every time Cost Summary recomputes, so toggling the
+          // Stock checkbox later is picked up immediately.
         };
         // Cable-process-analysis time (see handleSDFiles) wins over the generic
         // keyword-based routing match, since it's derived from this specific
@@ -4395,31 +4410,12 @@ async function handleSDFiles(files){
       document.getElementById('sd-tbody')&&renderSalesDesk();
       await _sdAutoMatchLabor();
       document.getElementById('sd-tbody')&&renderSalesDesk();
-      if(toolsFound.length || toolsMissing.length) showToolsAvailabilityModal(toolsFound, toolsMissing);
+      // No popup here anymore — whether any TOOL row is excluded because it's
+      // already in Stock is shown inline in Cost Summary (see sd-tools-stock-note
+      // in _sdUpdateSummaryUI, driven by _sdIsToolOwned), which the renderSalesDesk()
+      // call above already refreshes.
     }
   );
-}
-
-// Shown right after a drawing import that included at least one crimp/
-// insertion TOOL row — tells the user which tool part numbers were already
-// found in the Database (and are therefore excluded from this quote's final
-// price, since the customer already has them) versus which weren't found
-// (and so are priced normally, like any other part).
-function showToolsAvailabilityModal(found, missing){
-  const list=(items)=>`<ul style="margin:4px 0 0;padding-left:18px;font-size:12px;line-height:1.6">${items.map(pn=>`<li>${esc(pn)}</li>`).join('')}</ul>`;
-  const foundHtml = found.length ? `<div style="margin-bottom:12px">
-    <div style="font-weight:700;color:#1F8B4C">✓ Already in Stock — excluded from final price</div>
-    ${list(found)}
-  </div>` : '';
-  const missingHtml = missing.length ? `<div>
-    <div style="font-weight:700;color:#E53E3E">⚠ Not in Stock — priced normally</div>
-    ${list(missing)}
-  </div>` : '';
-  showModal(`<div class="modal modal-sm">
-    <div class="modal-head"><h3>🛠 Tool Availability</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">${foundHtml}${missingHtml}</div>
-    <div class="modal-foot"><button class="btn btn-blue" onclick="closeModal()">OK</button></div>
-  </div>`);
 }
 
 // ── Part Stock → Excel export (client-side via SheetJS) ───────────────────────
