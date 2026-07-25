@@ -376,7 +376,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.42';
+const APP_VER   = '1.8.43';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1507,16 +1507,33 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
         _pdfText = pageTexts.map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
         _pdfTextLen = pageTexts.join('').trim().length;
 
+        // See _findBOMPageIndex — a detected BOM-header page whose OWN text
+        // is still very short (just the header, no real rows) is a strong
+        // sign this table's cells are graphics, not text: trust vision over
+        // the whole-document text blob even if it returned SOME rows, since
+        // those are almost certainly pulled from boilerplate elsewhere, not
+        // the real table.
+        const _bomPageIdx=_findBOMPageIndex(pageTexts);
+        const _bomPageSparse=_bomPageIdx>=0 && (pageTexts[_bomPageIdx]||'').trim().length<400;
+
         if(_pdfTextLen > 50){
           setMsg('Sending text to AI…', 45);
           extractedRows = await aiExtractBOM(_pdfText, false, null, file.name);
         }
-        if(!extractedRows.length && (anthKey||geminiKey)){
+        if((!extractedRows.length || _bomPageSparse) && (anthKey||geminiKey)){
           setMsg('Text extraction found nothing — trying page vision…', 60);
-          for(let pi=0; pi<_pdfImages.length; pi++){
+          // Try the detected BOM sheet FIRST, then fall back to the rest of
+          // the pages in order.
+          const pageOrder=_pdfImages.map((_,idx)=>idx);
+          if(_bomPageIdx>=0){
+            const pos=pageOrder.indexOf(_bomPageIdx);
+            if(pos>0){ pageOrder.splice(pos,1); pageOrder.unshift(_bomPageIdx); }
+          }
+          for(let k=0;k<pageOrder.length;k++){
+            const pi=pageOrder[k];
             const b64=_pdfImages[pi];
             if(!b64) continue;
-            setMsg(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`, 60+Math.round(35*pi/_pdfImages.length));
+            setMsg(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`, 60+Math.round(35*k/pageOrder.length));
             const rows=await aiExtractBOM('',true,{b64,mimeType:'image/jpeg'},file.name);
             if(rows.length){ extractedRows=rows; break; }
           }
@@ -1829,22 +1846,18 @@ async function extractPDFPages(file){
     }
     if(line) lines.push(line);
     pageTexts.push(lines.join('\n'));
-    // -- Render page as JPEG, capped to a max dimension (matches Windows app's
-    // 3x-zoom intent, but a large-format drawing sheet — e.g. a multi-servo
-    // harness assembly on an E/D-size sheet — rendered at a flat 2.5x zoom as
-    // PNG can produce a base64 payload of tens of MB. Some environments/
-    // proxies then fail the AI provider's fetch() outright before any HTTP
-    // response comes back, surfacing as an unhelpful generic "Failed to
-    // fetch" instead of a diagnosable API error. A first pass caps the longer
-    // side to ~1600px at moderate JPEG quality; if the resulting base64 is
-    // STILL large (dense line-art can defeat JPEG compression — lots of thin
-    // sharp edges compress worse than photos), a second pass re-renders at a
-    // smaller size/quality. This matters because a blind retry of an
-    // identical oversized payload fails the exact same way every time — the
-    // size itself has to come down, not just the attempt count. --
+    // -- Render page as JPEG, capped to a max dimension. An earlier version of
+    // this rendered at a smaller size (1600px/q0.75) on the theory that an
+    // oversized payload was causing "Failed to fetch" errors — that turned
+    // out to be wrong (the real cause was a CORS header bug in the Anthropic
+    // fetch call, since fixed), so this was needlessly hurting legibility of
+    // dense multi-column tables (e.g. an Assembly Parts List with many small-
+    // print rows) when read via vision. Now rendered larger/sharper by
+    // default for better OCR-style accuracy; the size-safety fallback below
+    // only kicks in if a page is genuinely huge. --
     const _renderAt=async(maxDim,quality)=>{
       const baseVp = page.getViewport({scale:1});
-      const scale = Math.min(2.5, maxDim/Math.max(baseVp.width, baseVp.height));
+      const scale = Math.min(3, maxDim/Math.max(baseVp.width, baseVp.height));
       const vp = page.getViewport({scale});
       const canvas = document.createElement('canvas');
       canvas.width=vp.width; canvas.height=vp.height;
@@ -1852,17 +1865,34 @@ async function extractPDFPages(file){
       return canvas.toDataURL('image/jpeg',quality).split(',')[1];
     };
     try{
-      let b64 = await _renderAt(1600,0.75);
-      // base64 is ~4/3 the binary size; ~2,600,000 chars ≈ ~1.95MB binary
-      if(b64.length>2600000){
+      let b64 = await _renderAt(2400,0.88);
+      // base64 is ~4/3 the binary size; ~4,000,000 chars ≈ ~3MB binary — only
+      // step down for genuinely huge pages, not as a matter of course.
+      if(b64.length>4000000){
         console.warn('[PDF render] page',i,'still large at',(b64.length/1e6).toFixed(1),'MB base64 — re-rendering smaller');
-        b64 = await _renderAt(1100,0.6);
+        b64 = await _renderAt(1600,0.75);
       }
       console.log('[PDF render] page',i,'final image size:',(b64.length/1e6).toFixed(2),'MB base64');
       pageImages.push(b64);
     }catch(e){ pageImages.push(null); }
   }
   return {pageTexts, pageImages};
+}
+
+// Multi-page drawings often put the actual BOM / Assembly Parts List table on
+// its own sheet (frequently the LAST page) — but that table's CELLS are very
+// often rendered as vector/raster graphics by the CAD tool, not real text,
+// even though the sheet's own header/title IS real text (e.g. a page whose
+// pdf.js text layer is just "Assembly Parts List / Rev: / Status: Item
+// Name:" with none of the actual part numbers or item rows). Detect which
+// page is meant to be the BOM sheet by that header, so vision analysis can be
+// pointed at it directly and given priority — a whole-document text blob
+// that happens to have SOME real text elsewhere (title block boilerplate,
+// revision history, etc.) can otherwise return non-empty but WRONG rows,
+// silently skipping the vision fallback that would have found the real table.
+const _BOM_PAGE_HEADER_RE=/assembly\s*parts\s*list|bill\s*of\s*material(?:s)?|\bbom\b/i;
+function _findBOMPageIndex(pageTexts){
+  return pageTexts.findIndex(t=>_BOM_PAGE_HEADER_RE.test(t||''));
 }
 
 // ── Image encoding ─────────────────────────────────────────────────────────────
@@ -1893,6 +1923,15 @@ const _BOM_TEXT_PROMPT = (filename) =>
   `You are an expert at extracting Bill of Materials (BOM) tables from engineering drawings.
 
 TASK: Extract ALL rows from the BOM table in the text below. Do NOT stop early — even if there are 30+ rows.
+
+FINDING THE RIGHT TABLE: A multi-page drawing package often has SEVERAL tables —
+a title block, a sheet/revision record, a hole chart, etc. — but only ONE of
+them is the actual BOM: it is titled something like "ASSEMBLY PARTS LIST",
+"PARTS LIST", or "BILL OF MATERIALS", and its rows have REAL data in both an
+ITEM/# column AND a PART NUMBER/PN column. Only extract from that table.
+Do NOT extract rows from a title block, revision/ECO record, or any other
+table that lacks real item numbers and part numbers, even if it superficially
+has similar-looking column headers (e.g. "NAME", "DESCRIPTION").
 
 COLUMN MAPPING (column names may vary between drawings):
 - "item" → row number (1, 2, 3 ...) — look for: ITEM, #, NO., SEQ
@@ -1927,6 +1966,15 @@ const _BOM_VISION_PROMPT =
   `You are an expert at reading engineering Bill of Materials (BOM) tables from images.
 
 Look at this PDF page image and extract ALL rows from the BOM / Assembly Parts List table.
+
+FINDING THE RIGHT TABLE: this sheet may also show a title block, revision
+record, or other non-BOM table — ignore those. The real BOM table is titled
+something like "ASSEMBLY PARTS LIST", "PARTS LIST", or "BILL OF MATERIALS",
+and its rows have REAL data in both an ITEM/# column AND a PART NUMBER/PN
+column. If this page image does NOT contain that table (e.g. it's only a
+title block or a blank/near-empty parts-list header with no actual rows
+below it), return an empty array [] rather than extracting from the wrong
+table or inventing rows.
 
 For each row extract:
 - "item": row/item number (1, 2, 3 ...)
@@ -4210,21 +4258,46 @@ async function handleSDFiles(files){
         _pdfText=pageTexts.map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
         _pdfTextLen=pageTexts.join('').trim().length;
 
+        // See _findBOMPageIndex — a detected BOM-header page whose OWN text
+        // is still very short (just the header, no real rows) is a strong
+        // sign this table's cells are graphics, not text: trust vision over
+        // the whole-document text blob even if it returned SOME rows, since
+        // those are almost certainly pulled from boilerplate elsewhere, not
+        // the real table.
+        const _bomPageIdx=_findBOMPageIndex(pageTexts);
+        const _bomPageSparse=_bomPageIdx>=0 && (pageTexts[_bomPageIdx]||'').trim().length<400;
+
         if(_pdfTextLen>50){
           setM('Sending text to AI…',45);
           extractedRows=await aiExtractBOM(_pdfText,false,null,file.name);
         }
-        if(!extractedRows.length&&(anthKey||geminiKey)){
+        if((!extractedRows.length||_bomPageSparse)&&(anthKey||geminiKey)){
           setM('Text extraction found nothing — trying page vision…',60);
-          for(let pi=0;pi<_pdfImages.length;pi++){
+          // Try the detected BOM sheet FIRST, then fall back to the rest of
+          // the pages in order.
+          const pageOrder=_pdfImages.map((_,idx)=>idx);
+          if(_bomPageIdx>=0){
+            const pos=pageOrder.indexOf(_bomPageIdx);
+            if(pos>0){ pageOrder.splice(pos,1); pageOrder.unshift(_bomPageIdx); }
+          }
+          for(let k=0;k<pageOrder.length;k++){
+            const pi=pageOrder[k];
             const b64=_pdfImages[pi];
             if(!b64) continue;
-            setM(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`,60+Math.round(35*pi/_pdfImages.length));
+            setM(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`,60+Math.round(35*k/pageOrder.length));
             const rows2=await aiExtractBOM('',true,{b64,mimeType:'image/jpeg'},file.name);
             if(rows2.length){extractedRows=rows2;_procIsImage=true;_procImgData={b64,mimeType:'image/jpeg'};break;}
           }
         }
-        if(!_procIsImage && _pdfImages[0]){ _procIsImage=true; _procImgData={b64:_pdfImages[0],mimeType:'image/jpeg'}; }
+        // Fall back to the detected BOM sheet's own image (or page 1 if none
+        // was detected) for the cable-process analysis below, rather than
+        // always defaulting to page 1 — the real assembly content, and
+        // therefore the steps the AI needs to see, usually lives on whichever
+        // page the BOM itself is on.
+        if(!_procIsImage){
+          const fallbackIdx=_bomPageIdx>=0?_bomPageIdx:0;
+          if(_pdfImages[fallbackIdx]){ _procIsImage=true; _procImgData={b64:_pdfImages[fallbackIdx],mimeType:'image/jpeg'}; }
+        }
       } else {
         setM('Encoding image…',20);
         const {b64,mimeType}=await encodeImage(file);
