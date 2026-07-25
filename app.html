@@ -376,7 +376,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.43';
+const APP_VER   = '1.8.44';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -4371,13 +4371,15 @@ async function handleSDFiles(files){
                 // never find this drawing's rows either.
                 const key=`${row.drawing_number||effectiveDwgName}|${row.part_number||row.description||step.row_idx}`;
                 _sdPendingLaborByKey[key]=(_sdPendingLaborByKey[key]||0)+totalMins;
-                const rowUnit=String(row.unit||'').trim().toLowerCase();
-                // Mirror _sdRecalcLaborTotal's rules for what the breakdown
-                // modal displays, so it matches what Cost Summary will
-                // actually add up: mm/gr rows are flat 1 min regardless of qty.
-                const contribution = (rowUnit==='mm'||rowUnit==='gr') ? 1 : totalMins;
-                rowTiedMinutes+=contribution;
-                displaySteps.push({operation:step.operation, unitMinutes:unitMins, qty:qtyInDrawing, minutes:contribution});
+                // Since v1.8.42, a row's _laborFixedTotal (this AI-computed
+                // total) always wins over the mm/gr flat-1-minute floor in
+                // _sdRecalcLaborTotal — so the real, uncapped totalMins is
+                // what Cost Summary will actually add up for this row too.
+                // Capping it here to 1 for mm/gr rows (as an earlier version
+                // of this did) would make the modal UNDER-report compared to
+                // the real applied total — the two must show the same number.
+                rowTiedMinutes+=totalMins;
+                displaySteps.push({operation:step.operation, unitMinutes:unitMins, qty:qtyInDrawing, minutes:totalMins});
               } else {
                 generalMinutes+=totalMins;
                 displaySteps.push({operation:step.operation, unitMinutes:unitMins, qty:qtyInDrawing, minutes:totalMins});
@@ -4440,7 +4442,9 @@ async function handleSDFiles(files){
       await saveBOMToPartStock(updatedRows);
       await loadRoutings();
       let added=0;
+      let _sdRowIdx=-1;
       for(const r of updatedRows){
+        _sdRowIdx++;
         const pn=(r.part_number||'').trim().toLowerCase();
         const match=pn?allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
         const qty=parseFloat(r.qty)||1;
@@ -4471,7 +4475,19 @@ async function handleSDFiles(files){
         // AI's own count of drawing repeats) — _laborFixedTotal tells
         // _sdRecalcLaborTotal to use it as-is instead of multiplying again by
         // this row's own qty column (see that function for why).
-        const dwgKey=`${item.drawing_number}|${item.part_number||item.description}`;
+        // Must match the EXACT same fallback priority used when this key was
+        // stored above (row.part_number||row.description||step.row_idx) —
+        // NOT item.part_number, which for a row with no real part number
+        // falls back to r.item (the row/item NUMBER, e.g. "5"), a completely
+        // different value from what the storage side falls back to
+        // (row.description). That mismatch silently dropped the AI-computed
+        // fixed total for every row lacking a manufacturer part number —
+        // common for plain cable/wire rows or generic hardware — which is
+        // exactly where a chunk of "missing" labor time was going, even
+        // though the breakdown modal (which sums proc.steps directly,
+        // independent of whether this lookup succeeds) kept showing the
+        // full, correct total.
+        const dwgKey=`${item.drawing_number}|${r.part_number||r.description||_sdRowIdx}`;
         if(_sdPendingLaborByKey[dwgKey]!=null){
           item.labor_time = String(_sdPendingLaborByKey[dwgKey]);
           item._laborFixedTotal = true;
