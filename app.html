@@ -408,7 +408,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.47';
+const APP_VER   = '1.8.48';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -623,6 +623,7 @@ const _SUPPORT_STATUSES=['open','in_progress','done','rejected'];
 const _SUPPORT_STATUS_LABEL={open:'Open',in_progress:'In Progress',done:'Done',rejected:'Rejected'};
 const _SUPPORT_STATUS_COLOR={open:'#2E75B6',in_progress:'#EAB308',done:'#1F8B4C',rejected:'#E53E3E'};
 const _SUPPORT_STATUS_TEXT={open:'#fff',in_progress:'#1A202C',done:'#fff',rejected:'#fff'};
+const _SUPPORT_ROW_BG={open:'#F7FAFC',in_progress:'#FEFCE8',done:'#F0FDF4',rejected:'#FEF2F2'};
 function _supportStatusBadge(status){
   const s=_SUPPORT_STATUSES.includes(status)?status:'open';
   return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;color:${_SUPPORT_STATUS_TEXT[s]};background:${_SUPPORT_STATUS_COLOR[s]}">${_SUPPORT_STATUS_LABEL[s]}</span>`;
@@ -4961,7 +4962,7 @@ async function renderAdminTicketsSection(){
   if(!tickets.length){ body.innerHTML=`<p style="color:var(--muted);font-size:12px;padding:10px 0">No support requests yet.</p>`; return; }
   body.innerHTML=`<div class="table-wrap"><table>
     <thead><tr><th>Date/Time</th><th>User</th><th>Message</th><th style="width:130px">Status</th><th style="width:90px"></th></tr></thead>
-    <tbody>${tickets.map(t=>`<tr data-id="${esc(t._id)}">
+    <tbody>${tickets.map(t=>`<tr data-id="${esc(t._id)}" style="background:${_SUPPORT_ROW_BG[_SUPPORT_STATUSES.includes(t.status)?t.status:'open']}">
       <td style="white-space:nowrap;font-size:11px;color:var(--muted)">${fmtDateTime(t.createdAt)}</td>
       <td style="font-size:12px">${esc(t.user||'')}</td>
       <td style="font-size:12px;max-width:340px;white-space:pre-wrap">${esc(t.message||'')}${t.adminReply?`<div style="margin-top:4px;padding:4px 6px;background:#f0f7ff;border-radius:4px;font-size:11px"><strong>Reply:</strong> ${esc(t.adminReply)}</div>`:''}</td>
@@ -4974,6 +4975,7 @@ async function renderAdminTicketsSection(){
   body.querySelectorAll('.adm-ticket-status').forEach(sel=>sel.addEventListener('change',async()=>{
     const id=sel.dataset.id, status=sel.value;
     sel.style.background=_SUPPORT_STATUS_COLOR[status]; sel.style.color=_SUPPORT_STATUS_TEXT[status];
+    const rowEl=sel.closest('tr'); if(rowEl) rowEl.style.background=_SUPPORT_ROW_BG[status];
     try{
       await updateDoc(doc(db,'companies',companyId,'support_tickets',id),{status,updatedAt:serverTimestamp()});
       logAudit('ticket_status_changed',{ticketId:id,status},true);
