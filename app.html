@@ -285,6 +285,10 @@
     </div>
     <div id="content"></div>
   </div>
+  <button id="btn-support-fab" title="Support — send a request or report a problem"
+    style="position:fixed;bottom:20px;right:20px;width:48px;height:48px;border-radius:50%;
+           background:#2E75B6;color:#fff;border:none;box-shadow:0 4px 14px rgba(0,0,0,.25);
+           font-size:20px;cursor:pointer;z-index:500;display:flex;align-items:center;justify-content:center">🆘</button>
 </div>
 
 <div id="toast-el" class="toast toast-info" style="display:none"></div>
@@ -294,7 +298,7 @@ import { initializeApp }       from 'https://www.gstatic.com/firebasejs/10.13.1/
 import { getAuth, onAuthStateChanged, signOut }
                                from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
 import { getFirestore, doc, getDoc, getDocs, setDoc, addDoc, arrayUnion,
-         updateDoc, deleteDoc, collection, query, orderBy, serverTimestamp }
+         updateDoc, deleteDoc, collection, query, orderBy, limit, serverTimestamp }
                                from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js';
 
 // ── Firebase ──────────────────────────────────────────────────────────────────
@@ -327,7 +331,7 @@ let currentUserRole = '';
 // roles fall back to 'agent' — the pre-role-system behavior was "everyone sees
 // everything except Settings", which 'agent' already matches.
 const DEFAULT_ROLE_VIEWS = {
-  admin:  ['rfq','sales-desk','part-stock','customers','settings'],
+  admin:  ['rfq','sales-desk','part-stock','customers','settings','admin'],
   agent:  ['rfq','sales-desk','part-stock','customers'],
   viewer: ['part-stock','rfq'],
   sales:  ['sales-desk'],
@@ -354,6 +358,25 @@ function roleOptions(){
   const keys = Object.keys(roleViewsMap).length ? Object.keys(roleViewsMap) : Object.keys(DEFAULT_ROLE_VIEWS);
   return keys.map(k => [k, (roleViewsMap[k] && roleViewsMap[k].name) || (k.charAt(0).toUpperCase()+k.slice(1))]);
 }
+
+// ── Audit log ─────────────────────────────────────────────────────────────────
+// A single, append-only trail of who did what and whether it worked — read by
+// Admin > Logs (see renderAdminPage). Fire-and-forget: a logging failure must
+// never block or surface an error for the actual user action it's describing,
+// so every call is wrapped in try/catch with only a console warning on failure.
+// `details` can be a string or a plain object (stored as-is, rendered with
+// JSON.stringify by the Logs tab when it's an object).
+async function logAudit(action, details, success=true){
+  if(!companyId) return; // no company context yet (e.g. very first load) — nothing to attribute this to
+  try{
+    await addDoc(collection(db,'companies',companyId,'audit_logs'),{
+      user: currentUserEmail||'', userId: auth.currentUser?.uid||'',
+      action, details: details==null?'':details, success: !!success,
+      timestamp: serverTimestamp()
+    });
+  }catch(e){ console.warn('[Audit] log failed:', e.message); }
+}
+
 let sortCol     = 'part_number';
 let sortAsc     = true;
 let psPage      = 1;
@@ -376,7 +399,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.44';
+const APP_VER   = '1.8.45';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -417,6 +440,7 @@ onAuthStateChanged(auth, async user => {
   document.getElementById('shell').style.display = 'flex';
   const infoEl = document.getElementById('topbar-info');
   if (infoEl) infoEl.innerHTML = `<span>👤 ${esc(currentUserEmail)}</span><span style="color:#CBD5E1">|</span><span>v${APP_VER}</span>`;
+  logAudit('login', {role: currentUserRole}, true);
   route('home');
 });
 
@@ -474,6 +498,7 @@ function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 function mkEl(tag,cls='',html=''){const e=document.createElement(tag);if(cls)e.className=cls;if(html)e.innerHTML=html;return e;}
 function fmtPrice(v){const n=parseFloat(v);return isNaN(n)||n===0?'':'$'+n.toFixed(4);}
 function fmtDate(v){if(!v)return'';try{const d=v.toDate?v.toDate():new Date(v);return d.toLocaleDateString('en-GB');}catch{return String(v);}}
+function fmtDateTime(v){if(!v)return'';try{const d=v.toDate?v.toDate():new Date(v);return d.toLocaleDateString('en-GB')+' '+d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});}catch{return String(v);}}
 function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};}
 function nowISO(){return new Date().toISOString();}
 
@@ -502,13 +527,17 @@ function setActions(html){document.getElementById('topbar-actions').innerHTML=ht
 // the hub. Every other screen shows a 🏠 button in the topbar to get back.
 function route(v){
   const target = v||'home';
-  if(!canView(target)){ route('home'); return; }
+  if(!canView(target)){
+    if(target!=='home') logAudit('screen_open',{screen:target},false); // blocked by role — logged as a failed attempt
+    route('home'); return;
+  }
   currentView=target;
   const btnHome=document.getElementById('btn-home');
   if(btnHome) btnHome.style.display = currentView==='home' ? 'none' : 'inline-flex';
-  const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','customers':'👥 Customers','settings':'⚙️ Settings'};
+  const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','customers':'👥 Customers','settings':'⚙️ Settings','admin':'🛡️ Admin'};
   document.getElementById('page-title').textContent=TITLES[currentView]||'';
   setActions('');
+  if(currentView!=='home') logAudit('screen_open',{screen:currentView},true);
   if(currentView==='home') renderHome();
   else if(currentView==='part-stock'){
     // Navigating to Part Stock always refetches from Firestore, so parts added
@@ -527,8 +556,13 @@ function route(v){
     if(currentUserRole!=='admin'){ route('home'); return; }
     renderSettingsPage();
   }
+  else if(currentView==='admin'){
+    if(currentUserRole!=='admin'){ route('home'); return; }
+    renderAdminPage();
+  }
 }
 document.getElementById('btn-home')?.addEventListener('click',()=>route('home'));
+document.getElementById('btn-support-fab')?.addEventListener('click',()=>openSupportModal());
 
 // ── Home screen ───────────────────────────────────────────────────────────────
 const HOME_BUTTONS = {
@@ -537,6 +571,7 @@ const HOME_BUTTONS = {
   'part-stock':  ['📦','Database'],
   'customers':   ['👥','Customers'],
   'settings':    ['⚙️','Settings'],
+  'admin':       ['🛡️','Admin'],
 };
 function _logoHTML(){
   return companyLogoB64
@@ -563,7 +598,73 @@ function renderHome(){
     </div>`);
   document.querySelectorAll('.home-btn').forEach(b=>b.addEventListener('click',()=>route(b.dataset.view)));
   document.getElementById('btn-home-signout')?.addEventListener('click',
-    () => signOut(auth).then(() => location.href = 'index.html'));
+    () => logAudit('logout',null,true).finally(()=>signOut(auth).then(() => location.href = 'index.html')));
+}
+
+// ── Support ticket (floating 🆘 button, every screen) ──────────────────────────
+const _SUPPORT_STATUSES=['open','in_progress','done','rejected'];
+const _SUPPORT_STATUS_LABEL={open:'Open',in_progress:'In Progress',done:'Done',rejected:'Rejected'};
+const _SUPPORT_STATUS_COLOR={open:'#2E75B6',in_progress:'#D97706',done:'#1F8B4C',rejected:'#E53E3E'};
+function _supportStatusBadge(status){
+  const s=_SUPPORT_STATUSES.includes(status)?status:'open';
+  return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;color:#fff;background:${_SUPPORT_STATUS_COLOR[s]}">${_SUPPORT_STATUS_LABEL[s]}</span>`;
+}
+// Opens the Support modal: shows the CURRENT user's own past tickets (with
+// status + any admin reply — this is how "reply to the user" surfaces, since
+// there's no outbound email in this build — see openAdminReplyModal) plus a
+// form to submit a new request/complaint. Every submission is also written to
+// the audit log.
+async function openSupportModal(){
+  const bg=showModal(`<div class="modal modal-sm">
+    <div class="modal-head"><h3>🆘 Support</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" id="support-modal-body" style="max-height:60vh;overflow-y:auto">
+      <div style="text-align:center;padding:30px"><div class="ring" style="margin:0 auto"></div></div>
+    </div>
+    <div class="modal-foot" style="flex-direction:column;align-items:stretch;gap:8px">
+      <textarea id="support-new-msg" placeholder="Describe your request or the problem you're seeing…" rows="3"
+        style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;resize:vertical"></textarea>
+      <button class="btn btn-blue" id="btn-support-send" style="justify-content:center">Send to Admin</button>
+    </div>
+  </div>`);
+  const body=document.getElementById('support-modal-body');
+  const loadMine=async()=>{
+    try{
+      const snap=await getDocs(query(collection(db,'companies',companyId,'support_tickets'),orderBy('createdAt','desc')));
+      const mine=snap.docs.map(d=>({_id:d.id,...d.data()})).filter(t=>t.user===currentUserEmail);
+      if(!mine.length){ body.innerHTML=`<p style="color:var(--muted);font-size:12px;text-align:center;padding:10px 0">No previous requests.</p>`; return; }
+      body.innerHTML=mine.map(t=>`
+        <div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-size:10px;color:var(--muted)">${fmtDateTime(t.createdAt)}</span>
+            ${_supportStatusBadge(t.status)}
+          </div>
+          <div style="font-size:13px;white-space:pre-wrap">${esc(t.message||'')}</div>
+          ${t.adminReply ? `<div style="margin-top:8px;padding:8px;background:#f0f7ff;border-radius:6px;font-size:12px">
+            <div style="font-weight:700;color:var(--blue-dark);margin-bottom:2px">Admin reply:</div>
+            <div style="white-space:pre-wrap">${esc(t.adminReply)}</div>
+          </div>` : ''}
+        </div>`).join('');
+    }catch(e){ body.innerHTML=`<p style="color:red;font-size:12px">${esc(e.message)}</p>`; }
+  };
+  loadMine();
+  document.getElementById('btn-support-send').addEventListener('click',async()=>{
+    const ta=document.getElementById('support-new-msg');
+    const message=ta.value.trim();
+    if(!message){ toast('Type a message first','error'); return; }
+    const btn=document.getElementById('btn-support-send');
+    btn.disabled=true; btn.textContent='Sending…';
+    try{
+      await addDoc(collection(db,'companies',companyId,'support_tickets'),{
+        user:currentUserEmail, userId:auth.currentUser?.uid||'', message, status:'open',
+        createdAt:serverTimestamp()
+      });
+      logAudit('support_ticket_submitted',{message:message.slice(0,200)},true);
+      toast('Request sent to admin','success');
+      ta.value='';
+      loadMine();
+    }catch(e){ toast('Error: '+e.message,'error'); logAudit('support_ticket_submitted',{error:e.message},false); }
+    btn.disabled=false; btn.textContent='Send to Admin';
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -988,8 +1089,9 @@ async function renderPartStock(filter=''){
       await Promise.all(checked.map(id=>deleteDoc(doc(db,'companies',companyId,'parts_cache',id))));
       allParts=allParts.filter(p=>!checked.includes(p._id));
       toast(`Deleted ${checked.length} part(s)`,'success');
+      logAudit('database_delete_parts',{count:checked.length},true);
       renderPartStock(inp.value);
-    }catch(e){ toast('Error: '+e.message,'error'); }
+    }catch(e){ toast('Error: '+e.message,'error'); logAudit('database_delete_parts',{error:e.message},false); }
   });
 }
 
@@ -1163,9 +1265,10 @@ async function createRFQ(){
         updatedAt:serverTimestamp(), createdAt:serverTimestamp()
       });
       toast('RFQ created','success');
+      logAudit('rfq_created',{name:rfqName},true);
       closeModal();
       renderRFQDetail(ref.id,rfqName);
-    } catch(e){ toast('Error: '+e.message,'error'); confirmBtn.disabled=false; confirmBtn.textContent='✓ Create RFQ'; }
+    } catch(e){ toast('Error: '+e.message,'error'); logAudit('rfq_created',{error:e.message},false); confirmBtn.disabled=false; confirmBtn.textContent='✓ Create RFQ'; }
   });
 }
 
@@ -1177,8 +1280,9 @@ async function deleteRFQ(id, name){
     await Promise.all(snap.docs.map(d=>deleteDoc(d.ref)));
     await deleteDoc(doc(db,'companies',companyId,'projects',id));
     toast('RFQ deleted','success');
+    logAudit('rfq_deleted',{name},true);
     renderRFQList();
-  } catch(e){ toast('Error: '+e.message,'error'); }
+  } catch(e){ toast('Error: '+e.message,'error'); logAudit('rfq_deleted',{error:e.message},false); }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1601,6 +1705,7 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
         await saveBOMToRFQSilent(byDwg[dwgName], projectId, dwgName);
       }
       toast(`Saved ${updatedRows.length} BOM rows across ${Object.keys(byDwg).length} drawing(s)`,'success');
+      logAudit('rfq_bom_saved',{rows:updatedRows.length,drawings:Object.keys(byDwg).length,project:projectName},true);
       closeModal();
       renderRFQDetail(projectId, projectName);
     }
@@ -2824,9 +2929,10 @@ function showPriorityPreview(rows, body, foot){
     try{
       const {updated, created}=await savePriorityImport(finalRows);
       toast(`Priority Import: ${updated} updated, ${created} created`,'success');
+      logAudit('priority_import',{updated,created},true);
       closeModal();
       allParts=[]; renderPartStock();
-    }catch(e){ toast('Save error: '+e.message,'error'); btn.disabled=false; btn.textContent=`💾 Save to Database (${finalRows.length} rows)`; }
+    }catch(e){ toast('Save error: '+e.message,'error'); logAudit('priority_import',{error:e.message},false); btn.disabled=false; btn.textContent=`💾 Save to Database (${finalRows.length} rows)`; }
   });
 }
 
@@ -3046,9 +3152,10 @@ function showToolsPreview(rows, body, foot){
     try{
       const {updated, created}=await saveToolsImport(finalRows);
       toast(`Tools Catalog Import: ${updated} updated, ${created} created`,'success');
+      logAudit('tools_catalog_import',{updated,created},true);
       closeModal();
       allParts=[]; renderPartStock();
-    }catch(e){ toast('Save error: '+e.message,'error'); btn.disabled=false; btn.textContent=`💾 Save to Database (${finalRows.length} rows)`; }
+    }catch(e){ toast('Save error: '+e.message,'error'); logAudit('tools_catalog_import',{error:e.message},false); btn.disabled=false; btn.textContent=`💾 Save to Database (${finalRows.length} rows)`; }
   });
 }
 
@@ -4036,6 +4143,7 @@ async function renderSalesDesk(){
       }
       renderSalesDesk();
       toast(`Added ${added} part(s) to Sales Desk`,'success');
+      logAudit('sales_desk_add_from_picker',{count:added},true);
       await _sdAutoMatchLabor();
       renderSalesDesk();
     });
@@ -4501,6 +4609,7 @@ async function handleSDFiles(files){
       }
       _sdPendingLaborByKey={};
       toast(`Added ${added} parts to Sales Desk`,'success');
+      logAudit('sales_desk_add_from_drawing',{count:added},true);
       closeModal();
       document.getElementById('sd-tbody')&&renderSalesDesk();
       await _sdAutoMatchLabor();
@@ -4777,8 +4886,9 @@ function openCustomerModal(cust={}){
         await addDoc(col,{name,contacts:custContacts,icon_b64:_custIconB64,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
       }
       toast(isEdit?`Updated "${name}"`:`Customer "${name}" created`,'success');
+      logAudit(isEdit?'customer_updated':'customer_created',{name},true);
       closeModal(); renderCustomers();
-    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent=isEdit?'Save Changes':'Create Customer'; }
+    }catch(e){ toast('Error: '+e.message,'error'); logAudit(isEdit?'customer_updated':'customer_created',{error:e.message},false); btn.disabled=false; btn.textContent=isEdit?'Save Changes':'Create Customer'; }
   });
 
   if(isEdit){
@@ -4792,8 +4902,144 @@ async function deleteCustomer(id,name){
   if(!confirm(`Delete customer "${name}"?`)) return;
   try{
     await deleteDoc(doc(db,'companies',companyId,'customers',id));
-    toast(`Deleted "${name}"`,'success'); renderCustomers();
-  }catch(e){ toast('Error: '+e.message,'error'); }
+    toast(`Deleted "${name}"`,'success'); logAudit('customer_deleted',{name},true); renderCustomers();
+  }catch(e){ toast('Error: '+e.message,'error'); logAudit('customer_deleted',{error:e.message},false); }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ADMIN (support tickets + system audit log) — admin-role only, gated the
+// same way as Settings (see route()). Reached via the "🛡️ Admin" Home button.
+// ══════════════════════════════════════════════════════════════════════════════
+function renderAdminPage(){
+  setActions('');
+  setContent(`
+    <div class="settings-panel" style="padding:20px 22px;max-width:900px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🆘 Support Tickets</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Requests and problem reports submitted via the Support button. Reply and set a status — the user sees your reply the next time they open Support.</p>
+      <div id="adm-tickets-body"></div>
+    </div>
+
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">📜 System Logs</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Login/logout, screen opens, and key actions across every user — most recent 500 entries.</p>
+      <div id="adm-logs-body"></div>
+    </div>`);
+  renderAdminTicketsSection();
+  renderAdminLogsSection();
+}
+
+const _ADM_TICKET_CACHE={}; // ticketId -> ticket data, refreshed each render — used by openAdminReplyModal
+async function renderAdminTicketsSection(){
+  const body=document.getElementById('adm-tickets-body');
+  if(!body) return;
+  body.innerHTML=`<div style="text-align:center;padding:30px"><div class="ring" style="margin:0 auto"></div></div>`;
+  let tickets=[];
+  try{
+    const snap=await getDocs(query(collection(db,'companies',companyId,'support_tickets'),orderBy('createdAt','desc')));
+    tickets=snap.docs.map(d=>({_id:d.id,...d.data()}));
+  }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${esc(e.message)}</p>`; return; }
+  Object.keys(_ADM_TICKET_CACHE).forEach(k=>delete _ADM_TICKET_CACHE[k]);
+  tickets.forEach(t=>_ADM_TICKET_CACHE[t._id]=t);
+  if(!tickets.length){ body.innerHTML=`<p style="color:var(--muted);font-size:12px;padding:10px 0">No support requests yet.</p>`; return; }
+  body.innerHTML=`<div class="table-wrap"><table>
+    <thead><tr><th>Date/Time</th><th>User</th><th>Message</th><th style="width:130px">Status</th><th style="width:90px"></th></tr></thead>
+    <tbody>${tickets.map(t=>`<tr data-id="${esc(t._id)}">
+      <td style="white-space:nowrap;font-size:11px;color:var(--muted)">${fmtDateTime(t.createdAt)}</td>
+      <td style="font-size:12px">${esc(t.user||'')}</td>
+      <td style="font-size:12px;max-width:340px;white-space:pre-wrap">${esc(t.message||'')}${t.adminReply?`<div style="margin-top:4px;padding:4px 6px;background:#f0f7ff;border-radius:4px;font-size:11px"><strong>Reply:</strong> ${esc(t.adminReply)}</div>`:''}</td>
+      <td><select class="form-input adm-ticket-status" data-id="${esc(t._id)}" style="padding:3px 6px;font-size:12px">
+        ${_SUPPORT_STATUSES.map(s=>`<option value="${s}" ${t.status===s?'selected':''}>${_SUPPORT_STATUS_LABEL[s]}</option>`).join('')}
+      </select></td>
+      <td><button class="btn btn-ghost btn-sm adm-ticket-reply" data-id="${esc(t._id)}">💬 Reply</button></td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+  body.querySelectorAll('.adm-ticket-status').forEach(sel=>sel.addEventListener('change',async()=>{
+    const id=sel.dataset.id, status=sel.value;
+    try{
+      await updateDoc(doc(db,'companies',companyId,'support_tickets',id),{status,updatedAt:serverTimestamp()});
+      logAudit('ticket_status_changed',{ticketId:id,status},true);
+      toast('Status updated','success');
+    }catch(e){ toast('Error: '+e.message,'error'); }
+  }));
+  body.querySelectorAll('.adm-ticket-reply').forEach(btn=>btn.addEventListener('click',()=>openAdminReplyModal(btn.dataset.id)));
+}
+function openAdminReplyModal(ticketId){
+  const t=_ADM_TICKET_CACHE[ticketId];
+  if(!t) return;
+  showModal(`<div class="modal modal-sm">
+    <div class="modal-head"><h3>💬 Reply to ${esc(t.user||'')}</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Their request:</div>
+      <div style="font-size:13px;white-space:pre-wrap;padding:8px;background:#f7f9fb;border-radius:6px;margin-bottom:12px">${esc(t.message||'')}</div>
+      <div class="form-field">
+        <label>Your Reply</label>
+        <textarea class="form-input" id="adm-reply-inp" rows="4" style="resize:vertical">${esc(t.adminReply||'')}</textarea>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-green" id="btn-adm-reply-save">Save Reply</button>
+    </div>
+  </div>`);
+  document.getElementById('btn-adm-reply-save').addEventListener('click',async()=>{
+    const adminReply=document.getElementById('adm-reply-inp').value.trim();
+    const btn=document.getElementById('btn-adm-reply-save');
+    btn.disabled=true; btn.textContent='Saving…';
+    try{
+      await updateDoc(doc(db,'companies',companyId,'support_tickets',ticketId),{
+        adminReply, repliedAt:serverTimestamp(), repliedBy:currentUserEmail
+      });
+      logAudit('ticket_replied',{ticketId},true);
+      toast('Reply saved','success');
+      closeModal();
+      renderAdminTicketsSection();
+    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='Save Reply'; }
+  });
+}
+
+let _admLogsCache=[], _admLogsFilterQ='';
+async function renderAdminLogsSection(){
+  const body=document.getElementById('adm-logs-body');
+  if(!body) return;
+  body.innerHTML=`<div style="text-align:center;padding:30px"><div class="ring" style="margin:0 auto"></div></div>`;
+  try{
+    const snap=await getDocs(query(collection(db,'companies',companyId,'audit_logs'),orderBy('timestamp','desc'),limit(500)));
+    _admLogsCache=snap.docs.map(d=>({_id:d.id,...d.data()}));
+  }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${esc(e.message)}</p>`; return; }
+  _renderAdminLogsTable();
+}
+function _renderAdminLogsTable(){
+  const body=document.getElementById('adm-logs-body');
+  if(!body) return;
+  const predicate=parseBoolQuery(_admLogsFilterQ);
+  const rows=_admLogsCache.filter(l=>{
+    if(!_admLogsFilterQ.trim()) return true;
+    const detailsStr=typeof l.details==='object'?JSON.stringify(l.details):String(l.details||'');
+    return predicate([l.user,l.action,detailsStr,l.success?'success':'failed'].map(v=>String(v||'')).join(' | ').toLowerCase());
+  });
+  body.innerHTML=`
+    <div class="toolbar" style="margin-bottom:8px">
+      <div class="search-wrap">
+        <input class="search-box" id="adm-logs-search" placeholder='Search — supports AND / OR / NOT / "phrase" / (...)' value="${esc(_admLogsFilterQ)}">
+        <button type="button" class="search-clear" id="adm-logs-search-clear" title="Clear">✕</button>
+      </div>
+      <button class="btn btn-ghost" id="btn-adm-logs-refresh" style="white-space:nowrap">🔄 Refresh</button>
+      <span class="count-badge">${rows.length} of ${_admLogsCache.length} (most recent 500)</span>
+    </div>
+    <div class="table-wrap" style="max-height:60vh"><table>
+      <thead><tr><th>Timestamp</th><th>User</th><th>Action</th><th>Details</th><th style="width:60px">Result</th></tr></thead>
+      <tbody>${rows.map(l=>`<tr>
+        <td style="white-space:nowrap;font-size:11px;color:var(--muted)">${fmtDateTime(l.timestamp)}</td>
+        <td style="font-size:12px">${esc(l.user||'')}</td>
+        <td style="font-size:12px;font-family:monospace">${esc(l.action||'')}</td>
+        <td style="font-size:11px;color:var(--muted);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(typeof l.details==='object'?JSON.stringify(l.details):String(l.details||''))}">${esc(typeof l.details==='object'?JSON.stringify(l.details):String(l.details||''))}</td>
+        <td style="text-align:center">${l.success?'<span style="color:#1F8B4C">✓</span>':'<span style="color:#E53E3E">✗</span>'}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  const searchInp=document.getElementById('adm-logs-search');
+  wireSearchClear('adm-logs-search','adm-logs-search-clear');
+  searchInp.addEventListener('input',debounce(()=>{ _admLogsFilterQ=searchInp.value; _renderAdminLogsTable(); },200));
+  document.getElementById('btn-adm-logs-refresh').addEventListener('click',()=>renderAdminLogsSection());
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -4999,8 +5245,9 @@ function openInviteUserModal(companies){
     try{
       await adminCreateUser(email,pass,name,companyIdSel,role);
       toast(`User "${name}" created`,'success');
+      logAudit('user_created',{email,role},true);
       closeModal(); renderSettingsUsersSection();
-    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='＋ Create User'; }
+    }catch(e){ toast('Error: '+e.message,'error'); logAudit('user_created',{error:e.message},false); btn.disabled=false; btn.textContent='＋ Create User'; }
   });
 }
 
@@ -5060,8 +5307,9 @@ function openEditUserModal(u,companies){
     try{
       await updateDoc(doc(db,'users',u._id),{company_id:companyIdVal,role,disabled,updatedAt:serverTimestamp()});
       toast('User updated','success');
+      logAudit('user_updated',{email:u.email||u._id,role,disabled},true);
       closeModal(); renderSettingsUsersSection();
-    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='💾 Save'; }
+    }catch(e){ toast('Error: '+e.message,'error'); logAudit('user_updated',{error:e.message},false); btn.disabled=false; btn.textContent='💾 Save'; }
   });
   document.getElementById('btn-edu-delete').addEventListener('click', async()=>{
     if(!confirm(`Delete user "${u.displayName||u.email}"?\n\nThis removes their profile, company assignment, and role. Note: their sign-in account itself isn't deleted (that requires a backend) — use "disable" instead if you need to reliably block sign-in.`)) return;
@@ -5070,8 +5318,9 @@ function openEditUserModal(u,companies){
     try{
       await deleteDoc(doc(db,'users',u._id));
       toast('User profile deleted','success');
+      logAudit('user_deleted',{email:u.email||u._id},true);
       closeModal(); renderSettingsUsersSection();
-    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='🗑 Delete User'; }
+    }catch(e){ toast('Error: '+e.message,'error'); logAudit('user_deleted',{error:e.message},false); btn.disabled=false; btn.textContent='🗑 Delete User'; }
   });
 }
 
@@ -5096,8 +5345,9 @@ function openNewCompanyModal(){
     try{
       await addDoc(collection(db,'companies'),{name,logo_b64:'',createdAt:serverTimestamp()});
       toast(`Company "${name}" created`,'success');
+      logAudit('company_created',{name},true);
       closeModal(); renderSettingsCompaniesSection();
-    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='＋ Create'; }
+    }catch(e){ toast('Error: '+e.message,'error'); logAudit('company_created',{error:e.message},false); btn.disabled=false; btn.textContent='＋ Create'; }
   });
 }
 
@@ -5285,7 +5535,8 @@ async function renderSettingsRolesSection(){
       await setDoc(doc(db,'roles',key),{name,views,updatedAt:serverTimestamp()},{merge:true});
       roleViewsMap[key]={name,views};
       toast(`Role "${name}" saved`,'success');
-    }catch(e){ toast('Error: '+e.message,'error'); }
+      logAudit('role_saved',{name,views},true);
+    }catch(e){ toast('Error: '+e.message,'error'); logAudit('role_saved',{error:e.message},false); }
     btn.disabled=false; btn.textContent='💾 Save';
   }));
 }
