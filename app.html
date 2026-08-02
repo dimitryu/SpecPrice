@@ -408,7 +408,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.48';
+const APP_VER   = '1.8.49';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -4947,22 +4947,52 @@ function renderAdminPage(){
   renderAdminLogsSection();
 }
 
-const _ADM_TICKET_CACHE={}; // ticketId -> ticket data, refreshed each render — used by openAdminReplyModal
+const _ADM_TICKET_CACHE={}; // ticketId -> ticket data (ALL fetched tickets, unfiltered) — used by openAdminReplyModal
+let _admTicketsAll=[], _admTicketsFilterUser='', _admTicketsFilterStatus='';
 async function renderAdminTicketsSection(){
   const body=document.getElementById('adm-tickets-body');
   if(!body) return;
   body.innerHTML=`<div style="text-align:center;padding:30px"><div class="ring" style="margin:0 auto"></div></div>`;
-  let tickets=[];
   try{
     const snap=await getDocs(query(collection(db,'companies',companyId,'support_tickets'),orderBy('createdAt','desc')));
-    tickets=snap.docs.map(d=>({_id:d.id,...d.data()}));
+    _admTicketsAll=snap.docs.map(d=>({_id:d.id,...d.data()}));
   }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${esc(e.message)}</p>`; return; }
   Object.keys(_ADM_TICKET_CACHE).forEach(k=>delete _ADM_TICKET_CACHE[k]);
-  tickets.forEach(t=>_ADM_TICKET_CACHE[t._id]=t);
-  if(!tickets.length){ body.innerHTML=`<p style="color:var(--muted);font-size:12px;padding:10px 0">No support requests yet.</p>`; return; }
-  body.innerHTML=`<div class="table-wrap"><table>
+  _admTicketsAll.forEach(t=>_ADM_TICKET_CACHE[t._id]=t);
+  if(!_admTicketsAll.length){ body.innerHTML=`<p style="color:var(--muted);font-size:12px;padding:10px 0">No support requests yet.</p>`; return; }
+  const users=[...new Set(_admTicketsAll.map(t=>t.user).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  if(_admTicketsFilterUser && !users.includes(_admTicketsFilterUser)) _admTicketsFilterUser='';
+  body.innerHTML=`
+    <div class="toolbar" style="margin-bottom:10px;gap:8px">
+      <select class="form-input" id="adm-tickets-filter-user" style="width:auto;min-width:160px">
+        <option value="">All Users</option>
+        ${users.map(u=>`<option value="${esc(u)}" ${u===_admTicketsFilterUser?'selected':''}>${esc(u)}</option>`).join('')}
+      </select>
+      <select class="form-input" id="adm-tickets-filter-status" style="width:auto;min-width:140px">
+        <option value="">All Statuses</option>
+        ${_SUPPORT_STATUSES.map(s=>`<option value="${s}" ${s===_admTicketsFilterStatus?'selected':''}>${_SUPPORT_STATUS_LABEL[s]}</option>`).join('')}
+      </select>
+      <span class="count-badge" id="adm-tickets-count"></span>
+    </div>
+    <div class="table-wrap"><table>
     <thead><tr><th>Date/Time</th><th>User</th><th>Message</th><th style="width:130px">Status</th><th style="width:90px"></th></tr></thead>
-    <tbody>${tickets.map(t=>`<tr data-id="${esc(t._id)}" style="background:${_SUPPORT_ROW_BG[_SUPPORT_STATUSES.includes(t.status)?t.status:'open']}">
+    <tbody id="adm-tickets-tbody"></tbody>
+  </table></div>`;
+  document.getElementById('adm-tickets-filter-user').addEventListener('change',e=>{ _admTicketsFilterUser=e.target.value; _admTicketsFilterRows(); });
+  document.getElementById('adm-tickets-filter-status').addEventListener('change',e=>{ _admTicketsFilterStatus=e.target.value; _admTicketsFilterRows(); });
+  _admTicketsFilterRows();
+}
+function _admTicketsFilterRows(){
+  const tbody=document.getElementById('adm-tickets-tbody');
+  const countEl=document.getElementById('adm-tickets-count');
+  if(!tbody) return;
+  const tickets=_admTicketsAll.filter(t=>{
+    if(_admTicketsFilterUser && t.user!==_admTicketsFilterUser) return false;
+    if(_admTicketsFilterStatus && (t.status||'open')!==_admTicketsFilterStatus) return false;
+    return true;
+  });
+  if(countEl) countEl.textContent=`${tickets.length} of ${_admTicketsAll.length}`;
+  tbody.innerHTML=tickets.length ? tickets.map(t=>`<tr data-id="${esc(t._id)}" style="background:${_SUPPORT_ROW_BG[_SUPPORT_STATUSES.includes(t.status)?t.status:'open']}">
       <td style="white-space:nowrap;font-size:11px;color:var(--muted)">${fmtDateTime(t.createdAt)}</td>
       <td style="font-size:12px">${esc(t.user||'')}</td>
       <td style="font-size:12px;max-width:340px;white-space:pre-wrap">${esc(t.message||'')}${t.adminReply?`<div style="margin-top:4px;padding:4px 6px;background:#f0f7ff;border-radius:4px;font-size:11px"><strong>Reply:</strong> ${esc(t.adminReply)}</div>`:''}</td>
@@ -4970,19 +5000,21 @@ async function renderAdminTicketsSection(){
         ${_SUPPORT_STATUSES.map(s=>`<option value="${s}" ${t.status===s?'selected':''}>${_SUPPORT_STATUS_LABEL[s]}</option>`).join('')}
       </select></td>
       <td><button class="btn btn-ghost btn-sm adm-ticket-reply" data-id="${esc(t._id)}">💬 Reply</button></td>
-    </tr>`).join('')}</tbody>
-  </table></div>`;
-  body.querySelectorAll('.adm-ticket-status').forEach(sel=>sel.addEventListener('change',async()=>{
+    </tr>`).join('') : `<tr class="empty-row"><td colspan="5">No tickets match this filter</td></tr>`;
+  tbody.querySelectorAll('.adm-ticket-status').forEach(sel=>sel.addEventListener('change',async()=>{
     const id=sel.dataset.id, status=sel.value;
     sel.style.background=_SUPPORT_STATUS_COLOR[status]; sel.style.color=_SUPPORT_STATUS_TEXT[status];
     const rowEl=sel.closest('tr'); if(rowEl) rowEl.style.background=_SUPPORT_ROW_BG[status];
+    if(_ADM_TICKET_CACHE[id]) _ADM_TICKET_CACHE[id].status=status;
+    const cached=_admTicketsAll.find(t=>t._id===id); if(cached) cached.status=status;
     try{
       await updateDoc(doc(db,'companies',companyId,'support_tickets',id),{status,updatedAt:serverTimestamp()});
       logAudit('ticket_status_changed',{ticketId:id,status},true);
       toast('Status updated','success');
+      if(_admTicketsFilterStatus) _admTicketsFilterRows();
     }catch(e){ toast('Error: '+e.message,'error'); }
   }));
-  body.querySelectorAll('.adm-ticket-reply').forEach(btn=>btn.addEventListener('click',()=>openAdminReplyModal(btn.dataset.id)));
+  tbody.querySelectorAll('.adm-ticket-reply').forEach(btn=>btn.addEventListener('click',()=>openAdminReplyModal(btn.dataset.id)));
 }
 function openAdminReplyModal(ticketId){
   const t=_ADM_TICKET_CACHE[ticketId];
@@ -5029,15 +5061,15 @@ async function renderAdminLogsSection(){
   }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${esc(e.message)}</p>`; return; }
   _renderAdminLogsTable();
 }
+// Builds the toolbar (search box) + table shell ONCE per data load. Typing in the
+// search box must NOT rebuild this shell — recreating the <input> node on every
+// keystroke was what made the caret jump back to the start each time (the browser
+// has no way to preserve cursor position across a full innerHTML replace). Filtering
+// now only touches the <tbody> + count badge via _admLogsFilterRows(), same pattern
+// as the Part Stock picker's filterRows().
 function _renderAdminLogsTable(){
   const body=document.getElementById('adm-logs-body');
   if(!body) return;
-  const predicate=parseBoolQuery(_admLogsFilterQ);
-  const rows=_admLogsCache.filter(l=>{
-    if(!_admLogsFilterQ.trim()) return true;
-    const detailsStr=typeof l.details==='object'?JSON.stringify(l.details):String(l.details||'');
-    return predicate([l.user,l.action,detailsStr,l.success?'success':'failed'].map(v=>String(v||'')).join(' | ').toLowerCase());
-  });
   body.innerHTML=`
     <div class="toolbar" style="margin-bottom:8px">
       <div class="search-wrap">
@@ -5045,22 +5077,36 @@ function _renderAdminLogsTable(){
         <button type="button" class="search-clear" id="adm-logs-search-clear" title="Clear">✕</button>
       </div>
       <button class="btn btn-ghost" id="btn-adm-logs-refresh" style="white-space:nowrap">🔄 Refresh</button>
-      <span class="count-badge">${rows.length} of ${_admLogsCache.length} (most recent 500)</span>
+      <span class="count-badge" id="adm-logs-count"></span>
     </div>
     <div class="table-wrap" style="max-height:60vh"><table>
       <thead><tr><th>Timestamp</th><th>User</th><th>Action</th><th>Details</th><th style="width:60px">Result</th></tr></thead>
-      <tbody>${rows.map(l=>`<tr>
+      <tbody id="adm-logs-tbody"></tbody>
+    </table></div>`;
+  const searchInp=document.getElementById('adm-logs-search');
+  wireSearchClear('adm-logs-search','adm-logs-search-clear');
+  searchInp.addEventListener('input',debounce(()=>{ _admLogsFilterQ=searchInp.value; _admLogsFilterRows(); },200));
+  document.getElementById('btn-adm-logs-refresh').addEventListener('click',()=>renderAdminLogsSection());
+  _admLogsFilterRows();
+}
+function _admLogsFilterRows(){
+  const tbody=document.getElementById('adm-logs-tbody');
+  const countEl=document.getElementById('adm-logs-count');
+  if(!tbody) return;
+  const predicate=parseBoolQuery(_admLogsFilterQ);
+  const rows=_admLogsCache.filter(l=>{
+    if(!_admLogsFilterQ.trim()) return true;
+    const detailsStr=typeof l.details==='object'?JSON.stringify(l.details):String(l.details||'');
+    return predicate([l.user,l.action,detailsStr,l.success?'success':'failed'].map(v=>String(v||'')).join(' | ').toLowerCase());
+  });
+  tbody.innerHTML=rows.map(l=>`<tr>
         <td style="white-space:nowrap;font-size:11px;color:var(--muted)">${fmtDateTime(l.timestamp)}</td>
         <td style="font-size:12px">${esc(l.user||'')}</td>
         <td style="font-size:12px;font-family:monospace">${esc(l.action||'')}</td>
         <td style="font-size:11px;color:var(--muted);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(typeof l.details==='object'?JSON.stringify(l.details):String(l.details||''))}">${esc(typeof l.details==='object'?JSON.stringify(l.details):String(l.details||''))}</td>
         <td style="text-align:center">${l.success?'<span style="color:#1F8B4C">✓</span>':'<span style="color:#E53E3E">✗</span>'}</td>
-      </tr>`).join('')}</tbody>
-    </table></div>`;
-  const searchInp=document.getElementById('adm-logs-search');
-  wireSearchClear('adm-logs-search','adm-logs-search-clear');
-  searchInp.addEventListener('input',debounce(()=>{ _admLogsFilterQ=searchInp.value; _renderAdminLogsTable(); },200));
-  document.getElementById('btn-adm-logs-refresh').addEventListener('click',()=>renderAdminLogsSection());
+      </tr>`).join('');
+  if(countEl) countEl.textContent=`${rows.length} of ${_admLogsCache.length} (most recent 500)`;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
