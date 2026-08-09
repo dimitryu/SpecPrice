@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.51';
+const APP_VER   = '1.8.52';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2087,27 +2087,35 @@ COLUMN MAPPING (column names may vary between drawings):
 
 QTY RULE: If there are multiple quantity columns (e.g. for different product sizes), take the FIRST one only.
 
-QTY DISAMBIGUATION — VERY IMPORTANT: for cable/wire rows, the QTY value is very
-often a LENGTH with its unit stuck directly to the number, no space to a
-neighboring column, e.g. "230mm", "2500mm", "1.5M" — and in raw extracted PDF
-text (no table gridlines) this can visually blur into the tail of the
-DESCRIPTION or into a trailing REF/LOCATION column instead of reading as its
-own QTY cell. Do NOT fold a value like this into the description text or
-drop it — it IS the qty column, keep the unit attached to it exactly as
-written (e.g. qty="230mm"), and it goes in "qty", never appended to
-"description". A row is still missing this value only if the drawing
-genuinely never states a length/quantity for it — never substitute "1" as a
-guess. Example: a row reading "...CABLE 4COND 28AWG BLK SHLD 230mm CABLE" —
-where "CABLE" is a REF/location tag, not part of the qty — has
-description="CABLE 4COND 28AWG BLK SHLD", qty="230mm" (unit split out to
-"unit":"mm" per the unit field rule above).
+QTY DISAMBIGUATION: for cable/wire rows, the QTY value is very often a LENGTH
+with its unit stuck directly to the number, e.g. "230mm", "2500mm", "1.5M" —
+in raw extracted PDF text this can visually blur into the tail of the
+DESCRIPTION or a trailing REF/LOCATION column instead of reading as its own
+QTY cell. Keep it in "qty" (e.g. qty="230mm"), never fold it into
+"description", and never default qty to "1" just because it has a unit
+attached. Example: "...CABLE 4COND 28AWG BLK SHLD 230mm CABLE" (trailing
+"CABLE" is a REF tag) → description="CABLE 4COND 28AWG BLK SHLD", qty="230mm".
+
+CRIMP/INSERTION TOOL ROWS — MANDATORY, CHECK EVERY ROW: this is a required
+step, not optional — after extracting the BOM, go back through EVERY row that
+has a "pin_count" value (any connector with pins/positions/contacts) and, for
+EACH one, add ONE EXTRA ROW right after it for the crimping/insertion tool
+that connector needs, using your knowledge of that connector manufacturer's
+tooling. Do this for every qualifying connector row, not just the first one
+you notice. Only add a tool row when you're reasonably confident of the exact
+tool part number (never invent a plausible-looking one — if genuinely unsure
+for a specific connector, skip just that one). For the tool row: "part_number"
+= the tool's manufacturer part number, "description" = a short description
+containing the word "TOOL" (e.g. "CRIMP TOOL for <connector series>"),
+"qty"="1", "unit"="pc", "price" = the tool's approximate USD list price
+(plain number, no currency symbol), "pin_count"="", "item"="".
 
 RULES:
 1. Extract EVERY data row — include all items, do not truncate
 2. Skip header rows, total/summary rows, and blank rows
 3. If a column is missing, leave it as empty string ""
 4. Keep descriptions exactly as written, but see QTY DISAMBIGUATION above — a trailing length+unit value belongs in "qty", not in "description"
-5. If a row has a "pin_count" value (a connector whose pins need to be crimped/inserted), ALSO add ONE EXTRA ROW to the output array — right after that connector's row — for the required crimping/insertion tool, based on your knowledge of that connector manufacturer's tooling. Only add it if you're reasonably confident of the exact tool part number (never invent a plausible-looking one — if unsure, skip the extra row entirely). For that extra row: "part_number" = the tool's manufacturer part number, "description" = a short description that includes the word "TOOL" (e.g. "CRIMP TOOL for <connector series>"), "qty"="1", "unit"="pc", "price" = the tool's approximate USD list price (plain number, no currency symbol), "pin_count"="" (the tool itself isn't a connector), and leave "item" as empty string "".
+5. Apply CRIMP/INSERTION TOOL ROWS above to every connector row with a pin_count — this step is easy to skip, double-check before returning your answer
 
 Return ONLY a valid JSON array, no explanations.
 Example: [{"item":"1","atlantium_pn":"EL0015700","part_number":"VN01 036 0005 1 C","drawing_number":"601-1201-021","drawing_name":"Main Assembly","description":"MALE CRIMPING CONTACT PIN (2.5), UL","qty":"3","unit":"pc","manufacturer":"AMPHENOL","pin_count":"4","price":""},{"item":"7","atlantium_pn":"","part_number":"2725-2828-BL-1000-T","drawing_number":"","drawing_name":"","description":"CABLE 4COND (1 Pair + 2) 28AWG BLK SHLD","qty":"230","unit":"mm","manufacturer":"CNC Tech","pin_count":"","price":""},{"item":"","atlantium_pn":"","part_number":"CT-2000","drawing_number":"601-1201-021","drawing_name":"Main Assembly","description":"CRIMP TOOL for VN01 series","qty":"1","unit":"pc","manufacturer":"AMPHENOL","pin_count":"","price":"85"}]
@@ -2143,21 +2151,33 @@ For each row extract:
 - "pin_count": for connector parts only — the number of pins/positions/contacts, read from a POS/PINS/CONTACTS/WAY column if the drawing has one, or inferred from a count embedded in the part number/description of a known connector series. Empty string "" if the row isn't a connector or the count isn't known — do not guess.
 - "price": normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). The ONLY exception is a synthesized crimp-tool row — see rule 5 below.
 
-QTY DISAMBIGUATION — VERY IMPORTANT: for cable/wire rows, the QTY cell is very
-often a LENGTH with its unit stuck directly to the number, e.g. "230mm",
-"2500mm", "1.5M" — sitting in its own column, usually right before a trailing
-REF/LOCATION column (e.g. the word "CABLE"). Read it as the QTY value, not as
-part of the description — never fold it into "description", and never leave
-"qty" empty or default it to "1" just because the number has a unit attached;
-keep the unit exactly as written (e.g. qty="230mm", which the app splits into
-qty="230"/unit="mm" downstream).
+QTY DISAMBIGUATION: for cable/wire rows, the QTY cell is very often a LENGTH
+with its unit stuck directly to the number, e.g. "230mm", "2500mm", "1.5M" —
+usually its own column, right before a trailing REF/LOCATION column (e.g. the
+word "CABLE"). Read it as QTY, not description — never fold it into
+"description", and never default qty to "1" just because it has a unit
+attached; keep the unit as written (e.g. qty="230mm").
+
+CRIMP/INSERTION TOOL ROWS — MANDATORY, CHECK EVERY ROW: this is a required
+step, not optional — after extracting the BOM, go back through EVERY row that
+has a "pin_count" value (any connector with pins/positions/contacts) and, for
+EACH one, add ONE EXTRA ROW right after it for the crimping/insertion tool
+that connector needs, using your knowledge of that connector manufacturer's
+tooling. Do this for every qualifying connector row, not just the first one
+you notice. Only add a tool row when you're reasonably confident of the exact
+tool part number (never invent a plausible-looking one — if genuinely unsure
+for a specific connector, skip just that one). For the tool row: "part_number"
+= the tool's manufacturer part number, "description" = a short description
+containing the word "TOOL" (e.g. "CRIMP TOOL for <connector series>"),
+"qty"="1", "unit"="pc", "price" = the tool's approximate USD list price
+(plain number, no currency symbol), "pin_count"="", "item"="".
 
 RULES:
 1. Extract EVERY data row — do NOT stop early or truncate the list
 2. Skip header rows (ITEM, PART NUMBER, DESCRIPTION, QTY, UNIT) and blank rows
 3. Read part numbers character by character — they are precise: do NOT guess or correct them
 4. If a column is missing or empty for a row, use empty string "" — but see QTY DISAMBIGUATION above before deciding QTY is actually missing
-5. If a row has a "pin_count" value (a connector whose pins need to be crimped/inserted), ALSO add ONE EXTRA ROW to the output array — right after that connector's row — for the required crimping/insertion tool, based on your knowledge of that connector manufacturer's tooling. Only add it if you're reasonably confident of the exact tool part number (never invent a plausible-looking one — if unsure, skip the extra row entirely). For that extra row: "part_number" = the tool's manufacturer part number, "description" = a short description that includes the word "TOOL" (e.g. "CRIMP TOOL for <connector series>"), "qty"="1", "unit"="pc", "price" = the tool's approximate USD list price (plain number, no currency symbol), "pin_count"="" (the tool itself isn't a connector), and leave "item" as empty string "".
+5. Apply CRIMP/INSERTION TOOL ROWS above to every connector row with a pin_count — this step is easy to skip, double-check before returning your answer
 
 Return ONLY a valid JSON array, no explanation.
 Example: [{"item":"1","part_number":"M27500-20SC2S23","drawing_number":"","drawing_name":"","description":"CABLE 20AWG TWISTED PAIR","qty":"10000","unit":"mm","manufacturer":"","atlantium_pn":"","pin_count":"","price":""},{"item":"","part_number":"CT-2000","drawing_number":"","drawing_name":"","description":"CRIMP TOOL for VN01 series","qty":"1","unit":"pc","manufacturer":"AMPHENOL","atlantium_pn":"","pin_count":"","price":"85"}]
