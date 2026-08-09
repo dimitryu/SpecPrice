@@ -385,6 +385,21 @@ async function logAudit(action, details, success=true){
     });
   }catch(e){ console.warn('[Audit] log failed:', e.message); }
 }
+// Same trail as logAudit(), but for automated operations the app runs on its own
+// behalf (FindChips/Priority price searches, AI drawing/BOM price analysis) rather
+// than a direct manual user action — these are attributed to "SYSTEM" in the User
+// column so Admin > Logs can tell "I clicked X" apart from "the app computed Y".
+// Still records which human's session triggered it (viaUser) for traceability.
+async function logSystemAudit(action, details, success=true){
+  if(!companyId) return;
+  try{
+    await addDoc(collection(db,'companies',companyId,'audit_logs'),{
+      user: 'SYSTEM', userId: 'system', viaUser: currentUserEmail||'',
+      action, details: details==null?'':details, success: !!success,
+      timestamp: serverTimestamp()
+    });
+  }catch(e){ console.warn('[Audit] system log failed:', e.message); }
+}
 
 let sortCol     = 'part_number';
 let sortAsc     = true;
@@ -408,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.49';
+const APP_VER   = '1.8.50';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2170,15 +2185,25 @@ async function _fetchWithRetry(url, opts){
 }
 
 async function aiExtractBOM(text, isImage, imgData, filename){
-  if(geminiKey){
-    try { return await _geminiBOM(text, isImage, imgData, filename); }
-    catch(e){
-      if(!anthKey) throw e;
-      console.warn('Gemini failed, using Anthropic:', e.message);
+  try{
+    let rows, provider;
+    if(geminiKey){
+      try { rows=await _geminiBOM(text, isImage, imgData, filename); provider='gemini'; }
+      catch(e){
+        if(!anthKey) throw e;
+        console.warn('Gemini failed, using Anthropic:', e.message);
+      }
     }
+    if(rows===undefined){
+      if(!anthKey) throw new Error('No AI API key configured. Add a Gemini or Anthropic key in Settings.');
+      rows=await _anthropicBOM(text, isImage, imgData, filename); provider='anthropic';
+    }
+    logSystemAudit('drawing_bom_search',{filename,provider,mode:isImage?'vision':'text',rowsFound:rows.length},true);
+    return rows;
+  }catch(e){
+    logSystemAudit('drawing_bom_search',{filename,error:e.message},false);
+    throw e;
   }
-  if(anthKey){ return await _anthropicBOM(text, isImage, imgData, filename); }
-  throw new Error('No AI API key configured. Add a Gemini or Anthropic key in Settings.');
 }
 
 async function _anthropicBOM(text, isImage, imgData, filename){
@@ -2295,19 +2320,103 @@ async function _geminiCableProcess(text, isImage, imgData, rowsList){
 }
 async function aiAnalyzeCableProcess(text, isImage, imgData, rowsList){
   if(!rowsList) return null;
+  let proc, provider;
   if(geminiKey){
-    try { return await _geminiCableProcess(text, isImage, imgData, rowsList); }
+    try { proc=await _geminiCableProcess(text, isImage, imgData, rowsList); provider='gemini'; }
     catch(e){
-      if(!anthKey) return null;
+      if(!anthKey){ logSystemAudit('drawing_price_calculation',{error:e.message},false); return null; }
       console.warn('Gemini cable-process failed, using Anthropic:', e.message);
     }
   }
-  if(anthKey){
-    try { return await _anthropicCableProcess(text, isImage, imgData, rowsList); }
-    catch(e){ console.warn('Cable-process analysis failed:', e.message); return null; }
+  if(proc===undefined && anthKey){
+    try { proc=await _anthropicCableProcess(text, isImage, imgData, rowsList); provider='anthropic'; }
+    catch(e){ console.warn('Cable-process analysis failed:', e.message); logSystemAudit('drawing_price_calculation',{error:e.message},false); return null; }
   }
-  return null;
+  if(proc===undefined) return null;
+  logSystemAudit('drawing_price_calculation',{provider,stepsFound:proc?.steps?.length||0},true);
+  return proc;
 }
+
+// ── Sales Desk only: NOTES / MANUFACTURING INSTRUCTIONS extraction ───────────
+// Given the same drawing content already used for BOM extraction, ask the AI
+// whether the drawing has a separate NOTES / GENERAL NOTES / MANUFACTURING
+// INSTRUCTIONS block (distinct from the BOM/parts-list table) and, if so,
+// return each note/instruction line as its own array entry. Shown below the
+// BOM table in Sales Desk (see _sdRenderNotesPanel) — lines that reference a
+// document or standard (spec/dwg/MIL-/IPC/ASTM/etc., see _NOTE_DOC_STD_RE)
+// are highlighted red there since those often carry hidden cost/compliance
+// requirements the quote should account for.
+function _notesPrompt(){
+  return `Look at this engineering/manufacturing drawing. Find any NOTES, GENERAL NOTES, or MANUFACTURING INSTRUCTIONS text or table on it — this is separate from the BOM / parts-list table.
+
+Return each distinct note or instruction as its own entry, exactly as written on the drawing (keep its original numbering/lettering if present, e.g. "1. ...", "A. ..."). If the drawing has no such notes/instructions section, return an empty array.
+
+Return ONLY valid JSON, no explanation, in exactly this shape: {"notes":["1. ALL DIMENSIONS IN MM UNLESS OTHERWISE SPECIFIED","2. CRIMP PER IPC/WHMA-A-620","3. MARK PART NUMBER PER MIL-STD-130"]}
+If none found: {"notes":[]}`;
+}
+function _parseNotesJson(raw){
+  const m=String(raw||'').match(/\{[\s\S]*\}/);
+  if(!m) return [];
+  try{
+    const obj=JSON.parse(m[0]);
+    if(!obj||!Array.isArray(obj.notes)) return [];
+    return obj.notes.map(n=>String(n||'').trim()).filter(Boolean);
+  }catch{ return []; }
+}
+async function _anthropicNotes(text, isImage, imgData){
+  const prompt=_notesPrompt();
+  const messages = isImage ? [{role:'user',content:[
+    {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
+    {type:'text',text:prompt}
+  ]}] : [{role:'user', content: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000)}];
+  const resp = await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
+             'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
+    body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:1536, messages})
+  });
+  if(!resp.ok){let m=`Anthropic error ${resp.status}`;
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
+  const data=await resp.json();
+  return _parseNotesJson(data.content[0].text.trim());
+}
+async function _geminiNotes(text, isImage, imgData){
+  const prompt=_notesPrompt();
+  const parts = isImage
+    ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:prompt}]
+    : [{text: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000)}];
+  const resp = await _fetchWithRetry(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+    {method:'POST',headers:{'content-type':'application/json'},
+     body:JSON.stringify({contents:[{parts}],generationConfig:{thinkingConfig:{thinkingBudget:0}}})}
+  );
+  if(!resp.ok){let m=`Gemini error ${resp.status}`;
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
+  const data=await resp.json();
+  const raw=(data.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
+  return _parseNotesJson(raw.trim());
+}
+async function aiExtractDrawingNotes(text, isImage, imgData){
+  let notes, provider;
+  if(geminiKey){
+    try { notes=await _geminiNotes(text, isImage, imgData); provider='gemini'; }
+    catch(e){
+      if(!anthKey){ logSystemAudit('drawing_notes_search',{error:e.message},false); return []; }
+      console.warn('Gemini notes extraction failed, using Anthropic:', e.message);
+    }
+  }
+  if(notes===undefined && anthKey){
+    try { notes=await _anthropicNotes(text, isImage, imgData); provider='anthropic'; }
+    catch(e){ console.warn('Notes extraction failed:', e.message); logSystemAudit('drawing_notes_search',{error:e.message},false); return []; }
+  }
+  if(notes===undefined) return [];
+  logSystemAudit('drawing_notes_search',{provider,notesFound:notes.length},true);
+  return notes;
+}
+// Broad match for "this note references a document or standard" — spec/dwg/
+// procedure keywords plus common standard-body prefixes (MIL-, IPC, ASTM,
+// ANSI, ISO, NASM, AS9100-style, SAE, J-STD, QQ-, MS-part-number style).
+const _NOTE_DOC_STD_RE=/\b(spec(?:ification)?s?|standards?|std\.?|dwg\.?|drawing|document|doc\.?|procedures?|proc\.?|per\s+(?:mil|astm|ipc|ansi|iso|as|ms|nas|sae|j-?std|qq)|mil-[a-z]?-?\d|ipc[\/-]|astm|ansi|iso\s*\d|nasm\d|as\d{3,4}|j-?std|qq-|ms\d{4,5}|sae\s*[a-z]*\d)\b/i;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ── FindChips price checker ───────────────────────────────────────────────────
@@ -2660,6 +2769,7 @@ async function runFCCheckModal(items, mode){
   }
   const ringEl=document.querySelector('#fc-modal-body .ring');
   if(ringEl){ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';ringEl.textContent='✓';}
+  logSystemAudit('findchips_price_search',{screen:mode==='parts'?'Database':'Sales Desk',checked:done,found,stopped},true);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3859,6 +3969,38 @@ let _sdToolsTotalOverride=null;
 // the BOM preview and the rows land in sdItems.
 let _sdLaborBreakdowns=[];
 let _sdPendingLaborByKey={};
+// Notes / Manufacturing Instructions extracted per analyzed drawing (see
+// handleSDFiles + aiExtractDrawingNotes) — {drawingName, notes:[string,...]}.
+// Same "active while at least one row from that drawing is still present"
+// lifecycle as _sdLaborBreakdowns (see _sdActiveNotes), and cleared together
+// with it on Clear All.
+let _sdDrawingNotes=[];
+// Only shows notes for drawings that still have at least one row in sdItems —
+// deleting every row of a drawing drops its notes panel too, same rule as
+// the Labor Breakdown modal's activeBreakdowns.
+function _sdActiveNotes(){
+  return _sdDrawingNotes.filter(n=>sdItems.some(r=>String(r.drawing_number||'')===n.drawingName));
+}
+// Renders the "Notes / Manufacturing Instructions" panel below the BOM table
+// (#sd-notes-panel) — one section per drawing that still has active rows.
+// Any line referencing a document or standard (see _NOTE_DOC_STD_RE) is
+// highlighted red, since those often carry compliance/cost implications the
+// quote should account for (e.g. "CRIMP PER IPC/WHMA-A-620").
+function _sdRenderNotesPanel(){
+  const panel=document.getElementById('sd-notes-panel');
+  if(!panel) return;
+  const active=_sdActiveNotes();
+  if(!active.length){ panel.style.display='none'; panel.innerHTML=''; return; }
+  panel.style.display='block';
+  panel.innerHTML=`<div style="font-size:12px;font-weight:700;color:var(--blue-dark);margin-bottom:6px">📋 Notes / Manufacturing Instructions</div>
+    ${active.map(d=>`
+      <div style="margin-bottom:8px">
+        ${active.length>1?`<div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:3px">${esc(d.drawingName||'')}</div>`:''}
+        <ul style="margin:0;padding-inline-start:18px">
+          ${d.notes.map(n=>`<li style="font-size:12px;line-height:1.5;${_NOTE_DOC_STD_RE.test(n)?'color:#E53E3E;font-weight:600':'color:var(--text)'}">${esc(n)}</li>`).join('')}
+        </ul>
+      </div>`).join('')}`;
+}
 
 // Sums generalMinutes from every analyzed drawing that still has at least one
 // row present in sdItems — once every row belonging to a drawing is deleted
@@ -3993,6 +4135,7 @@ async function renderSalesDesk(){
     const fEl=document.getElementById('sd-flt-count');
     if(fEl) fEl.textContent = _sdFilterQ.trim() ? `${visibleIdx.length}/${sdItems.length} parts` : `${sdItems.length} parts`;
     _sdUpdateSummaryUI();
+    _sdRenderNotesPanel();
 
     document.querySelectorAll('.sd-qty').forEach(inp=>inp.addEventListener('change',()=>{
       const i=+inp.dataset.i, qty=parseFloat(inp.value)||1;
@@ -4063,6 +4206,7 @@ async function renderSalesDesk(){
             <tbody id="sd-tbody"></tbody>
           </table>
         </div>
+        <div id="sd-notes-panel" style="display:none;padding:11px;border-top:1px solid var(--border)"></div>
       </div>
 
       <div style="display:flex;flex-direction:column;gap:12px">
@@ -4170,7 +4314,7 @@ async function renderSalesDesk(){
 
   document.getElementById('btn-sd-clear').addEventListener('click',()=>{
     sdItems=[];_sdFilterQ='';_sdLaborMinutesOverride=null;_sdToolsTotalOverride=null;
-    _sdLaborBreakdowns=[];_sdPendingLaborByKey={};
+    _sdLaborBreakdowns=[];_sdPendingLaborByKey={};_sdDrawingNotes=[];
     renderSD();
   });
   document.getElementById('btn-sd-newrow').addEventListener('click',()=>{
@@ -4538,6 +4682,20 @@ async function handleSDFiles(files){
             });
           }
         }catch(e){ console.warn('[SD] cable-process analysis failed:', e.message); }
+      }
+
+      // Sales-Desk-only: pull out any NOTES / MANUFACTURING INSTRUCTIONS text
+      // the drawing carries (separate from the BOM table) — shown below the
+      // BOM table (see _sdRenderNotesPanel). Runs even if no BOM rows were
+      // found, since a drawing can still have notes worth surfacing.
+      if(anthKey||geminiKey){
+        try{
+          setM('Checking for Notes / Manufacturing Instructions…',97);
+          const notes=await aiExtractDrawingNotes(_procIsImage?'':_pdfText, _procIsImage, _procImgData);
+          if(notes.length){
+            _sdDrawingNotes.push({drawingName: extractedRows[0]?.drawing_number || effectiveDwgName, notes});
+          }
+        }catch(e){ console.warn('[SD] notes extraction failed:', e.message); }
       }
 
       if(!extractedRows.length){
@@ -5140,8 +5298,11 @@ function renderSettingsPage(){
       </div>
       <div class="form-field" style="margin-top:14px">
         <label>Manufacturing Routings</label>
-        <button class="btn btn-ghost" id="btn-open-routings" type="button">⚙️ Manage Routings</button>
-        <p style="font-size:11px;color:var(--muted);margin-top:5px">Operations used to auto-calculate Labor Time on Sales Desk BOM rows.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost" id="btn-open-routings" type="button">⚙️ Manage Routings</button>
+          <button class="btn btn-red" id="btn-delete-all-routings" type="button">🗑 Delete All Routings</button>
+        </div>
+        <p style="font-size:11px;color:var(--muted);margin-top:5px">Operations used to auto-calculate Labor Time on Sales Desk BOM rows. "Delete All" permanently removes every routing — this cannot be undone.</p>
       </div>
       <div style="border-top:1px solid var(--border);margin:20px 0 16px"></div>
       <button class="btn btn-green" id="btn-save-settings">💾 Save Settings</button>
@@ -5166,6 +5327,20 @@ function renderSettingsPage(){
     </div>`);
 
   document.getElementById('btn-open-routings').addEventListener('click',()=>openRoutingsModal());
+  document.getElementById('btn-delete-all-routings').addEventListener('click',async()=>{
+    await loadRoutings();
+    if(!_routings.length){ toast('No routings to delete','info'); return; }
+    if(!confirm(`Delete all ${_routings.length} manufacturing routings? This cannot be undone.`)) return;
+    const btn=document.getElementById('btn-delete-all-routings');
+    btn.disabled=true; btn.textContent='Deleting…';
+    try{
+      const count=_routings.length;
+      await saveRoutingsAll([]);
+      toast(`Deleted ${count} routing(s)`,'success');
+      logAudit('routings_deleted_all',{count},true);
+    }catch(e){ toast('Error: '+e.message,'error'); logAudit('routings_deleted_all',{error:e.message},false); }
+    btn.disabled=false; btn.textContent='🗑 Delete All Routings';
+  });
 
   document.getElementById('btn-save-settings').addEventListener('click', async()=>{
     anthKey=document.getElementById('inp-anth-key').value.trim();
