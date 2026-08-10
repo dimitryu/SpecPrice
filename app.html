@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.53';
+const APP_VER   = '1.8.54';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -4772,6 +4772,12 @@ function renderAdminPage(){
     </div>
 
     <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🤖 AI Prompts</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">The exact instructions sent to the AI for each kind of analysis. Read-only — shown so you can see what the AI is being asked to do.</p>
+      <div id="adm-prompts-body"></div>
+    </div>
+
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🔧 Maintenance</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">One-off data-repair actions. Both are irreversible — read the confirmation prompt before continuing.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -4793,6 +4799,7 @@ function renderAdminPage(){
 
   renderAdminTicketsSection();
   renderAdminLogsSection();
+  renderAdminPromptsSection();
 }
 
 const _ADM_TICKET_CACHE={}; // ticketId -> ticket data (ALL fetched tickets, unfiltered) — used by openAdminReplyModal
@@ -4985,12 +4992,6 @@ function renderSettingsPage(){
       <div id="stg-logo-body"></div>
     </div>
 
-    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
-      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🤖 AI Prompts</h3>
-      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">The exact instructions sent to the AI for each kind of analysis. Read-only — shown so you can see what the AI is being asked to do.</p>
-      <div id="stg-prompts-body"></div>
-    </div>
-
     <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Users</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Manage user accounts and roles.</p>
@@ -5015,12 +5016,11 @@ function renderSettingsPage(){
   });
 
   renderSettingsLogoSection();
-  renderSettingsPromptsSection();
   renderSettingsUsersSection();
   renderSettingsRolesSection();
 }
 
-// ── AI Prompts viewer ────────────────────────────────────────────────────────
+// ── AI Prompts viewer (Admin page) ───────────────────────────────────────────
 // Read-only listing of every prompt the app sends to the AI, grouped by what
 // it's for. Built from the SAME constants/functions the real calls use (never
 // a hand-copied duplicate), so this can't drift out of date when a prompt is
@@ -5045,8 +5045,8 @@ function _aiPromptCatalog(){
      text:_notesPrompt()},
   ];
 }
-function renderSettingsPromptsSection(){
-  const body=document.getElementById('stg-prompts-body');
+function renderAdminPromptsSection(){
+  const body=document.getElementById('adm-prompts-body');
   if(!body) return;
   const items=_aiPromptCatalog();
   body.innerHTML=items.map(p=>`
