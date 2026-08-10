@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.52';
+const APP_VER   = '1.8.53';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2058,6 +2058,25 @@ function fileToB64(file){
 
 // ── AI BOM extraction: Anthropic → Gemini fallback ────────────────────────────
 // Text prompt — same as Windows app ai_extractor.py
+// Shared by BOTH BOM prompts (text + vision) — kept as its own constant so the
+// Settings > AI Prompts panel can show it as a standalone topic, and so the
+// rule can only ever be edited in one place (the two prompts must never drift
+// apart on how tools are detected/priced).
+const _BOM_TOOL_RULE_SECTION =
+  `CRIMP/INSERTION TOOL ROWS — MANDATORY, CHECK EVERY ROW: this is a required
+step, not optional — after extracting the BOM, go back through EVERY row that
+has a "pin_count" value (any connector with pins/positions/contacts) and, for
+EACH one, add ONE EXTRA ROW right after it for the crimping/insertion tool
+that connector needs, using your knowledge of that connector manufacturer's
+tooling. Do this for every qualifying connector row, not just the first one
+you notice. Only add a tool row when you're reasonably confident of the exact
+tool part number (never invent a plausible-looking one — if genuinely unsure
+for a specific connector, skip just that one). For the tool row: "part_number"
+= the tool's manufacturer part number, "description" = a short description
+containing the word "TOOL" (e.g. "CRIMP TOOL for <connector series>"),
+"qty"="1", "unit"="pc", "price" = the tool's approximate USD list price
+(plain number, no currency symbol), "pin_count"="", "item"="".`;
+
 const _BOM_TEXT_PROMPT = (filename) =>
   `You are an expert at extracting Bill of Materials (BOM) tables from engineering drawings.
 
@@ -2096,19 +2115,7 @@ QTY cell. Keep it in "qty" (e.g. qty="230mm"), never fold it into
 attached. Example: "...CABLE 4COND 28AWG BLK SHLD 230mm CABLE" (trailing
 "CABLE" is a REF tag) → description="CABLE 4COND 28AWG BLK SHLD", qty="230mm".
 
-CRIMP/INSERTION TOOL ROWS — MANDATORY, CHECK EVERY ROW: this is a required
-step, not optional — after extracting the BOM, go back through EVERY row that
-has a "pin_count" value (any connector with pins/positions/contacts) and, for
-EACH one, add ONE EXTRA ROW right after it for the crimping/insertion tool
-that connector needs, using your knowledge of that connector manufacturer's
-tooling. Do this for every qualifying connector row, not just the first one
-you notice. Only add a tool row when you're reasonably confident of the exact
-tool part number (never invent a plausible-looking one — if genuinely unsure
-for a specific connector, skip just that one). For the tool row: "part_number"
-= the tool's manufacturer part number, "description" = a short description
-containing the word "TOOL" (e.g. "CRIMP TOOL for <connector series>"),
-"qty"="1", "unit"="pc", "price" = the tool's approximate USD list price
-(plain number, no currency symbol), "pin_count"="", "item"="".
+${_BOM_TOOL_RULE_SECTION}
 
 RULES:
 1. Extract EVERY data row — include all items, do not truncate
@@ -2158,19 +2165,7 @@ word "CABLE"). Read it as QTY, not description — never fold it into
 "description", and never default qty to "1" just because it has a unit
 attached; keep the unit as written (e.g. qty="230mm").
 
-CRIMP/INSERTION TOOL ROWS — MANDATORY, CHECK EVERY ROW: this is a required
-step, not optional — after extracting the BOM, go back through EVERY row that
-has a "pin_count" value (any connector with pins/positions/contacts) and, for
-EACH one, add ONE EXTRA ROW right after it for the crimping/insertion tool
-that connector needs, using your knowledge of that connector manufacturer's
-tooling. Do this for every qualifying connector row, not just the first one
-you notice. Only add a tool row when you're reasonably confident of the exact
-tool part number (never invent a plausible-looking one — if genuinely unsure
-for a specific connector, skip just that one). For the tool row: "part_number"
-= the tool's manufacturer part number, "description" = a short description
-containing the word "TOOL" (e.g. "CRIMP TOOL for <connector series>"),
-"qty"="1", "unit"="pc", "price" = the tool's approximate USD list price
-(plain number, no currency symbol), "pin_count"="", "item"="".
+${_BOM_TOOL_RULE_SECTION}
 
 RULES:
 1. Extract EVERY data row — do NOT stop early or truncate the list
@@ -4749,7 +4744,22 @@ async function deleteCustomer(id,name){
 function renderAdminPage(){
   setActions('');
   setContent(`
-    <div class="settings-panel" style="padding:20px 22px;max-width:900px">
+    <div class="settings-panel" style="padding:20px 22px;max-width:520px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🔑 AI API Keys</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Used for extracting BOMs from PDF/image drawings and for the Sales Desk process/notes analysis.</p>
+      <div class="form-field">
+        <label>Anthropic API Key</label>
+        <input class="form-input" id="adm-anth-key" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
+      </div>
+      <div class="form-field" style="margin-top:12px">
+        <label>Gemini API Key</label>
+        <input class="form-input" id="adm-gem-key" type="password" placeholder="AIza…" value="${esc(geminiKey)}">
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-top:10px">Keys are stored in your browser (localStorage) and never sent to our servers.</p>
+      <button class="btn btn-green" id="btn-adm-save-keys" style="margin-top:14px">💾 Save API Keys</button>
+    </div>
+
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">${_SUPPORT_ICON_SVG} Support Tickets</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Requests and problem reports submitted via the Support button. Reply and set a status — the user sees your reply the next time they open Support.</p>
       <div id="adm-tickets-body"></div>
@@ -4759,7 +4769,28 @@ function renderAdminPage(){
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">📜 System Logs</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Login/logout, screen opens, and key actions across every user — most recent 500 entries.</p>
       <div id="adm-logs-body"></div>
+    </div>
+
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🔧 Maintenance</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">One-off data-repair actions. Both are irreversible — read the confirmation prompt before continuing.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-red btn-sm" id="btn-normalize-db">🔧 Normalize Database (QTY=1, Units)</button>
+        <button class="btn btn-red btn-sm" id="btn-clean-legacy">🗑 Clean Legacy Data</button>
+      </div>
     </div>`);
+
+  document.getElementById('btn-adm-save-keys').addEventListener('click',()=>{
+    anthKey=document.getElementById('adm-anth-key').value.trim();
+    geminiKey=document.getElementById('adm-gem-key').value.trim();
+    localStorage.setItem('anth_key',anthKey);
+    localStorage.setItem('gem_key',geminiKey);
+    toast('API keys saved','success');
+    logAudit('ai_keys_updated',{anthropic:!!anthKey,gemini:!!geminiKey},true);
+  });
+  document.getElementById('btn-clean-legacy').addEventListener('click',()=>cleanLegacyData());
+  document.getElementById('btn-normalize-db').addEventListener('click',()=>normalizeDatabaseData());
+
   renderAdminTicketsSection();
   renderAdminLogsSection();
 }
@@ -4936,39 +4967,34 @@ function renderSettingsPage(){
   setActions('');
   setContent(`
     <div class="settings-panel" style="padding:20px 22px;max-width:520px">
-      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">AI API Keys</h3>
-      <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Used for extracting BOMs from PDF/image drawings.</p>
-      <div class="form-field">
-        <label>Anthropic API Key</label>
-        <input class="form-input" id="inp-anth-key" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
-      </div>
-      <div class="form-field" style="margin-top:12px">
-        <label>Gemini API Key</label>
-        <input class="form-input" id="inp-gem-key" type="password" placeholder="AIza…" value="${esc(geminiKey)}">
-      </div>
-      <p style="font-size:11px;color:var(--muted);margin-top:10px">Keys are stored in your browser (localStorage) and never sent to our servers.</p>
-      <div style="border-top:1px solid var(--border);margin:20px 0 16px"></div>
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Sales Desk</h3>
       <div class="form-field" style="margin-top:10px">
         <label>Labor Rate ($ / minute)</label>
         <input class="form-input" id="inp-labor-rate" type="number" min="0" step="any"
           placeholder="0.5" value="${esc(_sdLaborRateMin)}">
-        <p style="font-size:11px;color:var(--muted);margin-top:5px">Used to calculate Labor Cost in Sales Desk (Labor Total minutes × this rate). Shared across the company.</p>
+        <p style="font-size:11px;color:var(--muted);margin-top:5px">Used to calculate Labor Cost in Sales Desk (Labor Total minutes × this rate).</p>
       </div>
       <div style="border-top:1px solid var(--border);margin:20px 0 16px"></div>
       <button class="btn btn-green" id="btn-save-settings">💾 Save Settings</button>
+      <p style="font-size:11px;color:var(--muted);margin-top:10px">AI API keys have moved to the 🛡️ Admin screen.</p>
+    </div>
+
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:520px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Logo</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Shown on the Home screen and in the top bar.</p>
+      <div id="stg-logo-body"></div>
+    </div>
+
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🤖 AI Prompts</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">The exact instructions sent to the AI for each kind of analysis. Read-only — shown so you can see what the AI is being asked to do.</p>
+      <div id="stg-prompts-body"></div>
     </div>
 
     <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Users</h3>
-      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Manage user accounts, companies, and roles.</p>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Manage user accounts and roles.</p>
       <div id="stg-users-body"></div>
-    </div>
-
-    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
-      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Companies</h3>
-      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Manage companies and per-company branding (logo).</p>
-      <div id="stg-companies-body"></div>
     </div>
 
     <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
@@ -4978,11 +5004,7 @@ function renderSettingsPage(){
     </div>`);
 
   document.getElementById('btn-save-settings').addEventListener('click', async()=>{
-    anthKey=document.getElementById('inp-anth-key').value.trim();
-    geminiKey=document.getElementById('inp-gem-key').value.trim();
     _sdLaborRateMin=parseFloat(document.getElementById('inp-labor-rate').value)||0;
-    localStorage.setItem('anth_key',anthKey);
-    localStorage.setItem('gem_key',geminiKey);
     const btn=document.getElementById('btn-save-settings');
     btn.disabled=true; btn.textContent='Saving…';
     try{
@@ -4992,15 +5014,123 @@ function renderSettingsPage(){
     btn.disabled=false; btn.textContent='💾 Save Settings';
   });
 
+  renderSettingsLogoSection();
+  renderSettingsPromptsSection();
   renderSettingsUsersSection();
-  renderSettingsCompaniesSection();
   renderSettingsRolesSection();
 }
 
+// ── AI Prompts viewer ────────────────────────────────────────────────────────
+// Read-only listing of every prompt the app sends to the AI, grouped by what
+// it's for. Built from the SAME constants/functions the real calls use (never
+// a hand-copied duplicate), so this can't drift out of date when a prompt is
+// edited. The two BOM prompts take a runtime argument, so a placeholder is
+// passed purely for display.
+function _aiPromptCatalog(){
+  return [
+    {id:'bom-text',   title:'BOM extraction — PDF text mode',
+     note:'Used when the PDF has a readable text layer. Sent with the extracted page text appended.',
+     text:_BOM_TEXT_PROMPT('<drawing-filename>.pdf')},
+    {id:'bom-vision', title:'BOM extraction — page image (vision)',
+     note:'Fallback when the PDF text layer is empty/sparse (table drawn as graphics), and for image uploads. Sent with the rendered page image.',
+     text:_BOM_VISION_PROMPT},
+    {id:'tool-rule',  title:'Crimp / insertion tool detection + pricing',
+     note:'Shared rule embedded inside BOTH BOM prompts above — makes the AI add a priced TOOL row for every connector that has a pin count.',
+     text:_BOM_TOOL_RULE_SECTION},
+    {id:'labor',      title:'Cable manufacturing process → Labor Time',
+     note:'Sales Desk only. Works out the manufacturing steps and per-unit minutes behind the auto Labor Time (and the Labor Breakdown modal).',
+     text:_cableProcessPrompt('0: <BOM row description> (qty=1 pc)\n1: <BOM row description> (qty=230 mm)')},
+    {id:'notes',      title:'Drawing Notes / Manufacturing Instructions',
+     note:'Sales Desk only. Pulls the drawing’s NOTES / GENERAL NOTES block out for the panel under the BOM table.',
+     text:_notesPrompt()},
+  ];
+}
+function renderSettingsPromptsSection(){
+  const body=document.getElementById('stg-prompts-body');
+  if(!body) return;
+  const items=_aiPromptCatalog();
+  body.innerHTML=items.map(p=>`
+    <details style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+      <summary style="padding:9px 12px;cursor:pointer;font-size:13px;font-weight:700;color:var(--blue-dark)">${esc(p.title)}</summary>
+      <div style="padding:0 12px 12px">
+        <p style="font-size:11px;color:var(--muted);margin:0 0 8px">${esc(p.note)}</p>
+        <button class="btn btn-ghost btn-sm prompt-copy" data-id="${esc(p.id)}" style="margin-bottom:8px">📋 Copy</button>
+        <pre id="prompt-text-${esc(p.id)}" style="white-space:pre-wrap;word-break:break-word;background:#f8fafc;border:1px solid var(--border);border-radius:5px;padding:10px;font-size:11px;line-height:1.5;max-height:340px;overflow:auto;margin:0">${esc(p.text)}</pre>
+      </div>
+    </details>`).join('');
+  body.querySelectorAll('.prompt-copy').forEach(btn=>btn.addEventListener('click',async()=>{
+    const el=document.getElementById(`prompt-text-${btn.dataset.id}`);
+    if(!el) return;
+    try{ await navigator.clipboard.writeText(el.textContent); toast('Prompt copied','success'); }
+    catch{ toast('Could not copy — select the text manually','error'); }
+  }));
+}
+
+// ── Logo (single-company build) ──────────────────────────────────────────────
+// The app now runs for one company only, so there's no company list/selector
+// any more — this just edits the CURRENT company's logo, which the Home screen
+// and top bar read via companyLogoB64/_logoHTML().
+async function renderSettingsLogoSection(){
+  const body=document.getElementById('stg-logo-body');
+  if(!body) return;
+  let _logoB64=companyLogoB64||'';
+  const _render=()=>{
+    const prev=document.getElementById('stg-logo-preview');
+    if(prev) prev.innerHTML=_logoB64?`<img src="${_logoB64}" style="width:100%;height:100%;object-fit:contain">`:`<span style="font-size:28px">🏢</span>`;
+  };
+  body.innerHTML=`
+    <div style="display:flex;align-items:center;gap:14px">
+      <div id="stg-logo-preview" style="width:80px;height:80px;border-radius:8px;background:var(--blue-light);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0"></div>
+      <div>
+        <input type="file" id="stg-logo-inp" accept="image/*" style="font-size:12px">
+        <button type="button" class="btn btn-ghost btn-sm" id="stg-logo-clear" style="margin-top:8px">Remove Logo</button>
+      </div>
+    </div>
+    <button class="btn btn-green" id="btn-stg-logo-save" style="margin-top:16px">💾 Save Logo</button>`;
+  _render();
+
+  document.getElementById('stg-logo-inp').addEventListener('change',()=>{
+    const f=document.getElementById('stg-logo-inp').files[0];
+    if(!f) return;
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const img=new Image();
+      img.onload=()=>{
+        const maxDim=256;
+        const scale=Math.min(1,maxDim/Math.max(img.width,img.height));
+        const w=Math.round(img.width*scale), h=Math.round(img.height*scale);
+        const canvas=document.createElement('canvas');
+        canvas.width=w; canvas.height=h;
+        canvas.getContext('2d').drawImage(img,0,0,w,h);
+        _logoB64=canvas.toDataURL('image/png');
+        _render();
+      };
+      img.src=e.target.result;
+    };
+    reader.readAsDataURL(f);
+  });
+  document.getElementById('stg-logo-clear').addEventListener('click',()=>{ _logoB64=''; _render(); });
+  document.getElementById('btn-stg-logo-save').addEventListener('click',async()=>{
+    const btn=document.getElementById('btn-stg-logo-save');
+    btn.disabled=true; btn.textContent='Saving…';
+    try{
+      await setDoc(doc(db,'companies',companyId),{logo_b64:_logoB64},{merge:true});
+      companyLogoB64=_logoB64; // keep Home/top-bar in sync without a reload
+      toast('Logo saved','success');
+    }catch(e){ toast('Error: '+e.message,'error'); }
+    btn.disabled=false; btn.textContent='💾 Save Logo';
+  });
+}
+
+// Lightweight "you need an API key first" prompt — shown when a drawing import
+// is attempted with no key configured (see handleFiles/handleSDFiles). The keys
+// themselves live on the Admin screen now; this exists purely so a user isn't
+// dead-ended mid-task, and it saves to the same localStorage entries.
 function showSettingsModal(onSaved){
   showModal(`<div class="modal modal-sm">
-    <div class="modal-head"><h3>⚙️ Settings</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>🔑 AI API Key Required</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Analyzing a drawing needs at least one AI key. Enter one here to continue — you can manage them later on the 🛡️ Admin screen.</p>
       <div class="form-field">
         <label>Anthropic API Key</label>
         <input class="form-input" id="inp-anth-key" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
@@ -5010,13 +5140,6 @@ function showSettingsModal(onSaved){
         <input class="form-input" id="inp-gem-key" type="password" placeholder="AIza…" value="${esc(geminiKey)}">
       </div>
       <p style="font-size:11px;color:var(--muted);margin-top:10px">Keys are stored in your browser (localStorage) and never sent to our servers.</p>
-      <div style="border-top:1px solid var(--border);margin:16px 0 14px"></div>
-      <div class="form-field">
-        <label>Labor Rate ($ / minute)</label>
-        <input class="form-input" id="inp-labor-rate" type="number" min="0" step="any"
-          placeholder="0.5" value="${esc(_sdLaborRateMin)}">
-        <p style="font-size:11px;color:var(--muted);margin-top:5px">Used to calculate Labor Cost in Sales Desk (Labor Total minutes × this rate). Shared across the company.</p>
-      </div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
@@ -5024,20 +5147,14 @@ function showSettingsModal(onSaved){
     </div>
   </div>`);
 
-  document.getElementById('btn-save-settings').addEventListener('click',async()=>{
+  document.getElementById('btn-save-settings').addEventListener('click',()=>{
     anthKey=document.getElementById('inp-anth-key').value.trim();
     geminiKey=document.getElementById('inp-gem-key').value.trim();
-    _sdLaborRateMin=parseFloat(document.getElementById('inp-labor-rate').value)||0;
     localStorage.setItem('anth_key',anthKey);
     localStorage.setItem('gem_key',geminiKey);
-    const btn=document.getElementById('btn-save-settings');
-    btn.disabled=true; btn.textContent='Saving…';
-    try{
-      if(companyId) await setDoc(doc(db,'companies',companyId),{labor_rate_min:_sdLaborRateMin},{merge:true});
-      toast('Settings saved','success');
-      closeModal();
-      if(onSaved) onSaved();
-    }catch(e){ toast('Error saving: '+e.message,'error'); btn.disabled=false; btn.textContent='Save'; }
+    toast('API keys saved','success');
+    closeModal();
+    if(onSaved) onSaved();
   });
 }
 
@@ -5054,43 +5171,39 @@ async function renderSettingsUsersSection(){
   const body=document.getElementById('stg-users-body');
   if(!body) return;
   body.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)"><div class="ring" style="margin:0 auto"></div></div>`;
-  let users=[],companies=[];
+  let users=[];
   try{
-    const [uSnap,cSnap]=await Promise.all([getDocs(collection(db,'users')),getDocs(collection(db,'companies'))]);
+    const uSnap=await getDocs(collection(db,'users'));
     users=uSnap.docs.map(d=>({_id:d.id,...d.data()}));
-    companies=cSnap.docs.map(d=>({_id:d.id,...d.data()}));
   }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${e.message}</p>`; return; }
-  const compName=id=>companies.find(c=>c._id===id)?.name||id||'—';
   body.innerHTML=`
     <div class="toolbar"><span class="count-badge">${users.length} users</span>
       <button class="btn btn-green btn-sm" id="btn-invite-user" style="margin-left:auto">＋ Invite User</button></div>
     <div class="table-wrap"><table id="stg-users-table">
-      <thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Role</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead>
       <tbody>${users.map(u=>`<tr data-id="${esc(u._id)}">
         <td>${esc(u.displayName||'')}</td>
         <td>${esc(u.email||'')}</td>
-        <td>${esc(compName(u.company_id))}</td>
         <td>${esc(u.role||'')}</td>
         <td>${u.disabled===true?'<span class="price-red" style="font-weight:600">Disabled</span>':'<span class="price-green">Active</span>'}</td>
         <td style="text-align:right"><button class="btn btn-ghost btn-sm stg-edit-user" data-id="${esc(u._id)}">✏️ Edit</button></td>
       </tr>`).join('')}</tbody>
     </table></div>`;
-  document.getElementById('btn-invite-user').addEventListener('click',()=>openInviteUserModal(companies));
+  document.getElementById('btn-invite-user').addEventListener('click',()=>openInviteUserModal());
   document.querySelectorAll('.stg-edit-user').forEach(btn=>btn.addEventListener('click',()=>{
-    const u=users.find(x=>x._id===btn.dataset.id); if(u) openEditUserModal(u,companies);
+    const u=users.find(x=>x._id===btn.dataset.id); if(u) openEditUserModal(u);
   }));
 }
 
-function openInviteUserModal(companies){
+// Single-company build: new users are always created under the current
+// company, so there's no company picker any more.
+function openInviteUserModal(){
   showModal(`<div class="modal modal-sm">
     <div class="modal-head"><h3>Invite User</h3><button class="close-modal" id="modal-close">✕</button></div>
     <div class="modal-body">
       <div class="form-field"><label>Full Name</label><input class="form-input" id="inv-name-inp" placeholder="e.g. Israel Israeli"></div>
       <div class="form-field" style="margin-top:10px"><label>Email</label><input class="form-input" id="inv-email-inp" type="email" placeholder="user@company.com"></div>
       <div class="form-field" style="margin-top:10px"><label>Password</label><input class="form-input" id="inv-pass-inp" type="password" placeholder="Min. 6 characters"></div>
-      <div class="form-field" style="margin-top:10px"><label>Company</label>
-        <select class="form-input" id="inv-company-sel">${companies.map(c=>`<option value="${esc(c._id)}">${esc(c.name||c._id)}</option>`).join('')}</select>
-      </div>
       <div class="form-field" style="margin-top:10px"><label>Role</label>
         <select class="form-input" id="inv-role-sel">${roleOptions().map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select>
       </div>
@@ -5106,7 +5219,7 @@ function openInviteUserModal(companies){
     const name=document.getElementById('inv-name-inp').value.trim();
     const email=document.getElementById('inv-email-inp').value.trim().toLowerCase();
     const pass=document.getElementById('inv-pass-inp').value;
-    const companyIdSel=document.getElementById('inv-company-sel').value;
+    const companyIdSel=companyId; // single-company build
     const role=document.getElementById('inv-role-sel').value;
     if(!name||!email){ toast('Name and email are required','error'); return; }
     if(pass.length<6){ toast('Password must be at least 6 characters','error'); return; }
@@ -5142,15 +5255,12 @@ async function adminCreateUser(email,password,displayName,companyIdVal,role){
   return uid;
 }
 
-function openEditUserModal(u,companies){
+function openEditUserModal(u){
   showModal(`<div class="modal modal-sm">
     <div class="modal-head"><h3>Edit User</h3><button class="close-modal" id="modal-close">✕</button></div>
     <div class="modal-body">
       <p style="font-size:12px;color:var(--muted);margin-bottom:12px">${esc(u.displayName||'')} · ${esc(u.email||'')}</p>
-      <div class="form-field"><label>Company</label>
-        <select class="form-input" id="edu-company-sel">${companies.map(c=>`<option value="${esc(c._id)}" ${c._id===u.company_id?'selected':''}>${esc(c.name||c._id)}</option>`).join('')}</select>
-      </div>
-      <div class="form-field" style="margin-top:10px"><label>Role</label>
+      <div class="form-field"><label>Role</label>
         <select class="form-input" id="edu-role-sel">${roleOptions().map(([v,l])=>`<option value="${v}" ${v===u.role?'selected':''}>${l}</option>`).join('')}</select>
       </div>
       <div class="form-field" style="margin-top:10px">
@@ -5169,13 +5279,14 @@ function openEditUserModal(u,companies){
   document.getElementById('modal-close').addEventListener('click',closeModal);
   document.getElementById('modal-cancel').addEventListener('click',closeModal);
   document.getElementById('btn-edu-save').addEventListener('click',async()=>{
-    const companyIdVal=document.getElementById('edu-company-sel').value;
     const role=document.getElementById('edu-role-sel').value;
     const disabled=document.getElementById('edu-disabled-chk').checked;
     const btn=document.getElementById('btn-edu-save');
     btn.disabled=true; btn.textContent='Saving…';
     try{
-      await updateDoc(doc(db,'users',u._id),{company_id:companyIdVal,role,disabled,updatedAt:serverTimestamp()});
+      // Single-company build: keep the user on the current company (also
+      // backfills company_id for any older profile that never had one set).
+      await updateDoc(doc(db,'users',u._id),{company_id:u.company_id||companyId,role,disabled,updatedAt:serverTimestamp()});
       toast('User updated','success');
       logAudit('user_updated',{email:u.email||u._id,role,disabled},true);
       closeModal(); renderSettingsUsersSection();
@@ -5191,33 +5302,6 @@ function openEditUserModal(u,companies){
       logAudit('user_deleted',{email:u.email||u._id},true);
       closeModal(); renderSettingsUsersSection();
     }catch(e){ toast('Error: '+e.message,'error'); logAudit('user_deleted',{error:e.message},false); btn.disabled=false; btn.textContent='🗑 Delete User'; }
-  });
-}
-
-function openNewCompanyModal(){
-  showModal(`<div class="modal modal-sm">
-    <div class="modal-head"><h3>New Company</h3><button class="close-modal" id="modal-close">✕</button></div>
-    <div class="modal-body">
-      <div class="form-field"><label>Company Name</label><input class="form-input" id="nc-name-inp" placeholder="e.g. Acme Ltd."></div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
-      <button class="btn btn-green" id="btn-nc-save">＋ Create</button>
-    </div>
-  </div>`);
-  document.getElementById('modal-close').addEventListener('click',closeModal);
-  document.getElementById('modal-cancel').addEventListener('click',closeModal);
-  document.getElementById('btn-nc-save').addEventListener('click',async()=>{
-    const name=document.getElementById('nc-name-inp').value.trim();
-    if(!name){ toast('Company name is required','error'); return; }
-    const btn=document.getElementById('btn-nc-save');
-    btn.disabled=true; btn.textContent='Creating…';
-    try{
-      await addDoc(collection(db,'companies'),{name,logo_b64:'',createdAt:serverTimestamp()});
-      toast(`Company "${name}" created`,'success');
-      logAudit('company_created',{name},true);
-      closeModal(); renderSettingsCompaniesSection();
-    }catch(e){ toast('Error: '+e.message,'error'); logAudit('company_created',{error:e.message},false); btn.disabled=false; btn.textContent='＋ Create'; }
   });
 }
 
@@ -5240,7 +5324,6 @@ async function cleanLegacyData(){
       }
     }
     toast(`Cleaned: ${results.customers} customers, ${results.projects} projects, ${results.drawings} drawings, ${results.parts_cache} parts`,'success');
-    renderSettingsCompaniesSection();
   }catch(e){ toast('Error: '+e.message,'error'); }
 }
 
@@ -5270,96 +5353,6 @@ async function normalizeDatabaseData(){
     allParts=[];
     toast(`Updated ${count} part(s) in the Database`,'success');
   }catch(e){ toast('Error: '+e.message,'error'); }
-}
-
-// ── Companies section (list + New Company + Clean Legacy Data + Branding) ─────
-async function renderSettingsCompaniesSection(){
-  const body=document.getElementById('stg-companies-body');
-  if(!body) return;
-  body.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)"><div class="ring" style="margin:0 auto"></div></div>`;
-  let companies=[];
-  try{
-    const cSnap=await getDocs(collection(db,'companies'));
-    companies=cSnap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
-  }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${e.message}</p>`; return; }
-  body.innerHTML=`
-    <div class="toolbar"><span class="count-badge">${companies.length} companies</span>
-      <button class="btn btn-green btn-sm" id="btn-new-company" style="margin-left:auto">＋ New Company</button>
-      <button class="btn btn-red btn-sm" id="btn-normalize-db">🔧 Normalize Database (QTY=1, Units)</button>
-      <button class="btn btn-red btn-sm" id="btn-clean-legacy">🗑 Clean Legacy Data</button></div>
-    <div class="table-wrap"><table id="stg-companies-table">
-      <thead><tr><th>Name</th><th>ID</th></tr></thead>
-      <tbody>${companies.map(c=>`<tr><td>${esc(c.name||'')}</td><td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(c._id)}</td></tr>`).join('')}</tbody>
-    </table></div>
-    <div style="border-top:1px solid var(--border);margin:18px 0 14px"></div>
-    <h4 style="font-size:12px;font-weight:700;color:var(--blue-dark);margin-bottom:10px;text-transform:uppercase;letter-spacing:.4px">Branding</h4>
-    <div class="form-field" style="max-width:320px">
-      <label>Company</label>
-      <select class="form-input" id="brd-company-sel">${companies.map(c=>`<option value="${esc(c._id)}" ${c._id===companyId?'selected':''}>${esc(c.name||c._id)}</option>`).join('')}</select>
-    </div>
-    <div style="display:flex;align-items:center;gap:14px;margin-top:12px">
-      <div id="brd-logo-preview" style="width:80px;height:80px;border-radius:8px;background:var(--blue-light);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0"></div>
-      <div>
-        <input type="file" id="brd-logo-inp" accept="image/*" style="font-size:12px">
-        <button type="button" class="btn btn-ghost btn-sm" id="brd-logo-clear" style="margin-top:8px">Remove Logo</button>
-      </div>
-    </div>
-    <button class="btn btn-green" id="btn-brd-save" style="margin-top:16px">💾 Save Branding</button>`;
-
-  document.getElementById('btn-new-company').addEventListener('click',()=>openNewCompanyModal());
-  document.getElementById('btn-clean-legacy').addEventListener('click',()=>cleanLegacyData());
-  document.getElementById('btn-normalize-db').addEventListener('click',()=>normalizeDatabaseData());
-
-  let _brdLogoB64='';
-  const sel=document.getElementById('brd-company-sel');
-  const loadPreview=()=>{
-    const c=companies.find(x=>x._id===sel.value);
-    _brdLogoB64=c?.logo_b64||'';
-    const prev=document.getElementById('brd-logo-preview');
-    prev.innerHTML=_brdLogoB64?`<img src="${_brdLogoB64}" style="width:100%;height:100%;object-fit:contain">`:`<span style="font-size:28px">🏢</span>`;
-  };
-  loadPreview();
-  sel.addEventListener('change',loadPreview);
-
-  document.getElementById('brd-logo-inp').addEventListener('change',()=>{
-    const f=document.getElementById('brd-logo-inp').files[0];
-    if(!f) return;
-    const reader=new FileReader();
-    reader.onload=e=>{
-      const img=new Image();
-      img.onload=()=>{
-        const maxDim=256;
-        const scale=Math.min(1,maxDim/Math.max(img.width,img.height));
-        const w=Math.round(img.width*scale), h=Math.round(img.height*scale);
-        const canvas=document.createElement('canvas');
-        canvas.width=w; canvas.height=h;
-        canvas.getContext('2d').drawImage(img,0,0,w,h);
-        _brdLogoB64=canvas.toDataURL('image/png');
-        document.getElementById('brd-logo-preview').innerHTML=`<img src="${_brdLogoB64}" style="width:100%;height:100%;object-fit:contain">`;
-      };
-      img.src=e.target.result;
-    };
-    reader.readAsDataURL(f);
-  });
-  document.getElementById('brd-logo-clear').addEventListener('click',()=>{
-    _brdLogoB64='';
-    document.getElementById('brd-logo-preview').innerHTML=`<span style="font-size:28px">🏢</span>`;
-  });
-
-  document.getElementById('btn-brd-save').addEventListener('click',async()=>{
-    const btn=document.getElementById('btn-brd-save');
-    btn.disabled=true; btn.textContent='Saving…';
-    try{
-      await setDoc(doc(db,'companies',sel.value),{logo_b64:_brdLogoB64},{merge:true});
-      // Keep the in-memory logo state in sync so the Home screen (which reads
-      // companyLogoB64 via _logoHTML()) reflects the change immediately,
-      // without needing a full reload.
-      if(sel.value===companyId) companyLogoB64=_brdLogoB64;
-      toast('Branding saved','success');
-      const c=companies.find(x=>x._id===sel.value); if(c) c.logo_b64=_brdLogoB64;
-    }catch(e){ toast('Error: '+e.message,'error'); }
-    btn.disabled=false; btn.textContent='💾 Save Branding';
-  });
 }
 
 // ── Roles section ────────────────────────────────────────────────────────────
