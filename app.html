@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.54';
+const APP_VER   = '1.8.55';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -693,9 +693,13 @@ async function openSupportModal(){
         createdAt:serverTimestamp()
       });
       logAudit('support_ticket_submitted',{message:message.slice(0,200)},true);
-      toast('Request sent to admin','success');
+      // Confirm and close — the ticket is filed, so keeping the modal open just
+      // leaves the user wondering whether it went through. Their full request
+      // history (with any admin reply) is here again next time they open Support.
       ta.value='';
-      loadMine();
+      closeModal();
+      toast('Your request has been sent to the system administrator','success');
+      return;
     }catch(e){ toast('Error: '+e.message,'error'); logAudit('support_ticket_submitted',{error:e.message},false); }
     btn.disabled=false; btn.textContent='Send to Admin';
   });
@@ -3699,16 +3703,25 @@ function _sdIsToolOwned(r){
   return allParts.some(p=>String(p.part_number||'').trim().toLowerCase()===pn && p.own_stock);
 }
 
+// TOOLS ARE NEVER PART OF THE CABLE PRICE.
+// A crimp/insertion tool is a one-time piece of shop equipment, not material
+// consumed by the cable, so it must not inflate the per-cable quote either way:
+//   • already in Stock  → nothing to buy, nothing to show as owing.
+//   • NOT in Stock      → it still has to be purchased before this cable can be
+//                         built, so it stays visible as a row and its cost is
+//                         reported SEPARATELY (see the warning note in
+//                         _sdUpdateSummaryUI) — but it is deliberately kept OUT
+//                         of Subtotal/FINAL PRICE.
+// toolsTotal below is therefore an informational figure only; it is never added
+// into subtotal.
 function _sdComputeSummary(){
   let partsTotal=0, autoToolsTotal=0, autoLaborMinutes=0;
-  const ownedToolRows=[]; // currently-excluded TOOL rows, for the Cost Summary stock note
+  const ownedToolRows=[];   // in Stock — already owned, nothing to buy
+  const missingToolRows=[]; // NOT in Stock — must be purchased, quoted separately
   for(const r of sdItems){
     if(_sdIsToolRow(r)){
-      // A tool row whose part number is marked in Stock in the Database right
-      // now is one the customer already owns — excluded entirely from the
-      // final price, not counted here or in partsTotal.
       if(_sdIsToolOwned(r)) ownedToolRows.push(r);
-      else autoToolsTotal+=r.total||0;
+      else { missingToolRows.push(r); autoToolsTotal+=r.total||0; }
     } else partsTotal+=r.total||0;
     autoLaborMinutes+=r.labor_total||0;
   }
@@ -3716,9 +3729,10 @@ function _sdComputeSummary(){
   const laborMinutes = _sdLaborMinutesOverride!=null ? _sdLaborMinutesOverride : autoLaborMinutes;
   const laborCost=laborMinutes*_sdLaborRatePerMin();
   const toolsTotal = _sdToolsTotalOverride!=null ? _sdToolsTotalOverride : autoToolsTotal;
-  const subtotal=partsTotal+toolsTotal+laborCost;
+  const subtotal=partsTotal+laborCost; // tools excluded by design — see comment above
   const final=subtotal*(1+_sdProfitPct/100);
-  return {partsTotal, toolsTotal, autoToolsTotal, laborMinutes, autoLaborMinutes, laborCost, subtotal, final, ownedToolRows};
+  return {partsTotal, toolsTotal, autoToolsTotal, laborMinutes, autoLaborMinutes, laborCost,
+          subtotal, final, ownedToolRows, missingToolRows};
 }
 
 async function renderSalesDesk(){
@@ -3727,7 +3741,7 @@ async function renderSalesDesk(){
   const SD_COLS=loadColOrder('salesdesk',_SD_DEFAULT_COLS);
 
   const _sdUpdateSummaryUI=()=>{
-    const {partsTotal,toolsTotal,laborMinutes,laborCost,subtotal,final,ownedToolRows}=_sdComputeSummary();
+    const {partsTotal,toolsTotal,laborMinutes,laborCost,subtotal,final,ownedToolRows,missingToolRows}=_sdComputeSummary();
     const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent='$'+v.toFixed(2); };
     set('sd-parts-total',partsTotal);
     set('sd-labor-total',laborCost);
@@ -3741,14 +3755,21 @@ async function renderSalesDesk(){
     if(toolsInp && _sdToolsTotalOverride==null) toolsInp.value = toolsTotal ? +toolsTotal.toFixed(2) : '';
     const ltInp=document.getElementById('sd-labor-minutes');
     if(ltInp && _sdLaborMinutesOverride==null) ltInp.value = laborMinutes ? +laborMinutes.toFixed(2) : '';
-    // Flag to the user, right under FINAL PRICE, whenever Tools pricing is
-    // actually contributing to it — easy to miss otherwise since Tools is
-    // just one line among several in Cost Summary.
+    // Tools are never included in FINAL PRICE (see _sdComputeSummary). When one
+    // is missing from Stock the user still has to buy it before this cable can
+    // be built, so say so explicitly and quote the amount separately — a silent
+    // exclusion would read as "no tooling needed" and under-quote the job.
     const toolsNote=document.getElementById('sd-tools-note');
     if(toolsNote){
-      toolsNote.style.display = toolsTotal>0 ? 'block' : 'none';
-      const amtEl=document.getElementById('sd-tools-note-amt');
-      if(amtEl) amtEl.textContent='$'+toolsTotal.toFixed(2);
+      if(missingToolRows.length){
+        const names=missingToolRows.map(r=>r.part_number||r.description||'tool').join(', ');
+        toolsNote.style.display='block';
+        toolsNote.innerHTML=`⚠ <strong>Final price does NOT include manufacturing tools.</strong><br>
+          ${missingToolRows.length} tool${missingToolRows.length>1?'s are':' is'} not in Stock and must be purchased to build this cable —
+          estimated <strong>$${toolsTotal.toFixed(2)}</strong>: ${esc(names)}`;
+      } else {
+        toolsNote.style.display='none';
+      }
     }
     // Inline (not a popup) note listing which TOOL rows are currently excluded
     // from the price because they're marked in Stock in the Database — lives
@@ -3875,8 +3896,8 @@ async function renderSalesDesk(){
           <div class="sd-panel-title">Cost Summary</div>
           <div style="padding:6px 0">
             <div class="summary-row"><span>Parts Total</span><span id="sd-parts-total">$0.00</span></div>
-            <div class="summary-row">
-              <span title="Defaults to the sum of every TOOL row's Part Cost (crimp/insertion tools added automatically from drawing analysis) — type your own number to override it, e.g. a vendor quote">Tools</span>
+            <div class="summary-row" style="color:var(--muted)">
+              <span title="Cost of crimp/insertion tools that are NOT yet in Stock. Shown for information only — tools are never added into Subtotal or FINAL PRICE. Type your own number to override it, e.g. a vendor quote.">Tools <em style="font-size:10px;font-style:normal">(not in price)</em></span>
               <span style="display:flex;align-items:center;gap:2px">$<input type="number" id="sd-tools-total" min="0" step="any"
                 style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right"></span>
             </div>
@@ -3900,9 +3921,7 @@ async function renderSalesDesk(){
             <span>FINAL PRICE</span>
             <span id="sd-final">$0.00</span>
           </div>
-          <div id="sd-tools-note" style="display:none;font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:5px 8px;margin-top:6px">
-            ⚠ Final price includes <strong id="sd-tools-note-amt">$0.00</strong> for Tools (crimp/insertion tools)
-          </div>
+          <div id="sd-tools-note" style="display:none;font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:5px 8px;margin-top:6px;line-height:1.5"></div>
           <div id="sd-tools-stock-note" style="display:none;font-size:11px;color:#1F8B4C;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:4px;padding:5px 8px;margin-top:6px"></div>
         </div>
         <button class="btn btn-green" style="width:100%;padding:10px;justify-content:center" id="btn-sd-export">📊 Export to Excel</button>
@@ -4514,7 +4533,7 @@ function exportSalesDeskExcel(){
   if(!sdItems.length){ toast('No items to export','error'); return; }
   if(!window.XLSX){ toast('Excel library not loaded — please reload the page','error'); return; }
 
-  const {partsTotal,laborCost,subtotal,final}=_sdComputeSummary();
+  const {partsTotal,laborCost,subtotal,final,toolsTotal,missingToolRows}=_sdComputeSummary();
   const headers=['Item','Drawing #','MNF P/N','Description','QTY','Units',
     'FC Price','Priority Price','Part Cost','Labor Time (min)'];
   const aoa=[['SALES DESK — PRICE QUOTATION'],
@@ -4533,6 +4552,16 @@ function exportSalesDeskExcel(){
   aoa.push(['','','','','','','','','Subtotal', +subtotal.toFixed(2)]);
   aoa.push(['','','','','','','','',`Profit (${_sdProfitPct}%)`, +(final-subtotal).toFixed(2)]);
   aoa.push(['','','','','','','','','FINAL PRICE', +final.toFixed(2)]);
+  // Tools are quoted separately, never inside FINAL PRICE (see _sdComputeSummary)
+  if(missingToolRows.length){
+    aoa.push([]);
+    aoa.push(['NOTE: FINAL PRICE above does NOT include manufacturing tools.']);
+    aoa.push([`${missingToolRows.length} tool(s) not in Stock, required to build this cable — quoted separately:`]);
+    missingToolRows.forEach(r=>{
+      aoa.push(['', r.part_number||'', r.description||'', '', '', '', '', '', +(r.total||0).toFixed(2)]);
+    });
+    aoa.push(['','','','','','','','','TOOLS TOTAL (separate)', +toolsTotal.toFixed(2)]);
+  }
 
   const ws=XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols']=[{wch:6},{wch:16},{wch:20},{wch:38},{wch:8},{wch:8},{wch:12},{wch:14},{wch:12},{wch:14}];
