@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.61';
+const APP_VER   = '1.8.62';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2252,7 +2252,9 @@ function _parseStructuredBOMSheet(rows){
       description:(desc.length>nm.length?desc:nm)||nm||desc,
       qty:cell(row,'qty')||'1',          // these exports frequently have no qty column
       unit:cell(row,'uom'),
-      drawing_number:reportPN, drawing_name:reportPN,
+      // Drawing # comes from the report banner; Dwg Name is deliberately left
+      // empty so the caller fills it from the FILE NAME (same as PDF imports).
+      drawing_number:reportPN, drawing_name:'',
       pin_count:'', price:'',
       _isSubAssembly:!!isSub,
     };
