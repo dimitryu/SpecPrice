@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.66';
+const APP_VER   = '1.8.67';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2798,12 +2798,11 @@ const _NOTE_DOC_STD_RE=/\b(spec(?:ification)?s?|standards?|std\.?|dwg\.?|drawing
 // JS port of core/findchips_scraper.py — same price-break logic
 
 // findchips.com sends no CORS headers, so the page has to come through a proxy.
-// These are FREE PUBLIC proxies: they go down, start demanding an API key, or
-// begin returning error pages with no notice — and when that happens every
-// price check fails at once. Two defences:
-//   1. a fallback chain, tried in order until one returns usable HTML;
-//   2. the list is ADMIN-EDITABLE (Admin > Price-Check Proxies), so a dead
-//      proxy can be swapped for a working one without a code change.
+// Our own Cloud Function (functions/index.js) is the real answer — it's the
+// only entry here that nobody else can take away. The public services below are
+// kept purely as emergency fallbacks; they all went down at once in Aug 2026
+// (corsproxy.io started returning HTTP 403, the rest timed out), which is what
+// prompted running our own.
 // Each entry is a URL template; "{url}" is replaced with the percent-encoded
 // target URL, "{url_raw}" with the unencoded one (some proxies want it plain).
 // Our OWN proxy (see functions/index.js) is first: it's the only entry that
