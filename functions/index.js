@@ -108,7 +108,20 @@ exports.priceProxy = onRequest(
         redirect: 'follow',
         signal: AbortSignal.timeout(45000),
       });
-      const body = await upstream.text();
+      let body = await upstream.text();
+
+      // A FindChips results page is ~650 KB, and the great majority of that is
+      // inline <script>/<style> the app never looks at — it only reads the
+      // distributor tables. Dropping them before relaying typically cuts the
+      // payload by more than half, which is the difference between a snappy
+      // price check and one that trips the browser's timeout.
+      const before = body.length;
+      body = body
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<!--[\s\S]*?-->/g, '');
+      res.set('X-Original-Size', String(before));
+      res.set('X-Stripped-Size', String(body.length));
 
       // Identical part numbers get re-checked often; a short shared cache cuts
       // both latency and load on the upstream site.
