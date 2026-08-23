@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.57';
+const APP_VER   = '1.8.58';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1578,9 +1578,9 @@ function openAddDrawingModal(projectId, projectName){
       </div>
       <div class="drop-zone" id="drop-zone" tabindex="0">
         <span class="icon-big">📄</span>
-        <strong>Drop PDF or Image here</strong>
-        <p>or click to browse — you can select multiple files (PDF, PNG, JPG, JPEG, WEBP, BMP). All selected files are extracted together and shown in one combined review.</p>
-        <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" multiple
+        <strong>Drop PDF, Image or Excel here</strong>
+        <p>or click to browse — you can select multiple files (PDF, PNG, JPG, JPEG, WEBP, BMP, XLSX, XLS, CSV). All selected files are extracted together and shown in one combined review.</p>
+        <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.xlsx,.xlsm,.xls,.csv" multiple
                style="display:none">
       </div>
     </div>
@@ -1627,11 +1627,12 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
     const file = files[fidx];
     const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
     const isImg = file.type.startsWith('image/');
-    if(!isPDF && !isImg){ errors.push(`"${file.name}" — not a PDF or image, skipped`); continue; }
+    const isXls = _isSpreadsheetFile(file);
+    if(!isPDF && !isImg && !isXls){ errors.push(`"${file.name}" — not a PDF, image or spreadsheet, skipped`); continue; }
 
     const filePrefix = files.length>1 ? `File ${fidx+1}/${files.length}: ${esc(file.name)} — ` : '';
     body.innerHTML = `
-      <div class="ai-status"><div class="ring"></div><span id="ai-msg">${filePrefix}${isPDF?'Extracting PDF text…':'Reading image…'}</span></div>
+      <div class="ai-status"><div class="ring"></div><span id="ai-msg">${filePrefix}${isXls?'Reading spreadsheet…':(isPDF?'Extracting PDF text…':'Reading image…')}</span></div>
       <div class="progress-bar"><div class="progress-fill" id="prog"></div></div>`;
     foot.innerHTML = '';
     const setMsg = (m,pct) => {
@@ -1642,7 +1643,13 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
     try {
       let extractedRows = [];
       let _pdfText='', _pdfTextLen=0, _pdfImages=[];
-      if(isPDF){
+      if(isXls){
+        setMsg('Reading spreadsheet…', 20);
+        const sheetText = await extractExcelText(file);
+        if(!sheetText.trim()) throw new Error('the spreadsheet appears to be empty');
+        setMsg('Sending spreadsheet to AI…', 50);
+        extractedRows = await aiExtractBOM(sheetText, false, null, file.name, 'excel');
+      } else if(isPDF){
         setMsg('Reading PDF pages…', 15);
         const {pageTexts, pageImages} = await extractPDFPages(file);
         _pdfImages = pageImages;
@@ -2062,6 +2069,89 @@ function fileToB64(file){
 
 // ── AI BOM extraction: Anthropic → Gemini fallback ────────────────────────────
 // Text prompt — same as Windows app ai_extractor.py
+// ── Spreadsheet (.xlsx/.xls/.csv) BOM import ─────────────────────────────────
+// Matched on extension rather than MIME type: browsers report spreadsheets
+// inconsistently (and often as application/octet-stream when the file came off
+// a network share or an ERP export), so the extension is the reliable signal.
+function _isSpreadsheetFile(file){
+  return /\.(xlsx|xlsm|xls|csv)$/i.test(file?.name||'');
+}
+// Reads every sheet into a plain pipe-delimited text grid (row number prefixed)
+// and hands it to the AI the same way PDF page text is handled. Deliberately NOT
+// a hard-coded parser for one customer's export layout: column names, sheet
+// order and row hierarchy vary per customer, and the AI already knows how to
+// find a BOM table — this just gets the cells in front of it losslessly.
+// Blank rows/columns are dropped so the payload stays small.
+async function extractExcelText(file){
+  if(!window.XLSX) throw new Error('Excel library not loaded — please reload the page');
+  const ab=await file.arrayBuffer();
+  const wb=XLSX.read(ab,{type:'array'});
+  const out=[];
+  for(const name of wb.SheetNames){
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[name],{header:1,raw:false,defval:''});
+    const lines=[];
+    rows.forEach((row,i)=>{
+      const cells=(row||[]).map(c=>String(c??'').trim());
+      while(cells.length && !cells[cells.length-1]) cells.pop(); // trim trailing empties
+      if(!cells.some(c=>c)) return;                              // skip fully blank rows
+      lines.push(`r${i+1}: ${cells.join(' | ')}`);
+    });
+    if(lines.length) out.push(`=== SHEET "${name}" ===\n${lines.join('\n')}`);
+  }
+  return out.join('\n\n');
+}
+
+// Spreadsheet BOM exports (ERP/PLM reports) are structured very differently from
+// a drawing's parts list: they often carry a row-TYPE column where only some row
+// types are real purchasable components, and manufacturer data lives on separate
+// child rows beneath each component. This prompt teaches that shape explicitly,
+// using the ELBIT "BOM QVL Report" layout as the worked example, and encodes the
+// mapping decisions agreed with the user (StdPart rows only; first QVL row wins;
+// qty defaults to 1 when the export has no quantity column at all).
+const _BOM_EXCEL_PROMPT = (filename) =>
+  `You are an expert at reading Bill of Materials (BOM) exports from ERP/PLM systems that arrive as spreadsheets.
+
+TASK: Extract the real component rows from the spreadsheet grid below. Each line is one spreadsheet row: "r<N>: cell | cell | cell".
+
+UNDERSTANDING THE LAYOUT:
+- A header row (often NOT row 1 — earlier rows hold a report title, top-level part number, date, etc.) names the columns. Find it first and map columns by NAME, not by position.
+- Many exports are HIERARCHICAL: a component row is followed by one or more CHILD rows that describe it further (approved manufacturers/vendors). Child rows are recognisable because their key identity columns are blank while a type/category column marks them as vendor entries.
+
+ROW-TYPE COLUMN (e.g. a column literally named "Type"): treat its values as follows —
+- "StdPart" → a REAL purchasable component. THIS is what becomes a BOM row.
+- "Qualified Vendor List" (QVL) → NOT its own BOM row. It supplies the manufacturer part number and manufacturer NAME for the StdPart row directly above it. If a component has SEVERAL QVL rows, use the FIRST one that appears and ignore the rest.
+- "StdPart Revision", "SpecTdp", "SpecTdp Revision", "DocumentTdp", "DocumentTdp Revision" → internal sub-assembly / drawing / document references. SKIP these entirely — they are not purchasable components.
+- If there is no type column at all, just extract every genuine data row of the BOM table.
+
+DEDUPLICATION: these exports repeat the same component many times (once per place it's used). Output each distinct component ONCE only, keyed on its part identity.
+
+FIELD MAPPING (map by column name; names vary between systems):
+- "atlantium_pn" → the customer's/company's internal part number — look for: PART NUM, PART NUMBER, ITEM ID, CATALOG, INTERNAL PN, CUST PN
+- "part_number" → the MANUFACTURER part number, taken from the component's first QVL/vendor child row — look for: MFPN, MPN, MFG PN, MANUFACTURER PN, VENDOR PN. If the component has no vendor row at all, leave "" .
+- "manufacturer" → manufacturer/vendor name from that same QVL row — look for: VENDOR, MANUFACTURER, MFG, SUPPLIER
+- "description" → the component's descriptive text — look for: DESCRIPTION, NAME, DESC. Prefer the longer/fuller of the two if both exist.
+- "qty" → quantity — look for: QTY, QUANTITY, NO. REQ'D, AMOUNT, USAGE. **If the export has NO quantity column anywhere, use "1" for every row.**
+- "unit" → unit of measure — look for: UOM, UNIT, U/M. The ONLY valid values are "pc", "mm", "cm", "ea", "gm", "M". Map "each"/"EA"→"pc" and "FT"/"FEET"→"" (leave empty — a foot isn't one of the valid units; the app converts lengths separately). Anything unrecognised → "".
+- "item" → the row's sequence number if the sheet has one, else ""
+- "drawing_number" / "drawing_name" → the top-level assembly part number / title if the report header states one (e.g. a "Part Number:" cell near the top), else ""
+- "pin_count" → number of pins/positions/contacts for connector components, if stated or reliably inferable from the part number/description of a known connector series. Else "".
+- "price" → always "" here (spreadsheet BOM exports don't carry pricing; the app prices parts separately). The ONLY exception is a synthesized crimp-tool row — see below.
+
+${_BOM_TOOL_RULE_SECTION}
+
+RULES:
+1. Output ONE row per distinct real component — do not repeat a component that appears multiple times in the sheet
+2. Never output a QVL/vendor child row as its own BOM row — fold it into its parent component
+3. Never output sub-assembly/document rows (SpecTdp/DocumentTdp and their Revisions)
+4. Read part numbers character by character — they are precise: do NOT guess or correct them
+5. If a field is genuinely absent, use empty string "" (except qty — see the qty rule above)
+
+Return ONLY a valid JSON array, no explanations.
+Example: [{"item":"","atlantium_pn":"00050470N","part_number":"GRM426X7R103K50","drawing_number":"20583410900","drawing_name":"","description":"CAP CHIP CER 10NF 50V 10% 1206","qty":"1","unit":"pc","manufacturer":"MURATA ELECT.NORTH AMERICA LTD","pin_count":"","price":""}]
+If no BOM is found, return: []
+
+SPREADSHEET (file: ${filename}):`;
+
 // Shared by BOTH BOM prompts (text + vision) — kept as its own constant so the
 // Settings > AI Prompts panel can show it as a standalone topic, and so the
 // rule can only ever be edited in one place (the two prompts must never drift
@@ -2227,11 +2317,13 @@ async function _fetchWithRetry(url, opts){
   }
 }
 
-async function aiExtractBOM(text, isImage, imgData, filename){
+// sourceType: 'drawing' (default — PDF text or page image) or 'excel'
+// (spreadsheet grid from extractExcelText, which needs its own prompt).
+async function aiExtractBOM(text, isImage, imgData, filename, sourceType='drawing'){
   try{
     let rows, provider;
     if(geminiKey){
-      try { rows=await _geminiBOM(text, isImage, imgData, filename); provider='gemini'; }
+      try { rows=await _geminiBOM(text, isImage, imgData, filename, sourceType); provider='gemini'; }
       catch(e){
         if(!anthKey) throw e;
         console.warn('Gemini failed, using Anthropic:', e.message);
@@ -2239,21 +2331,28 @@ async function aiExtractBOM(text, isImage, imgData, filename){
     }
     if(rows===undefined){
       if(!anthKey) throw new Error('No AI API key configured. Add a Gemini or Anthropic key in Settings.');
-      rows=await _anthropicBOM(text, isImage, imgData, filename); provider='anthropic';
+      rows=await _anthropicBOM(text, isImage, imgData, filename, sourceType); provider='anthropic';
     }
-    logSystemAudit('drawing_bom_search',{filename,provider,mode:isImage?'vision':'text',rowsFound:rows.length},true);
+    logSystemAudit('drawing_bom_search',{filename,provider,mode:sourceType==='excel'?'excel':(isImage?'vision':'text'),rowsFound:rows.length},true);
     return rows;
   }catch(e){
     logSystemAudit('drawing_bom_search',{filename,error:e.message},false);
     throw e;
   }
 }
+// Text-mode prompt for whichever kind of file this is. Spreadsheets get a much
+// bigger slice (100k chars) than a drawing's text layer: an ERP BOM export can
+// legitimately run to hundreds of rows, and truncating it silently drops parts.
+function _bomTextPromptFor(sourceType, filename){
+  return sourceType==='excel' ? _BOM_EXCEL_PROMPT(filename) : _BOM_TEXT_PROMPT(filename);
+}
+function _bomTextLimitFor(sourceType){ return sourceType==='excel' ? 100000 : 30000; }
 
-async function _anthropicBOM(text, isImage, imgData, filename){
+async function _anthropicBOM(text, isImage, imgData, filename, sourceType='drawing'){
   const messages = isImage ? [{role:'user',content:[
     {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
     {type:'text',text:_BOM_VISION_PROMPT}
-  ]}] : [{role:'user', content: _BOM_TEXT_PROMPT(filename)+'\n'+text.slice(0,30000)}];
+  ]}] : [{role:'user', content: _bomTextPromptFor(sourceType,filename)+'\n'+text.slice(0,_bomTextLimitFor(sourceType))}];
   const resp = await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
     method:'POST',
     headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
@@ -2266,10 +2365,10 @@ async function _anthropicBOM(text, isImage, imgData, filename){
   return _parseAIJson(data.content[0].text.trim());
 }
 
-async function _geminiBOM(text, isImage, imgData, filename){
+async function _geminiBOM(text, isImage, imgData, filename, sourceType='drawing'){
   const parts = isImage
     ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:_BOM_VISION_PROMPT}]
-    : [{text: _BOM_TEXT_PROMPT(filename)+'\n'+text.slice(0,30000)}];
+    : [{text: _bomTextPromptFor(sourceType,filename)+'\n'+text.slice(0,_bomTextLimitFor(sourceType))}];
   const resp = await _fetchWithRetry(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
     {method:'POST',headers:{'content-type':'application/json'},
@@ -4148,9 +4247,9 @@ function openSDFileModal(){
     <div class="modal-body" id="sd-modal-body">
       <div class="drop-zone" id="sd-drop-zone" tabindex="0">
         <span class="icon-big">📄</span>
-        <strong>Drop PDF or Image here</strong>
-        <p>Parts will be added to Sales Desk — you can select multiple files, extracted together into one review</p>
-        <input type="file" id="sd-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" multiple style="display:none">
+        <strong>Drop PDF, Image or Excel here</strong>
+        <p>PDF / PNG / JPG / XLSX / XLS / CSV — parts will be added to Sales Desk. You can select multiple files, extracted together into one review.</p>
+        <input type="file" id="sd-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.xlsx,.xlsm,.xls,.csv" multiple style="display:none">
       </div>
     </div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
@@ -4184,10 +4283,11 @@ async function handleSDFiles(files){
     const file=files[fidx];
     const isPDF=file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf');
     const isImg=file.type.startsWith('image/');
-    if(!isPDF&&!isImg){ errors.push(`"${file.name}" — not a PDF or image, skipped`); continue; }
+    const isXls=_isSpreadsheetFile(file);
+    if(!isPDF&&!isImg&&!isXls){ errors.push(`"${file.name}" — not a PDF, image or spreadsheet, skipped`); continue; }
 
     const filePrefix = files.length>1 ? `File ${fidx+1}/${files.length}: ${esc(file.name)} — ` : '';
-    body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="sd-ai-msg">${filePrefix}${isPDF?'Extracting PDF text…':'Reading image…'}</span></div>
+    body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="sd-ai-msg">${filePrefix}${isXls?'Reading spreadsheet…':(isPDF?'Extracting PDF text…':'Reading image…')}</span></div>
       <div class="progress-bar"><div class="progress-fill" id="sd-prog"></div></div>`;
     foot.innerHTML='';
     const setM=(m,p)=>{
@@ -4200,7 +4300,17 @@ async function handleSDFiles(files){
       let _pdfText='', _pdfTextLen=0, _pdfImages=[];
       let _procIsImage=false, _procImgData=null; // whichever image (if any) ended up being used — reused below for the cable-process analysis
 
-      if(isPDF){
+      if(isXls){
+        setM('Reading spreadsheet…',20);
+        const sheetText=await extractExcelText(file);
+        if(!sheetText.trim()) throw new Error('the spreadsheet appears to be empty');
+        setM('Sending spreadsheet to AI…',50);
+        extractedRows=await aiExtractBOM(sheetText,false,null,file.name,'excel');
+        // Keep the sheet text as the "drawing text" for the cable-process and
+        // notes analyses below — there's no page image for a spreadsheet, so
+        // those run in text mode off the same content.
+        _pdfText=sheetText;
+      } else if(isPDF){
         setM('Reading PDF pages…',15);
         const {pageTexts,pageImages}=await extractPDFPages(file);
         _pdfImages=pageImages;
@@ -5094,6 +5204,9 @@ function _aiPromptCatalog(){
     {id:'bom-vision', title:'BOM extraction — page image (vision)',
      note:'Fallback when the PDF text layer is empty/sparse (table drawn as graphics), and for image uploads. Sent with the rendered page image.',
      text:_BOM_VISION_PROMPT},
+    {id:'bom-excel',  title:'BOM extraction — Excel / CSV spreadsheet',
+     note:'Used when the uploaded file is a spreadsheet (ERP/PLM BOM export). Understands hierarchical exports where only some row types are real components and vendor data sits on child rows.',
+     text:_BOM_EXCEL_PROMPT('<bom-export>.xlsx')},
     {id:'tool-rule',  title:'Crimp / insertion tool detection + pricing',
      note:'Shared rule embedded inside BOTH BOM prompts above — makes the AI add a priced TOOL row for every connector that has a pin count.',
      text:_BOM_TOOL_RULE_SECTION},
