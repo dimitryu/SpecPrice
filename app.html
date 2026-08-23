@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.63';
+const APP_VER   = '1.8.64';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -948,28 +948,34 @@ const _PS_DEFAULT_COLS=[
   {k:'rfq_names',     l:'RFQ',             w:'140px',wrap:true},
   {k:'pin_count',       l:'Pins',           w:'55px'},
   {k:'updatedAt',     l:'Updated',          w:'90px'},
-  {k:'_fc',           l:'FindChips',        w:'80px'},
+  {k:'_fc',           l:'Check Price',      w:'90px'},
 ];
+// Shared price-comparison colouring for every price column (FC / Priority /
+// Mouser / DigiKey) in BOTH the Database and Sales Desk, so the same number
+// never means two different things depending on which screen you're looking at.
+// Across all the prices a row actually HAS: cheapest → green, dearest → red,
+// anything in between → uncoloured. A single price is left uncoloured, since
+// "cheapest" is meaningless with nothing to compare against.
+const _PRICE_FIELDS=['price','priority_price','mouser_price','digikey_price'];
+function _priceCellHTML(row, field){
+  const v=parseFloat(row[field])||0;
+  if(!v) return '';
+  const all=_PRICE_FIELDS.map(f=>parseFloat(row[f])||0).filter(n=>n>0);
+  if(all.length<2) return fmtPrice(v);
+  const lo=Math.min(...all), hi=Math.max(...all);
+  const cls = v<=lo ? 'price-green' : (v>=hi ? 'price-red' : '');
+  return `<span class="${cls}">${fmtPrice(v)}</span>`;
+}
+
 // Renders the inner HTML for a single Part Stock cell, given a column key and part row
 function _psCellHTML(k,p){
-  const fcPrice=parseFloat(p.price)||0, prPrice=parseFloat(p.priority_price)||0;
-  let fcC='',prC='';
-  if(fcPrice&&prPrice){fcC=fcPrice<=prPrice?'price-green':'price-red';prC=prPrice<=fcPrice?'price-green':'price-red';}
   const fcUrl=p.findchips_url||`https://www.findchips.com/search/${encodeURIComponent(p.part_number||'')}`;
   switch(k){
-    case 'price': return fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:'';
-    case 'priority_price': return prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:'';
-    // Per-distributor prices, filled by the FindChips check from the same page
-    // it already fetches (see _fcFetchPart). When both are present the cheaper
-    // of the two is green, so the better source is obvious at a glance.
+    // All four price columns share one comparison rule — see _priceCellHTML.
+    case 'price':
+    case 'priority_price':
     case 'mouser_price':
-    case 'digikey_price': {
-      const mo=parseFloat(p.mouser_price)||0, dk=parseFloat(p.digikey_price)||0;
-      const v=k==='mouser_price'?mo:dk;
-      if(!v) return '';
-      const cls=(mo&&dk) ? (v<=Math.min(mo,dk)?'price-green':'price-red') : '';
-      return `<span class="${cls}">${fmtPrice(v)}</span>`;
-    }
+    case 'digikey_price': return _priceCellHTML(p,k);
     case 'unit': return esc(p.unit||p.units||'');
     case 'rfq_names': return esc((p.rfq_names||[]).join(', '));
     case 'updatedAt': return fmtDate(p.updatedAt);
@@ -1035,7 +1041,7 @@ async function renderPartStock(filter=''){
       <button class="tbl-scroll-btn" id="ps-scroll-right" title="Scroll right">▶</button>
       <select class="search-box" id="ps-page-size" style="flex:0 0 auto;min-width:auto;width:auto;padding:7px 9px">${pageSizeOpts}</select>
       <button class="btn btn-ghost" id="btn-ps-refresh" style="white-space:nowrap;flex-shrink:0" title="Reload latest data from the database">🔄 Refresh</button>
-      <button class="btn btn-blue" id="btn-ps-fc" style="white-space:nowrap;flex-shrink:0">🔍 Check FindChips</button>
+      <button class="btn btn-blue" id="btn-ps-fc" style="white-space:nowrap;flex-shrink:0">🔍 Check Price</button>
       <button class="btn btn-purple" id="btn-ps-import" style="white-space:nowrap;flex-shrink:0">📥 Import Data</button>
       <button class="btn btn-green" id="btn-ps-export" style="white-space:nowrap;flex-shrink:0">📊 Export to Excel</button>
       <button class="btn btn-red" id="btn-ps-delsel" style="white-space:nowrap;flex-shrink:0">🗑 Delete Selected</button>
@@ -2791,7 +2797,38 @@ const _NOTE_DOC_STD_RE=/\b(spec(?:ification)?s?|standards?|std\.?|dwg\.?|drawing
 // ── FindChips price checker ───────────────────────────────────────────────────
 // JS port of core/findchips_scraper.py — same price-break logic
 
-const FC_PROXY = 'https://corsproxy.io/?url=';
+// findchips.com sends no CORS headers, so the page has to come through a proxy.
+// Public proxies go down, rate-limit, or start returning error pages without
+// warning — when that happens EVERY price check fails at once, which is exactly
+// the kind of outage that looks like "the app is broken". So try several in
+// order and use the first that actually returns usable HTML.
+const FC_PROXIES = [
+  u => 'https://corsproxy.io/?url='+encodeURIComponent(u),
+  u => 'https://api.allorigins.win/raw?url='+encodeURIComponent(u),
+  u => 'https://api.codetabs.com/v1/proxy/?quest='+encodeURIComponent(u),
+];
+const FC_PROXY = 'https://corsproxy.io/?url='; // kept for the currency helper below
+// Fetches a URL through the proxy chain. Throws only if EVERY proxy failed,
+// with a message naming what went wrong — that message is surfaced in the
+// price-check table and the audit log, so a proxy outage is identifiable
+// instead of showing a bare "Error".
+async function _fcProxyFetch(url, timeoutMs=22000){
+  const problems=[];
+  for(let i=0;i<FC_PROXIES.length;i++){
+    try{
+      const resp=await fetch(FC_PROXIES[i](url),{signal:AbortSignal.timeout(timeoutMs)});
+      if(!resp.ok){ problems.push(`proxy ${i+1}: HTTP ${resp.status}`); continue; }
+      const html=await resp.text();
+      // A proxy that's up but broken often returns a tiny error page/JSON blob
+      // instead of the real document — treat that as a failure and move on.
+      if(!html || html.length<500){ problems.push(`proxy ${i+1}: empty response`); continue; }
+      return html;
+    }catch(e){
+      problems.push(`proxy ${i+1}: ${e.name==='TimeoutError'?'timed out':(e.message||'failed')}`);
+    }
+  }
+  throw new Error('Could not reach FindChips — '+problems.join('; '));
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ── Currency conversion → USD (via coinmill.com, same CORS proxy as FindChips) ─
@@ -2938,9 +2975,7 @@ async function _fcFetchPart(partNumber, qty=0){
   const pn=partNumber.trim();
   if(!pn) return null;
   const fcUrl=`https://www.findchips.com/search/${encodeURIComponent(pn)}`;
-  const resp=await fetch(FC_PROXY+encodeURIComponent(fcUrl),{signal:AbortSignal.timeout(22000)});
-  if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const html=await resp.text();
+  const html=await _fcProxyFetch(fcUrl);
   if(/no results were found|0 results|no parts found/i.test(html))
     return{price:'Not found',distributor:'',stock:'',url:fcUrl};
   const doc=new DOMParser().parseFromString(html,'text/html');
@@ -3021,7 +3056,7 @@ async function runFCCheckModal(items, mode){
   const total=items.length;
 
   showModal(`<div class="modal" style="width:min(94vw,820px)">
-    <div class="modal-head"><h3>🔍 FindChips Price Check</h3><button class="close-modal" id="fc-close-x">✕</button></div>
+    <div class="modal-head"><h3>🔍 Check Price</h3><button class="close-modal" id="fc-close-x">✕</button></div>
     <div class="modal-body" id="fc-modal-body">
       <div class="ai-status" style="margin-bottom:8px"><div class="ring"></div><span id="fc-status">Starting…</span></div>
       <div class="progress-bar"><div class="progress-fill" id="fc-prog"></div></div>
@@ -3052,7 +3087,7 @@ async function runFCCheckModal(items, mode){
   document.getElementById('btn-fc-stop').addEventListener('click',()=>{stopped=true;closeModal();_fcRefresh();});
   document.getElementById('fc-close-x').addEventListener('click',()=>{stopped=true;closeModal();_fcRefresh();});
 
-  let done=0, found=0;
+  let done=0, found=0, failures=0, lastError='';
   for(let i=0;i<items.length;i++){
     if(stopped) break;
     const it=items[i];
@@ -3107,6 +3142,8 @@ async function runFCCheckModal(items, mode){
           const sdIdx=it._sdIdx;
           if(sdIdx!==undefined&&sdItems[sdIdx]){
             sdItems[sdIdx].price=priceNum;
+            sdItems[sdIdx].mouser_price=mouserNum;
+            sdItems[sdIdx].digikey_price=digikeyNum;
             _sdRecalcTotal(sdItems[sdIdx]);
           }
           // Also save the result to Part Stock (parts_cache) — upsert by part_number
@@ -3144,26 +3181,46 @@ async function runFCCheckModal(items, mode){
         }
       }
     }catch(e){
-      setStatus('Error','var(--red)');
-      console.warn('FC error',it.part_number,e.message);
+      // Show WHAT failed, not just that something did — the message is also
+      // kept for the audit log and the run summary below, so an outage (dead
+      // proxy, timeout) is diagnosable without opening the browser console.
+      failures++;
+      lastError=e.message||String(e);
+      const short=lastError.length>60?lastError.slice(0,60)+'…':lastError;
+      const el=document.getElementById(`fc-st-${i}`);
+      if(el) el.innerHTML=`<span style="color:var(--red);font-size:11px;cursor:help" title="${esc(lastError)}">${esc(short)}</span>`;
+      console.warn('FC error',it.part_number,lastError);
     }
     done++;
     const sumEl=document.getElementById('fc-summary');
-    if(sumEl) sumEl.textContent=`${done}/${total} checked, ${found} prices found`;
+    if(sumEl) sumEl.textContent=`${done}/${total} checked, ${found} prices found${failures?`, ${failures} failed`:''}`;
     // Small delay to avoid hammering FindChips
     if(i<items.length-1&&!stopped) await new Promise(r=>setTimeout(r,400));
   }
 
   const prog=document.getElementById('fc-prog'); if(prog) prog.style.width='100%';
   const stEl=document.getElementById('fc-status');
-  if(stEl) stEl.textContent=`Done — ${found}/${total} prices found`;
+  if(stEl){
+    stEl.textContent=`Done — ${found}/${total} prices found${failures?`, ${failures} failed`:''}`;
+    // If EVERY part failed it's an outage, not a data problem — say so plainly
+    // and show the underlying reason rather than leaving the user guessing.
+    if(failures===total && total>0){
+      stEl.innerHTML=`<span style="color:var(--red)">Price check failed for all ${total} part(s) — ${esc(lastError)}</span>`;
+    }
+  }
   const stopBtn=document.getElementById('btn-fc-stop');
   if(stopBtn){stopBtn.textContent='Close';stopBtn.className='btn btn-green';
     stopBtn.onclick=()=>{closeModal();_fcRefresh();};
   }
   const ringEl=document.querySelector('#fc-modal-body .ring');
   if(ringEl){ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';ringEl.textContent='✓';}
-  logSystemAudit('findchips_price_search',{screen:mode==='parts'?'Database':'Sales Desk',checked:done,found,stopped},true);
+  // Audit trail for every price check — success AND failure, so a run that
+  // found nothing is distinguishable from one that never reached FindChips.
+  logSystemAudit('price_check',{
+    screen: mode==='parts'?'Database':'Sales Desk',
+    checked: done, found, failed: failures, stopped,
+    ...(failures?{error:lastError}:{})
+  }, failures!==total || total===0);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3730,6 +3787,8 @@ const _SD_DEFAULT_COLS=[
   {k:'unit',           l:'Units',           w:'55px'},
   {k:'price',          l:'FC Price',        w:'85px'},
   {k:'priority_price', l:'Priority Price',  w:'95px'},
+  {k:'mouser_price',   l:'Mouser Price',    w:'95px'},
+  {k:'digikey_price',  l:'DigiKey Price',   w:'95px'},
   {k:'total',          l:'Part Cost',       w:'85px'},
   {k:'labor_time',     l:'Labor Time',      w:'85px'},
 ];
@@ -3843,8 +3902,12 @@ function _sdCellHTML(k,r,i){
     case 'unit': return `<select class="sd-unit" data-i="${i}" style="padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px">
            ${_SD_UNIT_OPTIONS.map(u=>`<option value="${u}" ${String(r.unit||'')===u?'selected':''}>${u||'—'}</option>`).join('')}
          </select>`;
-    case 'price': return fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:'';
-    case 'priority_price': return prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:'';
+    // All four price columns share the Database's comparison rule — cheapest
+    // green, dearest red — so a price means the same thing on both screens.
+    case 'price':
+    case 'priority_price':
+    case 'mouser_price':
+    case 'digikey_price': return _priceCellHTML(r,k);
     // Part Cost is always editable — type a number to set/correct it directly
     // (see _sdRecalcTotal). Highlighted cyan when there's no FC/Priority price
     // and no manual override yet, so missing-price rows are easy to spot.
@@ -3949,7 +4012,7 @@ let _sdFilterQ='';
 // Independent sort state for the Sales Desk table (separate from Part Stock's
 // sortCol/sortAsc, which is a different table with different columns).
 let _sdSortCol=null, _sdSortAsc=true;
-const _SD_NUMERIC_COLS=new Set(['qty','price','priority_price','total','labor_time']);
+const _SD_NUMERIC_COLS=new Set(['qty','price','priority_price','mouser_price','digikey_price','total','labor_time']);
 // The 'labor_time' column now displays/edits the row's final total (see
 // _sdCellHTML/_sdRecalcLaborTotal), stored on r.labor_total, not r.labor_time
 // itself — sort on the value actually shown to the user.
@@ -4217,7 +4280,7 @@ async function renderSalesDesk(){
           <button class="btn btn-blue" id="btn-sd-addpick">📦 Add from Database</button>
           <button class="btn btn-blue" id="btn-sd-file">📎 New Drawing</button>
           <button class="btn btn-blue" id="btn-sd-newrow">➕ New Row</button>
-          <button class="btn btn-green" id="btn-sd-fc" style="white-space:nowrap">🔍 FindChips</button>
+          <button class="btn btn-green" id="btn-sd-fc" style="white-space:nowrap">🔍 Check Price</button>
           <button class="btn btn-red" id="btn-sd-clear">Clear All</button>
         </div>
         <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap;align-items:center">
@@ -4328,6 +4391,7 @@ async function renderSalesDesk(){
         const item={part_number:p.part_number||'',description:p.description||'',
           drawing_number:p.drawing_number||p.drawing_name||'',
           qty, unit:p.unit||p.units||'pcs',price:parseFloat(p.price)||0,priority_price:parseFloat(p.priority_price)||0,
+          mouser_price:parseFloat(p.mouser_price)||'', digikey_price:parseFloat(p.digikey_price)||'',
           total:0, labor_time:'', labor_total:0};
         _sdRecalcRow(item);
         sdItems.push(item);
@@ -4799,6 +4863,8 @@ async function handleSDFiles(files){
           // $0.00 until the next Database refresh.
           price:r.price?(parseFloat(r.price)||0):(match?parseFloat(match.price)||0:0),
           priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
+          mouser_price:match?parseFloat(match.mouser_price)||'':'',
+          digikey_price:match?parseFloat(match.digikey_price)||'':'',
           labor_time:'', labor_total:0,
           // Whether this tool is already owned (in Stock) is no longer decided
           // here once at import time — see _sdIsToolOwned, which checks the
@@ -4913,7 +4979,7 @@ function exportSalesDeskExcel(){
 
   const {partsTotal,laborCost,subtotal,final,toolsTotal,missingToolRows}=_sdComputeSummary();
   const headers=['Item','Drawing #','MNF P/N','Description','QTY','Units',
-    'FC Price','Priority Price','Part Cost','Labor Time (min)'];
+    'FC Price','Priority Price','Mouser Price','DigiKey Price','Part Cost','Labor Time (min)'];
   const aoa=[['SALES DESK — PRICE QUOTATION'],
     ['Generated', new Date().toLocaleString()],
     [],
@@ -4922,28 +4988,29 @@ function exportSalesDeskExcel(){
     aoa.push([i+1, r.drawing_number||'', r.part_number||'', r.description||'',
       parseFloat(r.qty)||0, r.unit||'',
       parseFloat(r.price)||'', parseFloat(r.priority_price)||'',
+      parseFloat(r.mouser_price)||'', parseFloat(r.digikey_price)||'',
       +(r.total||0).toFixed(2), +(r.labor_total||0).toFixed(2)]);
   });
   aoa.push([]);
-  aoa.push(['','','','','','','','','Parts Total', +partsTotal.toFixed(2)]);
-  aoa.push(['','','','','','','','','Labor Cost', +laborCost.toFixed(2)]);
-  aoa.push(['','','','','','','','','Subtotal', +subtotal.toFixed(2)]);
-  aoa.push(['','','','','','','','',`Profit (${_sdProfitPct}%)`, +(final-subtotal).toFixed(2)]);
-  aoa.push(['','','','','','','','','FINAL PRICE', +final.toFixed(2)]);
+  aoa.push(['','','','','','','','','','','Parts Total', +partsTotal.toFixed(2)]);
+  aoa.push(['','','','','','','','','','','Labor Cost', +laborCost.toFixed(2)]);
+  aoa.push(['','','','','','','','','','','Subtotal', +subtotal.toFixed(2)]);
+  aoa.push(['','','','','','','','','','',`Profit (${_sdProfitPct}%)`, +(final-subtotal).toFixed(2)]);
+  aoa.push(['','','','','','','','','','','FINAL PRICE', +final.toFixed(2)]);
   // Tools are quoted separately, never inside FINAL PRICE (see _sdComputeSummary)
   if(missingToolRows.length){
     aoa.push([]);
     aoa.push(['NOTE: FINAL PRICE above does NOT include manufacturing tools.']);
     aoa.push([`${missingToolRows.length} tool(s) not in Stock, required to build this cable — quoted separately:`]);
     missingToolRows.forEach(r=>{
-      aoa.push(['', r.part_number||'', r.description||'', '', '', '', '', '', +(r.total||0).toFixed(2)]);
+      aoa.push(['', r.part_number||'', r.description||'', '', '', '', '', '', '', '', +(r.total||0).toFixed(2)]);
     });
-    aoa.push(['','','','','','','','','TOOLS TOTAL (separate)', +toolsTotal.toFixed(2)]);
+    aoa.push(['','','','','','','','','','','TOOLS TOTAL (separate)', +toolsTotal.toFixed(2)]);
   }
 
   const ws=XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols']=[{wch:6},{wch:16},{wch:20},{wch:38},{wch:8},{wch:8},{wch:12},{wch:14},{wch:12},{wch:14}];
-  ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:9}}];
+  ws['!cols']=[{wch:6},{wch:16},{wch:20},{wch:38},{wch:8},{wch:8},{wch:12},{wch:14},{wch:13},{wch:13},{wch:12},{wch:14}];
+  ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:11}}];
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'Quote');
   const fname=`SalesDesk_Quote_${new Date().toISOString().slice(0,10)}.xlsx`;
