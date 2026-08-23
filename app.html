@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.65';
+const APP_VER   = '1.8.66';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2806,18 +2806,31 @@ const _NOTE_DOC_STD_RE=/\b(spec(?:ification)?s?|standards?|std\.?|dwg\.?|drawing
 //      proxy can be swapped for a working one without a code change.
 // Each entry is a URL template; "{url}" is replaced with the percent-encoded
 // target URL, "{url_raw}" with the unencoded one (some proxies want it plain).
+// Our OWN proxy (see functions/index.js) is first: it's the only entry that
+// isn't at the mercy of a free third-party service. The public ones stay on as
+// fallbacks in case the function is ever unavailable or not yet deployed.
+const FC_OWN_PROXY = 'https://us-central1-specprice-236a2.cloudfunctions.net/priceProxy?url={url}';
 const _FC_DEFAULT_PROXIES = [
+  FC_OWN_PROXY,
   'https://api.allorigins.win/raw?url={url}',
   'https://api.codetabs.com/v1/proxy/?quest={url}',
   'https://corsproxy.io/?url={url}',
-  'https://thingproxy.freeboard.io/fetch/{url_raw}',
 ];
-function fcProxyList(){
-  const saved=(localStorage.getItem('fc_proxies')||'').split('\n').map(s=>s.trim()).filter(Boolean);
-  return saved.length?saved:_FC_DEFAULT_PROXIES;
-}
+function fcProxyList(){ return _FC_DEFAULT_PROXIES; }
 function _fcProxyUrl(tpl, url){
   return tpl.replace('{url}',encodeURIComponent(url)).replace('{url_raw}',url);
+}
+// Our Cloud Function only serves signed-in SpecPrice users, so requests to it
+// carry the current user's Firebase ID token. Third-party proxies get no
+// headers at all — sending them an auth token would leak it to a stranger.
+function _fcIsOwnProxy(tpl){ return /cloudfunctions\.net|\/priceProxy/i.test(tpl); }
+async function _fcRequestInit(tpl, timeoutMs){
+  const init={signal:AbortSignal.timeout(timeoutMs)};
+  if(_fcIsOwnProxy(tpl) && auth.currentUser){
+    try{ init.headers={Authorization:'Bearer '+await auth.currentUser.getIdToken()}; }
+    catch(e){ console.warn('[Proxy] could not get ID token:',e.message); }
+  }
+  return init;
 }
 const FC_PROXY = 'https://api.allorigins.win/raw?url='; // used by the currency helper below
 // Fetches a URL through the proxy chain. Throws only if EVERY proxy failed,
@@ -2829,7 +2842,7 @@ async function _fcProxyFetch(url, timeoutMs=15000){
   const proxies=fcProxyList();
   for(let i=0;i<proxies.length;i++){
     try{
-      const resp=await fetch(_fcProxyUrl(proxies[i],url),{signal:AbortSignal.timeout(timeoutMs)});
+      const resp=await fetch(_fcProxyUrl(proxies[i],url), await _fcRequestInit(proxies[i],timeoutMs));
       if(!resp.ok){ problems.push(`proxy ${i+1}: HTTP ${resp.status}`); continue; }
       const html=await resp.text();
       // A proxy that's up but broken often returns a tiny error page/JSON blob
@@ -5262,34 +5275,6 @@ function renderAdminPage(){
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🤖 AI Prompts</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">The exact instructions sent to the AI for each kind of analysis. Read-only — shown so you can see what the AI is being asked to do.</p>
       <div id="adm-prompts-body"></div>
-    </div>
-
-    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
-      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🌐 Price-Check Proxies</h3>
-      <p style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.6">
-        FindChips doesn't allow direct browser access, so price checks are routed through a public CORS proxy.
-        These are free services — they occasionally go down or start demanding an API key, and then every price
-        check fails. Tried top to bottom until one works; one per line.
-        Use <code>{url}</code> for the encoded target URL (or <code>{url_raw}</code> for unencoded).
-        Leave empty to restore the defaults.
-      </p>
-      <textarea id="adm-fc-proxies" rows="5" spellcheck="false"
-        style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:11px;resize:vertical"></textarea>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-        <button class="btn btn-green btn-sm" id="btn-adm-fc-save">💾 Save Proxies</button>
-        <button class="btn btn-blue btn-sm" id="btn-adm-fc-test">🧪 Test Proxies</button>
-        <button class="btn btn-ghost btn-sm" id="btn-adm-fc-reset">↺ Restore Defaults</button>
-      </div>
-      <div id="adm-fc-test-out" style="margin-top:10px;font-size:11px"></div>
-    </div>
-
-    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
-      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🔧 Maintenance</h3>
-      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">One-off data-repair actions. Both are irreversible — read the confirmation prompt before continuing.</p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-red btn-sm" id="btn-normalize-db">🔧 Normalize Database (QTY=1, Units)</button>
-        <button class="btn btn-red btn-sm" id="btn-clean-legacy">🗑 Clean Legacy Data</button>
-      </div>
     </div>`);
 
   document.getElementById('btn-adm-save-keys').addEventListener('click',()=>{
@@ -5300,65 +5285,6 @@ function renderAdminPage(){
     toast('API keys saved','success');
     logAudit('ai_keys_updated',{anthropic:!!anthKey,gemini:!!geminiKey},true);
   });
-  document.getElementById('btn-clean-legacy').addEventListener('click',()=>cleanLegacyData());
-  document.getElementById('btn-normalize-db').addEventListener('click',()=>normalizeDatabaseData());
-
-  // ── Price-check proxies ──
-  const fcTa=document.getElementById('adm-fc-proxies');
-  fcTa.value=fcProxyList().join('\n');
-  document.getElementById('btn-adm-fc-save').addEventListener('click',()=>{
-    const lines=fcTa.value.split('\n').map(s=>s.trim()).filter(Boolean);
-    // Empty → clear the override so the built-in defaults take over again.
-    if(!lines.length){ localStorage.removeItem('fc_proxies'); fcTa.value=_FC_DEFAULT_PROXIES.join('\n'); }
-    else localStorage.setItem('fc_proxies',lines.join('\n'));
-    toast('Proxy list saved','success');
-    logAudit('price_proxies_updated',{count:lines.length||_FC_DEFAULT_PROXIES.length},true);
-  });
-  document.getElementById('btn-adm-fc-reset').addEventListener('click',()=>{
-    localStorage.removeItem('fc_proxies');
-    fcTa.value=_FC_DEFAULT_PROXIES.join('\n');
-    toast('Restored default proxies','success');
-  });
-  // Runs one real FindChips lookup through EACH proxy in turn and reports which
-  // ones actually work right now — turns "price check is broken" into a
-  // concrete answer without needing the browser console.
-  document.getElementById('btn-adm-fc-test').addEventListener('click',async()=>{
-    const btn=document.getElementById('btn-adm-fc-test');
-    const out=document.getElementById('adm-fc-test-out');
-    const list=fcTa.value.split('\n').map(s=>s.trim()).filter(Boolean);
-    const proxies=list.length?list:_FC_DEFAULT_PROXIES;
-    const testUrl='https://www.findchips.com/search/LM358N';
-    btn.disabled=true; btn.textContent='Testing…';
-    out.innerHTML='';
-    for(let i=0;i<proxies.length;i++){
-      const line=document.createElement('div');
-      line.style.cssText='padding:3px 0;font-family:monospace';
-      line.textContent=`⏳ ${proxies[i]}`;
-      out.appendChild(line);
-      const t0=Date.now();
-      try{
-        const resp=await fetch(_fcProxyUrl(proxies[i],testUrl),{signal:AbortSignal.timeout(15000)});
-        const ms=Date.now()-t0;
-        if(!resp.ok){ line.innerHTML=`<span style="color:#E53E3E">✗ HTTP ${resp.status}</span> — ${esc(proxies[i])}`; continue; }
-        const html=await resp.text();
-        line.innerHTML = html.length>=500
-          ? `<span style="color:#1F8B4C">✓ OK</span> (${(html.length/1024).toFixed(0)} KB, ${ms} ms) — ${esc(proxies[i])}`
-          : `<span style="color:#E53E3E">✗ empty response</span> — ${esc(proxies[i])}`;
-      }catch(e){
-        line.innerHTML=`<span style="color:#E53E3E">✗ ${esc(e.name==='TimeoutError'?'timed out':(e.message||'failed'))}</span> — ${esc(proxies[i])}`;
-      }
-    }
-    const anyOk=out.textContent.includes('✓ OK');
-    const note=document.createElement('div');
-    note.style.cssText='margin-top:8px;font-size:11px';
-    note.innerHTML = anyOk
-      ? '<span style="color:#1F8B4C">At least one proxy works — price checks should run.</span>'
-      : '<span style="color:#E53E3E">No proxy works right now. Price checks will fail until one of these comes back, or you add a working proxy above.</span>';
-    out.appendChild(note);
-    btn.disabled=false; btn.textContent='🧪 Test Proxies';
-    logSystemAudit('price_proxy_test',{tested:proxies.length,anyWorking:anyOk},anyOk);
-  });
-
   renderAdminTicketsSection();
   renderAdminLogsSection();
   renderAdminPromptsSection();
@@ -5925,56 +5851,6 @@ function openEditUserModal(u){
       closeModal(); renderSettingsUsersSection();
     }catch(e){ toast('Error: '+e.message,'error'); logAudit('user_deleted',{error:e.message},false); btn.disabled=false; btn.textContent='🗑 Delete User'; }
   });
-}
-
-// Deletes legacy pre-company-namespace root-level collections (customers/projects
-// [+nested drawings]/parts_cache) — mirrors the Windows app's delete_root_data().
-async function cleanLegacyData(){
-  if(!confirm('Delete all legacy root-level data (pre-company customers/projects/drawings/parts_cache)? This cannot be undone.')) return;
-  try{
-    const results={customers:0,projects:0,drawings:0,parts_cache:0,errors:[]};
-    for(const coll of ['customers','projects','parts_cache']){
-      const snap=await getDocs(collection(db,coll));
-      for(const d of snap.docs){
-        try{
-          if(coll==='projects'){
-            const drSnap=await getDocs(collection(db,'projects',d.id,'drawings'));
-            for(const dr of drSnap.docs){ await deleteDoc(doc(db,'projects',d.id,'drawings',dr.id)); results.drawings++; }
-          }
-          await deleteDoc(doc(db,coll,d.id)); results[coll]++;
-        }catch(e){ results.errors.push(e.message); }
-      }
-    }
-    toast(`Cleaned: ${results.customers} customers, ${results.projects} projects, ${results.drawings} drawings, ${results.parts_cache} parts`,'success');
-  }catch(e){ toast('Error: '+e.message,'error'); }
-}
-
-// One-time maintenance for the current company's Database (parts_cache): force
-// every row's QTY to 1 (it's a master catalog, not a per-order tally — see
-// saveBOMToPartStock/savePriorityImport, which now do this on every save) and
-// fold any leftover M→mm / EA→PC units (see _dbNormalizeUnit). This only needs
-// to be run once to catch rows that were saved before those functions were
-// updated — everything saved going forward already gets this automatically.
-async function normalizeDatabaseData(){
-  if(!confirm('Set QTY to 1, normalize units (M/cm→mm, EA→pc, GM→gr), and backfill Drawing Name (= Drawing # where missing) for every part in the Database? This cannot be undone.')) return;
-  try{
-    const snap=await getDocs(collection(db,'companies',companyId,'parts_cache'));
-    let count=0;
-    for(const d of snap.docs){
-      const data=d.data();
-      const patch={qty:1};
-      const normUnit=_dbNormalizeUnit(data.unit);
-      if(normUnit && normUnit!==data.unit) patch.unit=normUnit;
-      // drawing_name was never written by older versions of saveBOMToPartStock
-      // (fixed going forward) — backfill it here for existing rows so the
-      // common case (no distinct title, same as Drawing #) shows in both columns.
-      if(!data.drawing_name && data.drawing_number) patch.drawing_name=data.drawing_number;
-      await updateDoc(doc(db,'companies',companyId,'parts_cache',d.id),patch);
-      count++;
-    }
-    allParts=[];
-    toast(`Updated ${count} part(s) in the Database`,'success');
-  }catch(e){ toast('Error: '+e.message,'error'); }
 }
 
 // ── Roles section ────────────────────────────────────────────────────────────
