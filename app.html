@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.59';
+const APP_VER   = '1.8.60';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2184,10 +2184,16 @@ function _parseStructuredBOMSheet(rows){
 
     // ── Vendor / QVL child row: not its own BOM line. Supplies the
     //    manufacturer PN + name for the component above it. FIRST one wins.
+    //    MNF P/N deliberately takes the MFPN (a real manufacturer number like
+    //    "GRM426X7R103K50") rather than the customer's internal catalog number
+    //    — that's the value FindChips can actually price. The internal number
+    //    stays in Customer PN. See the no-vendor-row fallback below for the
+    //    case where a component has no MFPN at all.
     if(kind==='vendor'){
-      if(current && !current.part_number){
+      if(current && !current._hasVendorRow){
         current.part_number = cell(row,'mfpn');
         current.manufacturer = cell(row,'vendor');
+        current._hasVendorRow = true;
       }
       continue;
     }
@@ -2217,6 +2223,18 @@ function _parseStructuredBOMSheet(rows){
       _isSubAssembly:!!isSub,
     };
     out.push(rec); byKey.set(key,rec); current=rec;
+  }
+  // Fallback for components the export lists with NO vendor/QVL row at all:
+  // rather than leave MNF P/N blank, fall back to the sheet's own part number.
+  // It's the only identifier such a row has, and a blank MNF P/N would make the
+  // line unpriceable AND unsearchable. Customer PN is cleared in that case so
+  // the same value isn't shown twice in two different columns.
+  for(const r of out){
+    if(!r.part_number && r.atlantium_pn){
+      r.part_number = r.atlantium_pn;
+      r.atlantium_pn = '';
+    }
+    delete r._hasVendorRow;
   }
   return out.length?out:null;
 }
