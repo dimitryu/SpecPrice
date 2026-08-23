@@ -304,7 +304,7 @@
 
 <script type="module">
 import { initializeApp }       from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js';
-import { getAuth, onAuthStateChanged, signOut }
+import { getAuth, onAuthStateChanged, signOut, sendPasswordResetEmail }
                                from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
 import { getFirestore, doc, getDoc, getDocs, setDoc, addDoc, arrayUnion,
          updateDoc, deleteDoc, collection, query, orderBy, limit, serverTimestamp }
@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.55';
+const APP_VER   = '1.8.56';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -5298,6 +5298,15 @@ function openEditUserModal(u){
           <span>Account disabled (blocks sign-in)</span>
         </label>
       </div>
+
+      <div style="border-top:1px solid var(--border);margin:16px 0 12px"></div>
+      <label style="display:block;font-size:11px;font-weight:700;color:#4A5568;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Password</label>
+      <p style="font-size:11px;color:var(--muted);margin:0 0 10px;line-height:1.5">
+        Sends <strong>${esc(u.email||'')}</strong> a secure link to set a new sign-in password.
+        Passwords live in Firebase Authentication and can only be set by the account owner —
+        no one, including an admin, can read or type in someone else's password from here.
+      </p>
+      <button class="btn btn-blue btn-sm" id="btn-edu-pwreset" style="width:100%;justify-content:center">📧 Send Password Reset Link</button>
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
@@ -5307,6 +5316,23 @@ function openEditUserModal(u){
   </div>`);
   document.getElementById('modal-close').addEventListener('click',closeModal);
   document.getElementById('modal-cancel').addEventListener('click',closeModal);
+  document.getElementById('btn-edu-pwreset').addEventListener('click',async()=>{
+    const email=(u.email||'').trim();
+    if(!email){ toast('This user has no email address on file','error'); return; }
+    if(!confirm(`Send a password reset link to ${email}?\n\nThey'll get an email with a link to choose a new password, and can sign in with it straight away. Their current password keeps working until they complete the reset.`)) return;
+    const btn=document.getElementById('btn-edu-pwreset');
+    btn.disabled=true; btn.textContent='Sending…';
+    try{
+      await sendPasswordResetEmail(auth,email);
+      toast(`Password reset link sent to ${email}`,'success');
+      logAudit('user_password_reset_sent',{email},true);
+      btn.textContent='✓ Reset Link Sent';
+    }catch(e){
+      toast('Error: '+e.message,'error');
+      logAudit('user_password_reset_sent',{email,error:e.message},false);
+      btn.disabled=false; btn.textContent='📧 Send Password Reset Link';
+    }
+  });
   document.getElementById('btn-edu-save').addEventListener('click',async()=>{
     const role=document.getElementById('edu-role-sel').value;
     const disabled=document.getElementById('edu-disabled-chk').checked;
