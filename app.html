@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.71';
+const APP_VER   = '1.8.72';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2809,6 +2809,23 @@ const _NOTE_DOC_STD_RE=/\b(spec(?:ification)?s?|standards?|std\.?|dwg\.?|drawing
 // isn't at the mercy of a free third-party service. The public ones stay on as
 // fallbacks in case the function is ever unavailable or not yet deployed.
 const FC_OWN_PROXY = 'https://us-central1-specprice-236a2.cloudfunctions.net/priceProxy?url={url}';
+// Official Mouser/DigiKey APIs via our Cloud Function (see functions/index.js).
+// Unlike the FindChips scrape this is a documented, structured, permitted data
+// source — no HTML parsing and nothing to block — so it's the primary source
+// for the Mouser/DigiKey columns and keeps working when scraping doesn't.
+const PRICE_API_URL = 'https://us-central1-specprice-236a2.cloudfunctions.net/priceLookup';
+async function _apiPriceLookup(pn, qty){
+  if(!pn || !auth.currentUser) return null;
+  const token=await auth.currentUser.getIdToken();
+  const resp=await fetch(`${PRICE_API_URL}?pn=${encodeURIComponent(pn)}&qty=${encodeURIComponent(qty||1)}`,
+    {headers:{Authorization:'Bearer '+token}, signal:AbortSignal.timeout(45000)});
+  if(!resp.ok){
+    let msg=`HTTP ${resp.status}`;
+    try{ const j=await resp.json(); if(j&&j.error) msg=j.error; }catch{}
+    throw new Error(msg);
+  }
+  return resp.json();
+}
 const _FC_DEFAULT_PROXIES = [
   FC_OWN_PROXY,
   'https://api.allorigins.win/raw?url={url}',
@@ -3204,6 +3221,9 @@ async function runFCCheckModal(items, mode){
   document.getElementById('fc-close-x').addEventListener('click',()=>{stopped=true;closeModal();_fcRefresh();});
 
   let done=0, found=0, failures=0, lastError='';
+  // Distinct API-side problems (missing key, auth failure, vendor outage),
+  // collected so the run summary can name them once instead of per part.
+  const apiErrors=new Set();
   for(let i=0;i<items.length;i++){
     if(stopped) break;
     const it=items[i];
@@ -3220,10 +3240,52 @@ async function runFCCheckModal(items, mode){
       // Labels/markers aren't real electronic components — FindChips has
       // nothing useful to say about them, so skip the network lookup
       // entirely and use a fixed nominal price instead.
-      const res = /\b(label|marker)\b/i.test(it.description||'')
-        ? {price:'$0.2', distributor:'', stock:'', url:''}
-        : await _fcFetchPart(it.part_number, _fcTargetQty(it.qty, it.unit));
-      if(!res||res.price==='Not found'){
+      const _targetQty=_fcTargetQty(it.qty, it.unit);
+      const _isLabel=/\b(label|marker)\b/i.test(it.description||'');
+
+      // ── Primary source: the vendors' official APIs ──
+      // Structured, permitted and immune to the markup/bot-blocking problems
+      // that make scraping unreliable. Runs first so Mouser/DigiKey prices land
+      // even when the FindChips scrape fails outright.
+      let api=null;
+      if(!_isLabel){
+        try{ api=await _apiPriceLookup(it.part_number,_targetQty); }
+        catch(e){ console.warn('[Price API]',it.part_number,e.message); apiErrors.add(e.message); }
+      }
+
+      // ── Secondary: FindChips scrape, for the other distributors ──
+      // Best-effort only now — its failure must not discard a good API result.
+      let res=null, fcError='';
+      if(_isLabel){
+        res={price:'$0.2', distributor:'', stock:'', url:''};
+      } else {
+        try{ res=await _fcFetchPart(it.part_number,_targetQty); }
+        catch(e){ fcError=e.message||String(e); }
+      }
+
+      // Fold the API result in: it wins for the Mouser/DigiKey columns, and
+      // supplies the headline price too when scraping came back empty.
+      const _apiFmt=v=>v?('$'+Number(v).toFixed(4).replace(/\.?0+$/,'')):'';
+      if(api&&(api.mouser||api.digikey)){
+        if(!res||res.price==='Not found'){
+          const cheapest=[api.mouser,api.digikey].filter(Boolean)
+            .sort((a,b)=>a.price-b.price)[0];
+          res={
+            price:_apiFmt(cheapest.price),
+            distributor:api.mouser&&cheapest===api.mouser?'Mouser':'DigiKey',
+            stock:cheapest.stock||'', url:cheapest.url||'',
+            mouser_price:'', digikey_price:'',
+          };
+        }
+        if(api.mouser)  res.mouser_price =_apiFmt(api.mouser.price);
+        if(api.digikey) res.digikey_price=_apiFmt(api.digikey.price);
+      }
+      if(!res){
+        // Nothing from either source — report the scrape's error, since the API
+        // path already logged its own into apiErrors.
+        throw new Error(fcError||'no price source available');
+      }
+      if(res.price==='Not found'){
         // Show WHY nothing matched (hover for the full reason) — "Not found"
         // on its own can't distinguish "part isn't stocked" from "our parser
         // no longer understands the page".
@@ -3328,6 +3390,15 @@ async function runFCCheckModal(items, mode){
     // and show the underlying reason rather than leaving the user guessing.
     if(failures===total && total>0){
       stEl.innerHTML=`<span style="color:var(--red)">Price check failed for all ${total} part(s) — ${esc(lastError)}</span>`;
+    }
+    // Surface API-side setup problems separately — "no API key configured" is
+    // a one-time fix, not a transient failure, and shouldn't hide behind a
+    // scraping error.
+    if(apiErrors.size){
+      const note=document.createElement('div');
+      note.style.cssText='margin-top:6px;font-size:11px;color:#92400e';
+      note.textContent='Mouser/DigiKey API: '+[...apiErrors].slice(0,3).join(' · ');
+      stEl.parentElement?.appendChild(note);
     }
   }
   const stopBtn=document.getElementById('btn-fc-stop');
