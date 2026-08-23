@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.64';
+const APP_VER   = '1.8.65';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2798,25 +2798,38 @@ const _NOTE_DOC_STD_RE=/\b(spec(?:ification)?s?|standards?|std\.?|dwg\.?|drawing
 // JS port of core/findchips_scraper.py — same price-break logic
 
 // findchips.com sends no CORS headers, so the page has to come through a proxy.
-// Public proxies go down, rate-limit, or start returning error pages without
-// warning — when that happens EVERY price check fails at once, which is exactly
-// the kind of outage that looks like "the app is broken". So try several in
-// order and use the first that actually returns usable HTML.
-const FC_PROXIES = [
-  u => 'https://corsproxy.io/?url='+encodeURIComponent(u),
-  u => 'https://api.allorigins.win/raw?url='+encodeURIComponent(u),
-  u => 'https://api.codetabs.com/v1/proxy/?quest='+encodeURIComponent(u),
+// These are FREE PUBLIC proxies: they go down, start demanding an API key, or
+// begin returning error pages with no notice — and when that happens every
+// price check fails at once. Two defences:
+//   1. a fallback chain, tried in order until one returns usable HTML;
+//   2. the list is ADMIN-EDITABLE (Admin > Price-Check Proxies), so a dead
+//      proxy can be swapped for a working one without a code change.
+// Each entry is a URL template; "{url}" is replaced with the percent-encoded
+// target URL, "{url_raw}" with the unencoded one (some proxies want it plain).
+const _FC_DEFAULT_PROXIES = [
+  'https://api.allorigins.win/raw?url={url}',
+  'https://api.codetabs.com/v1/proxy/?quest={url}',
+  'https://corsproxy.io/?url={url}',
+  'https://thingproxy.freeboard.io/fetch/{url_raw}',
 ];
-const FC_PROXY = 'https://corsproxy.io/?url='; // kept for the currency helper below
+function fcProxyList(){
+  const saved=(localStorage.getItem('fc_proxies')||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  return saved.length?saved:_FC_DEFAULT_PROXIES;
+}
+function _fcProxyUrl(tpl, url){
+  return tpl.replace('{url}',encodeURIComponent(url)).replace('{url_raw}',url);
+}
+const FC_PROXY = 'https://api.allorigins.win/raw?url='; // used by the currency helper below
 // Fetches a URL through the proxy chain. Throws only if EVERY proxy failed,
 // with a message naming what went wrong — that message is surfaced in the
 // price-check table and the audit log, so a proxy outage is identifiable
 // instead of showing a bare "Error".
-async function _fcProxyFetch(url, timeoutMs=22000){
+async function _fcProxyFetch(url, timeoutMs=15000){
   const problems=[];
-  for(let i=0;i<FC_PROXIES.length;i++){
+  const proxies=fcProxyList();
+  for(let i=0;i<proxies.length;i++){
     try{
-      const resp=await fetch(FC_PROXIES[i](url),{signal:AbortSignal.timeout(timeoutMs)});
+      const resp=await fetch(_fcProxyUrl(proxies[i],url),{signal:AbortSignal.timeout(timeoutMs)});
       if(!resp.ok){ problems.push(`proxy ${i+1}: HTTP ${resp.status}`); continue; }
       const html=await resp.text();
       // A proxy that's up but broken often returns a tiny error page/JSON blob
@@ -5252,6 +5265,25 @@ function renderAdminPage(){
     </div>
 
     <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🌐 Price-Check Proxies</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.6">
+        FindChips doesn't allow direct browser access, so price checks are routed through a public CORS proxy.
+        These are free services — they occasionally go down or start demanding an API key, and then every price
+        check fails. Tried top to bottom until one works; one per line.
+        Use <code>{url}</code> for the encoded target URL (or <code>{url_raw}</code> for unencoded).
+        Leave empty to restore the defaults.
+      </p>
+      <textarea id="adm-fc-proxies" rows="5" spellcheck="false"
+        style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:11px;resize:vertical"></textarea>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-green btn-sm" id="btn-adm-fc-save">💾 Save Proxies</button>
+        <button class="btn btn-blue btn-sm" id="btn-adm-fc-test">🧪 Test Proxies</button>
+        <button class="btn btn-ghost btn-sm" id="btn-adm-fc-reset">↺ Restore Defaults</button>
+      </div>
+      <div id="adm-fc-test-out" style="margin-top:10px;font-size:11px"></div>
+    </div>
+
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🔧 Maintenance</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">One-off data-repair actions. Both are irreversible — read the confirmation prompt before continuing.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -5270,6 +5302,62 @@ function renderAdminPage(){
   });
   document.getElementById('btn-clean-legacy').addEventListener('click',()=>cleanLegacyData());
   document.getElementById('btn-normalize-db').addEventListener('click',()=>normalizeDatabaseData());
+
+  // ── Price-check proxies ──
+  const fcTa=document.getElementById('adm-fc-proxies');
+  fcTa.value=fcProxyList().join('\n');
+  document.getElementById('btn-adm-fc-save').addEventListener('click',()=>{
+    const lines=fcTa.value.split('\n').map(s=>s.trim()).filter(Boolean);
+    // Empty → clear the override so the built-in defaults take over again.
+    if(!lines.length){ localStorage.removeItem('fc_proxies'); fcTa.value=_FC_DEFAULT_PROXIES.join('\n'); }
+    else localStorage.setItem('fc_proxies',lines.join('\n'));
+    toast('Proxy list saved','success');
+    logAudit('price_proxies_updated',{count:lines.length||_FC_DEFAULT_PROXIES.length},true);
+  });
+  document.getElementById('btn-adm-fc-reset').addEventListener('click',()=>{
+    localStorage.removeItem('fc_proxies');
+    fcTa.value=_FC_DEFAULT_PROXIES.join('\n');
+    toast('Restored default proxies','success');
+  });
+  // Runs one real FindChips lookup through EACH proxy in turn and reports which
+  // ones actually work right now — turns "price check is broken" into a
+  // concrete answer without needing the browser console.
+  document.getElementById('btn-adm-fc-test').addEventListener('click',async()=>{
+    const btn=document.getElementById('btn-adm-fc-test');
+    const out=document.getElementById('adm-fc-test-out');
+    const list=fcTa.value.split('\n').map(s=>s.trim()).filter(Boolean);
+    const proxies=list.length?list:_FC_DEFAULT_PROXIES;
+    const testUrl='https://www.findchips.com/search/LM358N';
+    btn.disabled=true; btn.textContent='Testing…';
+    out.innerHTML='';
+    for(let i=0;i<proxies.length;i++){
+      const line=document.createElement('div');
+      line.style.cssText='padding:3px 0;font-family:monospace';
+      line.textContent=`⏳ ${proxies[i]}`;
+      out.appendChild(line);
+      const t0=Date.now();
+      try{
+        const resp=await fetch(_fcProxyUrl(proxies[i],testUrl),{signal:AbortSignal.timeout(15000)});
+        const ms=Date.now()-t0;
+        if(!resp.ok){ line.innerHTML=`<span style="color:#E53E3E">✗ HTTP ${resp.status}</span> — ${esc(proxies[i])}`; continue; }
+        const html=await resp.text();
+        line.innerHTML = html.length>=500
+          ? `<span style="color:#1F8B4C">✓ OK</span> (${(html.length/1024).toFixed(0)} KB, ${ms} ms) — ${esc(proxies[i])}`
+          : `<span style="color:#E53E3E">✗ empty response</span> — ${esc(proxies[i])}`;
+      }catch(e){
+        line.innerHTML=`<span style="color:#E53E3E">✗ ${esc(e.name==='TimeoutError'?'timed out':(e.message||'failed'))}</span> — ${esc(proxies[i])}`;
+      }
+    }
+    const anyOk=out.textContent.includes('✓ OK');
+    const note=document.createElement('div');
+    note.style.cssText='margin-top:8px;font-size:11px';
+    note.innerHTML = anyOk
+      ? '<span style="color:#1F8B4C">At least one proxy works — price checks should run.</span>'
+      : '<span style="color:#E53E3E">No proxy works right now. Price checks will fail until one of these comes back, or you add a working proxy above.</span>';
+    out.appendChild(note);
+    btn.disabled=false; btn.textContent='🧪 Test Proxies';
+    logSystemAudit('price_proxy_test',{tested:proxies.length,anyWorking:anyOk},anyOk);
+  });
 
   renderAdminTicketsSection();
   renderAdminLogsSection();
