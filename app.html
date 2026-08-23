@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.69';
+const APP_VER   = '1.8.70';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2836,12 +2836,19 @@ const FC_PROXY = 'https://api.allorigins.win/raw?url='; // used by the currency 
 // with a message naming what went wrong — that message is surfaced in the
 // price-check table and the audit log, so a proxy outage is identifiable
 // instead of showing a bare "Error".
-async function _fcProxyFetch(url, timeoutMs=15000){
+async function _fcProxyFetch(url, timeoutMs=0){
   const problems=[];
   const proxies=fcProxyList();
   for(let i=0;i<proxies.length;i++){
+    // Our own Cloud Function needs a MUCH longer budget than a public proxy:
+    // a cold start alone can take ~10s, and a FindChips results page is ~650 KB
+    // that it must fetch and relay. A 15s cap was timing it out before it ever
+    // had a chance to answer — which looked exactly like an outage. Public
+    // proxies keep a short leash: they're only fallbacks and a slow one just
+    // delays reaching the next.
+    const perProxyTimeout = timeoutMs || (_fcIsOwnProxy(proxies[i]) ? 60000 : 12000);
     try{
-      const resp=await fetch(_fcProxyUrl(proxies[i],url), await _fcRequestInit(proxies[i],timeoutMs));
+      const resp=await fetch(_fcProxyUrl(proxies[i],url), await _fcRequestInit(proxies[i],perProxyTimeout));
       if(!resp.ok){ problems.push(`proxy ${i+1}: HTTP ${resp.status}`); continue; }
       const html=await resp.text();
       // A proxy that's up but broken often returns a tiny error page/JSON blob
