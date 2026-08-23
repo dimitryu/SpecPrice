@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.60';
+const APP_VER   = '1.8.61';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2138,6 +2138,36 @@ function _xlsClassifyType(rawType){
 }
 const _XLS_TYPE_REVISION=/\srevision$/i;
 
+// Pulls the top-level assembly / drawing number out of the report BANNER — the
+// rows ABOVE the column header, where ERP exports print things like
+// "Part Number: | 20583410900". Handles both layouts: the label and value in
+// separate cells, and both crammed into one cell ("Part Number: 20583410900").
+// This becomes the Drawing # on every extracted row, which is far more useful
+// than the filename fallback (these files are often exported with an opaque
+// machine-generated name).
+const _XLS_BANNER_PN_LABEL=/^(part\s*(number|num|no\.?)|assembly\s*(number|no\.?)?|assy|top\s*level|drawing\s*(number|no\.?|#)|dwg\s*(no\.?|#)?)\s*:?\s*$/i;
+const _XLS_BANNER_PN_INLINE=/^(?:part\s*(?:number|num|no\.?)|assembly(?:\s*(?:number|no\.?))?|assy|drawing\s*(?:number|no\.?|#)|dwg\s*(?:no\.?|#)?)\s*[:\-]\s*(.+)$/i;
+function _xlsFindReportPartNumber(rows, hdrIdx){
+  for(let i=0;i<hdrIdx;i++){
+    const row=rows[i]||[];
+    for(let c=0;c<row.length;c++){
+      const v=String(row[c]??'').trim();
+      if(!v) continue;
+      // "Part Number: 20583410900" all in one cell
+      const inline=v.match(_XLS_BANNER_PN_INLINE);
+      if(inline && inline[1].trim()) return inline[1].trim();
+      // "Part Number:" in this cell, value in the next non-empty one
+      if(_XLS_BANNER_PN_LABEL.test(v)){
+        for(let k=c+1;k<row.length;k++){
+          const nv=String(row[k]??'').trim();
+          if(nv) return nv;
+        }
+      }
+    }
+  }
+  return '';
+}
+
 // Deterministic BOM extraction from a spreadsheet grid.
 // Why not just ask the AI: these exports are a mechanical transformation —
 // find the header, fold vendor child rows into their parent, drop the row
@@ -2168,6 +2198,9 @@ function _parseStructuredBOMSheet(rows){
   }
   if(hdrIdx<0) return null;
 
+  // Top-level assembly number from the banner above the header — stamped onto
+  // every row as its Drawing #.
+  const reportPN=_xlsFindReportPartNumber(rows, hdrIdx);
   const cell=(row,key)=>colMap[key]===undefined?'':String(row[colMap[key]]??'').trim();
   const out=[];          // components in first-seen order
   const byKey=new Map(); // dedupe key -> row already emitted
@@ -2219,7 +2252,8 @@ function _parseStructuredBOMSheet(rows){
       description:(desc.length>nm.length?desc:nm)||nm||desc,
       qty:cell(row,'qty')||'1',          // these exports frequently have no qty column
       unit:cell(row,'uom'),
-      drawing_number:'', drawing_name:'', pin_count:'', price:'',
+      drawing_number:reportPN, drawing_name:reportPN,
+      pin_count:'', price:'',
       _isSubAssembly:!!isSub,
     };
     out.push(rec); byKey.set(key,rec); current=rec;
