@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.70';
+const APP_VER   = '1.8.71';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2849,7 +2849,17 @@ async function _fcProxyFetch(url, timeoutMs=0){
     const perProxyTimeout = timeoutMs || (_fcIsOwnProxy(proxies[i]) ? 60000 : 12000);
     try{
       const resp=await fetch(_fcProxyUrl(proxies[i],url), await _fcRequestInit(proxies[i],perProxyTimeout));
-      if(!resp.ok){ problems.push(`proxy ${i+1}: HTTP ${resp.status}`); continue; }
+      if(!resp.ok){
+        // Our own proxy explains itself in JSON (e.g. "FindChips served an
+        // anti-bot page"). Surface that reason verbatim rather than reducing a
+        // precise diagnosis to a bare status code.
+        let detail=`HTTP ${resp.status}`;
+        if(_fcIsOwnProxy(proxies[i])){
+          try{ const j=await resp.json(); if(j&&j.error) detail=j.error+(j.snippet?` [page said: "${j.snippet.slice(0,120)}"]`:''); }catch{}
+        }
+        problems.push(`proxy ${i+1}: ${detail}`);
+        continue;
+      }
       const html=await resp.text();
       // A proxy that's up but broken often returns a tiny error page/JSON blob
       // instead of the real document — treat that as a failure and move on.
