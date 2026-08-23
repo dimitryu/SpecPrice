@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.68';
+const APP_VER   = '1.8.69';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3044,7 +3044,14 @@ async function _fcFetchPart(partNumber, qty=0){
   // are used — anything else is a different part and must not contribute pricing.
   const pnNorm=pn.toUpperCase();
   const candidates=[];
+  // Diagnostics: when nothing matches we need to know WHY — did the page have
+  // no distributor blocks at all (markup changed / proxy returned a stub), or
+  // did it have rows whose part numbers simply differ from what we searched?
+  // Guessing at this from the outside wasted a round-trip, so the answer is
+  // now reported straight into the price-check table.
+  const diag={sections:0, rows:0, seen:new Set()};
   for(const sec of doc.querySelectorAll('[class*="distributor-results"]')){
+    diag.sections++;
     // Which distributor this block belongs to. A visible name tag is the nicest
     // source but it's also the most fragile — FindChips changes its markup and
     // then the name comes back empty, which silently broke the Mouser/DigiKey
@@ -3080,6 +3087,14 @@ async function _fcFetchPart(partNumber, qty=0){
         ...cells.map(c=>c.textContent.trim()),
         ...[...row.querySelectorAll('a')].map(a=>a.textContent.trim()),
       ];
+      diag.rows++;
+      // Remember the part-number-ish strings this row offered, so a "Not found"
+      // can report what WAS on the page instead of just failing silently.
+      if(diag.seen.size<12){
+        for(const t of rowTexts){
+          if(t && t.length<=40 && /[0-9]/.test(t) && !t.includes('$') && !/^details$/i.test(t)) diag.seen.add(t);
+        }
+      }
       if(!rowTexts.some(t=>t.toUpperCase()===pnNorm)) continue;
 
       const texts=cells.map(c=>c.textContent.trim().replace(/\s+/g,' '));
@@ -3094,7 +3109,16 @@ async function _fcFetchPart(partNumber, qty=0){
       }
     }
   }
-  if(!candidates.length) return{price:'Not found',distributor:'',stock:'',mouser_price:'',digikey_price:'',url:fcUrl};
+  if(!candidates.length){
+    const seen=[...diag.seen].slice(0,8);
+    const why = diag.sections===0
+      ? 'no distributor blocks on the page (markup changed, or the proxy returned a stub page)'
+      : diag.rows===0
+        ? `${diag.sections} distributor block(s) but no priced rows`
+        : `${diag.rows} row(s) across ${diag.sections} block(s), none matching "${pn}" exactly` +
+          (seen.length?` — page listed: ${seen.join(', ')}`:'');
+    return{price:'Not found',distributor:'',stock:'',mouser_price:'',digikey_price:'',url:fcUrl,diag:why};
+  }
   const target=qty>0?qty:1;
   // Nearest-qty break within a given subset of candidates (ties broken by the
   // cheaper price) — the same rule used for the overall best price below.
@@ -3183,7 +3207,13 @@ async function runFCCheckModal(items, mode){
         ? {price:'$0.2', distributor:'', stock:'', url:''}
         : await _fcFetchPart(it.part_number, _fcTargetQty(it.qty, it.unit));
       if(!res||res.price==='Not found'){
-        setStatus('Not found','var(--muted)');
+        // Show WHY nothing matched (hover for the full reason) — "Not found"
+        // on its own can't distinguish "part isn't stocked" from "our parser
+        // no longer understands the page".
+        const why=res&&res.diag?res.diag:'';
+        const el=document.getElementById(`fc-st-${i}`);
+        if(el) el.innerHTML=`<span style="color:var(--muted);font-size:11px;${why?'cursor:help;text-decoration:underline dotted':''}" title="${esc(why)}">Not found${why?' ⓘ':''}</span>`;
+        if(why) console.info('[Check Price]',it.part_number,'→',why);
         const pd=document.getElementById(`fc-p-${i}`); if(pd) pd.textContent='—';
       } else {
         found++;
