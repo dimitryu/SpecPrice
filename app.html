@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.56';
+const APP_VER   = '1.8.57';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -4935,6 +4935,16 @@ function openAdminReplyModal(ticketId){
 }
 
 let _admLogsCache=[], _admLogsFilterQ='';
+// Details values (JSON payloads) are often longer than the column — collapsed to
+// one ellipsized line by default so the table stays scannable. Two ways to read
+// the full value: the "Expand details" toggle below (applies to every row), or
+// clicking a single Details cell to expand just that one.
+let _admLogsWrapDetails=false;
+function _admLogsDetailsStyle(expanded){
+  return expanded
+    ? 'font-size:11px;color:var(--muted);max-width:420px;white-space:pre-wrap;word-break:break-word;cursor:pointer'
+    : 'font-size:11px;color:var(--muted);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer';
+}
 async function renderAdminLogsSection(){
   const body=document.getElementById('adm-logs-body');
   if(!body) return;
@@ -4961,6 +4971,11 @@ function _renderAdminLogsTable(){
         <button type="button" class="search-clear" id="adm-logs-search-clear" title="Clear">✕</button>
       </div>
       <button class="btn btn-ghost" id="btn-adm-logs-refresh" style="white-space:nowrap">🔄 Refresh</button>
+      <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);white-space:nowrap;cursor:pointer"
+             title="Show the full Details value on every row instead of one truncated line. You can also click any single Details cell to expand just that row.">
+        <input type="checkbox" id="adm-logs-wrap" ${_admLogsWrapDetails?'checked':''} style="width:auto">
+        Expand details
+      </label>
       <span class="count-badge" id="adm-logs-count"></span>
     </div>
     <div class="table-wrap" style="max-height:60vh"><table>
@@ -4971,6 +4986,10 @@ function _renderAdminLogsTable(){
   wireSearchClear('adm-logs-search','adm-logs-search-clear');
   searchInp.addEventListener('input',debounce(()=>{ _admLogsFilterQ=searchInp.value; _admLogsFilterRows(); },200));
   document.getElementById('btn-adm-logs-refresh').addEventListener('click',()=>renderAdminLogsSection());
+  document.getElementById('adm-logs-wrap').addEventListener('change',e=>{
+    _admLogsWrapDetails=e.target.checked;
+    _admLogsFilterRows();
+  });
   _admLogsFilterRows();
 }
 function _admLogsFilterRows(){
@@ -4983,13 +5002,25 @@ function _admLogsFilterRows(){
     const detailsStr=typeof l.details==='object'?JSON.stringify(l.details):String(l.details||'');
     return predicate([l.user,l.action,detailsStr,l.success?'success':'failed'].map(v=>String(v||'')).join(' | ').toLowerCase());
   });
-  tbody.innerHTML=rows.map(l=>`<tr>
+  tbody.innerHTML=rows.map(l=>{
+    const detailsStr = typeof l.details==='object' ? JSON.stringify(l.details,null,_admLogsWrapDetails?1:0) : String(l.details||'');
+    return `<tr>
         <td style="white-space:nowrap;font-size:11px;color:var(--muted)">${fmtDateTime(l.timestamp)}</td>
         <td style="font-size:12px">${esc(l.user||'')}</td>
         <td style="font-size:12px;font-family:monospace">${esc(l.action||'')}</td>
-        <td style="font-size:11px;color:var(--muted);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(typeof l.details==='object'?JSON.stringify(l.details):String(l.details||''))}">${esc(typeof l.details==='object'?JSON.stringify(l.details):String(l.details||''))}</td>
+        <td class="adm-log-details" data-expanded="${_admLogsWrapDetails?'1':'0'}"
+            style="${_admLogsDetailsStyle(_admLogsWrapDetails)}"
+            title="Click to expand / collapse">${esc(detailsStr)}</td>
         <td style="text-align:center">${l.success?'<span style="color:#1F8B4C">✓</span>':'<span style="color:#E53E3E">✗</span>'}</td>
-      </tr>`).join('');
+      </tr>`;
+  }).join('');
+  // Per-row expand: lets the user open one long payload without switching the
+  // whole table to multi-line mode.
+  tbody.querySelectorAll('.adm-log-details').forEach(td=>td.addEventListener('click',()=>{
+    const expanded = td.dataset.expanded==='1';
+    td.dataset.expanded = expanded?'0':'1';
+    td.setAttribute('style',_admLogsDetailsStyle(!expanded));
+  }));
   if(countEl) countEl.textContent=`${rows.length} of ${_admLogsCache.length} (most recent 500)`;
 }
 
