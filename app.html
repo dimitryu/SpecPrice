@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.62';
+const APP_VER   = '1.8.63';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -939,6 +939,8 @@ const _PS_DEFAULT_COLS=[
   {k:'manufacturer',  l:'Manufacturer',    w:'110px'},
   {k:'price',         l:'FC Price',         w:'85px'},
   {k:'distributor',   l:'Distributor',      w:'110px'},
+  {k:'mouser_price',  l:'Mouser Price',     w:'95px'},
+  {k:'digikey_price', l:'DigiKey Price',    w:'95px'},
   {k:'priority_price',l:'Priority Price',   w:'95px'},
   {k:'own_stock',     l:'Stock',            w:'60px'},
   {k:'qty',           l:'QTY',              w:'55px'},
@@ -957,6 +959,17 @@ function _psCellHTML(k,p){
   switch(k){
     case 'price': return fcPrice?`<span class="${fcC}">${fmtPrice(fcPrice)}</span>`:'';
     case 'priority_price': return prPrice?`<span class="${prC}">${fmtPrice(prPrice)}</span>`:'';
+    // Per-distributor prices, filled by the FindChips check from the same page
+    // it already fetches (see _fcFetchPart). When both are present the cheaper
+    // of the two is green, so the better source is obvious at a glance.
+    case 'mouser_price':
+    case 'digikey_price': {
+      const mo=parseFloat(p.mouser_price)||0, dk=parseFloat(p.digikey_price)||0;
+      const v=k==='mouser_price'?mo:dk;
+      if(!v) return '';
+      const cls=(mo&&dk) ? (v<=Math.min(mo,dk)?'price-green':'price-red') : '';
+      return `<span class="${cls}">${fmtPrice(v)}</span>`;
+    }
     case 'unit': return esc(p.unit||p.units||'');
     case 'rfq_names': return esc((p.rfq_names||[]).join(', '));
     case 'updatedAt': return fmtDate(p.updatedAt);
@@ -988,7 +1001,7 @@ async function renderPartStock(filter=''){
   // never just the rows currently visible on screen.
   const sorted=[...filtered].sort((a,b)=>{
     let va=String(a[sortCol]||'').toLowerCase(), vb=String(b[sortCol]||'').toLowerCase();
-    if(['price','priority_price'].includes(sortCol)){va=parseFloat(a[sortCol])||0;vb=parseFloat(b[sortCol])||0;}
+    if(['price','priority_price','mouser_price','digikey_price'].includes(sortCol)){va=parseFloat(a[sortCol])||0;vb=parseFloat(b[sortCol])||0;}
     return sortAsc?(va<vb?-1:va>vb?1:0):(va<vb?1:va>vb?-1:0);
   });
 
@@ -2971,18 +2984,32 @@ async function _fcFetchPart(partNumber, qty=0){
       }
     }
   }
-  if(!candidates.length) return{price:'Not found',distributor:'',stock:'',url:fcUrl};
+  if(!candidates.length) return{price:'Not found',distributor:'',stock:'',mouser_price:'',digikey_price:'',url:fcUrl};
   const target=qty>0?qty:1;
-  let best=candidates[0];
-  let bestDist=Math.abs(target-best.qty);
-  for(const c of candidates.slice(1)){
-    const d=Math.abs(target-c.qty);
-    if(d<bestDist || (d===bestDist && c.price<best.price)){ best=c; bestDist=d; }
-  }
+  // Nearest-qty break within a given subset of candidates (ties broken by the
+  // cheaper price) — the same rule used for the overall best price below.
+  const _bestOf=(list)=>{
+    if(!list.length) return null;
+    let b=list[0], bd=Math.abs(target-b.qty);
+    for(const c of list.slice(1)){
+      const d=Math.abs(target-c.qty);
+      if(d<bd || (d===bd && c.price<b.price)){ b=c; bd=d; }
+    }
+    return b;
+  };
+  const _fmt=(c)=>c?'$'+c.price.toFixed(4).replace(/\.?0+$/,''):'';
+  // Per-distributor prices for the Mouser / DigiKey columns in the Database.
+  // Same page, same price-break data as the overall FC price — just filtered to
+  // that one distributor, so no extra network call is needed.
+  const mouser=_bestOf(candidates.filter(c=>/mouser/i.test(c.distributor||'')));
+  const digikey=_bestOf(candidates.filter(c=>/digi-?\s?key/i.test(c.distributor||'')));
+  const best=_bestOf(candidates);
   return {
-    price: '$'+best.price.toFixed(4).replace(/\.?0+$/,''),
+    price: _fmt(best),
     distributor: best.distributor,
     stock: best.stock,
+    mouser_price: _fmt(mouser),
+    digikey_price: _fmt(digikey),
     url: fcUrl
   };
 }
@@ -3051,6 +3078,11 @@ async function runFCCheckModal(items, mode){
       } else {
         found++;
         const priceNum=parseFloat(res.price.replace(/[^0-9.]/g,''))||0;
+        // Per-distributor prices for the Mouser / DigiKey Database columns.
+        // '' (not 0) when that distributor didn't list the part, so an absent
+        // offer stays visually blank instead of reading as a $0.00 price.
+        const mouserNum = res.mouser_price ? (parseFloat(res.mouser_price.replace(/[^0-9.]/g,''))||'') : '';
+        const digikeyNum = res.digikey_price ? (parseFloat(res.digikey_price.replace(/[^0-9.]/g,''))||'') : '';
         const pd=document.getElementById(`fc-p-${i}`); if(pd){pd.textContent=res.price;pd.style.color='var(--green)';}
         const dd=document.getElementById(`fc-d-${i}`); if(dd){dd.textContent=res.distributor||'';dd.style.color='var(--text)';}
         const sd=document.getElementById(`fc-s-${i}`); if(sd){sd.textContent=res.stock||'';sd.style.color='var(--text)';}
@@ -3062,11 +3094,13 @@ async function runFCCheckModal(items, mode){
             try{
               await updateDoc(doc(db,'companies',companyId,'parts_cache',partId),{
                 price:priceNum, distributor:res.distributor||'',
+                mouser_price:mouserNum, digikey_price:digikeyNum,
                 stock:res.stock||'', findchips_url:res.url||'',
                 updatedAt:serverTimestamp(), qty:1
               });
               const ap=allParts.find(p=>p._id===partId);
-              if(ap){ap.price=priceNum;ap.distributor=res.distributor||'';ap.stock=res.stock||'';ap.findchips_url=res.url||'';}
+              if(ap){ap.price=priceNum;ap.distributor=res.distributor||'';ap.stock=res.stock||'';ap.findchips_url=res.url||'';
+                     ap.mouser_price=mouserNum;ap.digikey_price=digikeyNum;}
             }catch(e){console.warn('FC save error:',e.message);}
           }
         } else if(mode==='sd'){
@@ -3083,11 +3117,13 @@ async function runFCCheckModal(items, mode){
               if(existing){
                 await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),{
                   price:priceNum, distributor:res.distributor||'',
+                  mouser_price:mouserNum, digikey_price:digikeyNum,
                   stock:res.stock||'', findchips_url:res.url||'',
                   updatedAt:serverTimestamp(), qty:1
                 });
                 existing.price=priceNum; existing.distributor=res.distributor||'';
                 existing.stock=res.stock||''; existing.findchips_url=res.url||'';
+                existing.mouser_price=mouserNum; existing.digikey_price=digikeyNum;
               } else {
                 const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
                 const ref=doc(db,'companies',companyId,'parts_cache',key);
@@ -3095,11 +3131,13 @@ async function runFCCheckModal(items, mode){
                   part_number:pn, description:'', drawing_number:'', manufacturer:'',
                   unit:'', atlantium_pn:'', qty:1,
                   price:priceNum, distributor:res.distributor||'', stock:res.stock||'',
+                  mouser_price:mouserNum, digikey_price:digikeyNum,
                   price_description:'', findchips_url:res.url||'',
                   updatedAt:serverTimestamp()
                 },{merge:true});
                 allParts.push({_id:key, part_number:pn, price:priceNum, qty:1,
-                  distributor:res.distributor||'', stock:res.stock||'', findchips_url:res.url||''});
+                  distributor:res.distributor||'', stock:res.stock||'', findchips_url:res.url||'',
+                  mouser_price:mouserNum, digikey_price:digikeyNum});
               }
             }
           }catch(e){ console.warn('FC->PartStock save error:',e.message); }
@@ -4825,6 +4863,8 @@ function exportPartStockExcel(rows, totalCount, cols){
       if(c.k==='updatedAt') return fmtDate(p.updatedAt);
       if(c.k==='price') return parseFloat(p.price)||'';
       if(c.k==='priority_price') return parseFloat(p.priority_price)||'';
+      if(c.k==='mouser_price') return parseFloat(p.mouser_price)||'';
+      if(c.k==='digikey_price') return parseFloat(p.digikey_price)||'';
       if(c.k==='unit') return p.unit||p.units||'';
       if(c.k==='rfq_names') return (p.rfq_names||[]).join(', ');
       return p[c.k]||'';
