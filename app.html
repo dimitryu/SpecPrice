@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.67';
+const APP_VER   = '1.8.68';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2996,6 +2996,33 @@ function _fcNearestBreakPrice(breaks,targetQty){
   return '$'+bestPrice.toFixed(4).replace(/\.?0+$/,'');
 }
 
+// Canonical distributor names, matched against the section "haystack" (visible
+// name + class + id + data-* attributes). Ordered most-specific-first.
+const _FC_DISTRIBUTORS=[
+  [/digi-?\s*key/, 'DigiKey'],
+  [/mouser/,       'Mouser'],
+  [/arrow/,        'Arrow'],
+  [/avnet/,        'Avnet'],
+  [/newark|farnell|element ?14/, 'Newark'],
+  [/rs[-_ ]?(components|online|delivers)/, 'RS Components'],
+  [/\btti\b/,      'TTI'],
+  [/heilind/,      'Heilind'],
+  [/future ?electronics/, 'Future Electronics'],
+  [/verical/,      'Verical'],
+  [/onlinecomponents/, 'OnlineComponents'],
+  [/bisco/,        'Bisco'],
+  [/allied/,       'Allied'],
+];
+function _fcPrettyDistributor(haystack){
+  for(const [re,name] of _FC_DISTRIBUTORS) if(re.test(haystack)) return name;
+  // Last resort: pull a readable slug out of a class like "distributor-results-mouser"
+  const m=String(haystack||'').match(/distributor[-_]results[-_]([a-z0-9]+)/);
+  return m ? m[1].charAt(0).toUpperCase()+m[1].slice(1) : '';
+}
+function _fcMatchesDistributor(candidate, re){
+  return re.test(candidate.distKey||'') || re.test((candidate.distributor||'').toLowerCase());
+}
+
 async function _fcFetchPart(partNumber, qty=0){
   const pn=partNumber.trim();
   if(!pn) return null;
@@ -3018,20 +3045,43 @@ async function _fcFetchPart(partNumber, qty=0){
   const pnNorm=pn.toUpperCase();
   const candidates=[];
   for(const sec of doc.querySelectorAll('[class*="distributor-results"]')){
+    // Which distributor this block belongs to. A visible name tag is the nicest
+    // source but it's also the most fragile — FindChips changes its markup and
+    // then the name comes back empty, which silently broke the Mouser/DigiKey
+    // columns (they matched against an empty string and never filled in).
+    // So build a HAYSTACK from every stable signal on the section — its class
+    // list, id and data-* attributes all carry the distributor slug — and match
+    // against that instead of one hand-picked element.
     let dist='';
     for(const sel of ['[class*="distributor-name"]','[class*="distributor-title"]','h2','h3','h4']){
       const tag=sec.querySelector(sel);
       if(tag){const t=tag.textContent.trim().replace(/\s+/g,' ');if(t.length>1&&t.length<60){dist=t;break;}}
     }
+    const distKey=[
+      dist,
+      sec.className||'',
+      sec.id||'',
+      sec.getAttribute('data-distributor')||'',
+      sec.getAttribute('data-distributor-name')||'',
+      sec.getAttribute('data-seller')||'',
+    ].join(' ').toLowerCase();
+    if(!dist) dist=_fcPrettyDistributor(distKey);   // fall back to the slug
+
     for(const row of sec.querySelectorAll('tr')){
       const cells=[...row.querySelectorAll('td')];
       if(cells.length<3) continue;
-      // Row's own part number = first non-"Details" link text in the Part # (first) cell,
-      // falling back to the raw cell text if no such link is found.
-      const linkEls=[...cells[0].querySelectorAll('a')];
-      const mpnLink=linkEls.find(a=>{const t=a.textContent.trim();return t&&!/^details$/i.test(t);});
-      const rowPn=(mpnLink?mpnLink.textContent:cells[0].textContent).trim().toUpperCase();
-      if(rowPn!==pnNorm) continue;
+      // EXACT part-number match. FindChips' results are fuzzy: searching
+      // "00100424" also lists "00100424-01", "00100424G" etc., and those are
+      // different parts whose prices must never be used. Rather than assume the
+      // Part# lives in cells[0] (column order shifts between layouts, and when
+      // it does the old check silently compared the wrong text), accept the row
+      // only if SOME cell or link in it reads exactly the searched part number.
+      const rowTexts=[
+        ...cells.map(c=>c.textContent.trim()),
+        ...[...row.querySelectorAll('a')].map(a=>a.textContent.trim()),
+      ];
+      if(!rowTexts.some(t=>t.toUpperCase()===pnNorm)) continue;
+
       const texts=cells.map(c=>c.textContent.trim().replace(/\s+/g,' '));
       const brks=_fcParsePriceBreaks(texts);
       if(!brks.length) continue;
@@ -3040,7 +3090,7 @@ async function _fcFetchPart(partNumber, qty=0){
         if(!t.includes('$')&&t.length<20){const m=t.match(/^([\d,]+)$/);if(m){stock=m[1];break;}}
       }
       for(const [bqty,bprice] of brks){
-        candidates.push({qty:bqty, price:bprice, distributor:dist, stock});
+        candidates.push({qty:bqty, price:bprice, distributor:dist, distKey, stock});
       }
     }
   }
@@ -3061,8 +3111,8 @@ async function _fcFetchPart(partNumber, qty=0){
   // Per-distributor prices for the Mouser / DigiKey columns in the Database.
   // Same page, same price-break data as the overall FC price — just filtered to
   // that one distributor, so no extra network call is needed.
-  const mouser=_bestOf(candidates.filter(c=>/mouser/i.test(c.distributor||'')));
-  const digikey=_bestOf(candidates.filter(c=>/digi-?\s?key/i.test(c.distributor||'')));
+  const mouser=_bestOf(candidates.filter(c=>_fcMatchesDistributor(c,/mouser/)));
+  const digikey=_bestOf(candidates.filter(c=>_fcMatchesDistributor(c,/digi-?\s*key/)));
   const best=_bestOf(candidates);
   return {
     price: _fmt(best),
