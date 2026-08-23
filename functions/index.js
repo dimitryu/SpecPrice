@@ -46,14 +46,40 @@ const ALLOWED_ORIGINS = [
 // in production means anyone who learns this URL can use your quota.
 const REQUIRE_AUTH = true;
 
-// findchips blocks requests that don't look like a browser, so pass a normal
-// UA and Accept header rather than the default fetch ones.
+// findchips serves a bot-challenge page to anything that doesn't look like a
+// real browser, and a request from a Google datacenter IP is already suspect —
+// so send the FULL header set a current Chrome sends, not just a User-Agent.
+// Missing client hints (sec-ch-ua / sec-fetch-*) are a common tell.
 const UPSTREAM_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-                '(KHTML, like Gecko) Chrome/122.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Cache-Control': 'no-cache',
+  'Pragma': 'no-cache',
+  'Upgrade-Insecure-Requests': '1',
+  'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
 };
+
+// Signatures of an anti-bot interstitial. Such a page is a perfectly valid HTTP
+// 200 of decent length, so without this check it sails through and the app just
+// reports a baffling "Not found" — the part is fine, we were simply blocked.
+const BLOCK_SIGNATURES = [
+  /just a moment/i,
+  /checking your browser/i,
+  /cf-browser-verification|cf_chl_|challenge-platform/i,
+  /captcha/i,
+  /access denied|permission denied|forbidden/i,
+  /unusual traffic|automated (requests|queries)|are you a robot/i,
+  /enable javascript (and cookies )?to continue/i,
+];
 
 exports.priceProxy = onRequest(
   { region: 'us-central1', timeoutSeconds: 60, memory: '256MiB', cors: false },
@@ -122,6 +148,25 @@ exports.priceProxy = onRequest(
         .replace(/<!--[\s\S]*?-->/g, '');
       res.set('X-Original-Size', String(before));
       res.set('X-Stripped-Size', String(body.length));
+
+      // Distinguish "blocked" from "genuinely no results". Both arrive as a
+      // 200, but only one is a problem we can act on — and calling it out by
+      // name saves hours of chasing a parser bug that doesn't exist.
+      const looksBlocked = BLOCK_SIGNATURES.some(re => re.test(body));
+      const hasResults = /distributor-results/i.test(body);
+      if (looksBlocked || !hasResults) {
+        const which = BLOCK_SIGNATURES.find(re => re.test(body));
+        return void res.status(502).json({
+          error: looksBlocked
+            ? `FindChips served an anti-bot page to our server (matched ${which}). ` +
+              'The part number is fine — the request was blocked, not the parsing.'
+            : 'FindChips returned a page with no distributor results — most likely a ' +
+              'block or an empty search, not a parsing problem.',
+          upstreamStatus: upstream.status,
+          bytes: body.length,
+          snippet: body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300),
+        });
+      }
 
       // Identical part numbers get re-checked often; a short shared cache cuts
       // both latency and load on the upstream site.
