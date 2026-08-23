@@ -423,7 +423,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.58';
+const APP_VER   = '1.8.59';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -587,6 +587,11 @@ function route(v){
 }
 document.getElementById('btn-home')?.addEventListener('click',()=>route('home'));
 document.getElementById('btn-support-fab')?.addEventListener('click',()=>openSupportModal());
+// Delegated so it works for BOTH drop-zone modals (RFQ + Sales Desk), which
+// are built fresh each time they're opened.
+document.addEventListener('change',e=>{
+  if(e.target?.classList?.contains('xls-subassy-chk')) _xlsIncludeSubAssemblies=e.target.checked;
+});
 
 // ── Home screen ───────────────────────────────────────────────────────────────
 const HOME_BUTTONS = {
@@ -1580,6 +1585,12 @@ function openAddDrawingModal(projectId, projectName){
         <span class="icon-big">📄</span>
         <strong>Drop PDF, Image or Excel here</strong>
         <p>or click to browse — you can select multiple files (PDF, PNG, JPG, JPEG, WEBP, BMP, XLSX, XLS, CSV). All selected files are extracted together and shown in one combined review.</p>
+        <label style="display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;color:var(--muted);margin-top:8px;cursor:pointer"
+               title="Excel only: also import sub-assembly / internal-document rows (SpecTdp, DocumentTdp). These have no manufacturer or price — off by default."
+               onclick="event.stopPropagation()">
+          <input type="checkbox" class="xls-subassy-chk" ${_xlsIncludeSubAssemblies?'checked':''} style="width:auto">
+          Excel: include sub-assembly / document rows
+        </label>
         <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.xlsx,.xlsm,.xls,.csv" multiple
                style="display:none">
       </div>
@@ -1645,10 +1656,18 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
       let _pdfText='', _pdfTextLen=0, _pdfImages=[];
       if(isXls){
         setMsg('Reading spreadsheet…', 20);
-        const sheetText = await extractExcelText(file);
-        if(!sheetText.trim()) throw new Error('the spreadsheet appears to be empty');
-        setMsg('Sending spreadsheet to AI…', 50);
-        extractedRows = await aiExtractBOM(sheetText, false, null, file.name, 'excel');
+        const sheets = await readExcelSheets(file);
+        // Structured parse first — exact and repeatable (see
+        // _parseStructuredBOMSheet). AI only for unrecognisable layouts.
+        extractedRows = parseExcelSheetsStructured(sheets) || [];
+        if(extractedRows.length){
+          setMsg(`Parsed ${extractedRows.length} component(s) from the sheet`, 90);
+        } else {
+          const sheetText = await extractExcelText(file);
+          if(!sheetText.trim()) throw new Error('the spreadsheet appears to be empty');
+          setMsg('Layout not recognised — asking AI…', 50);
+          extractedRows = await aiExtractBOM(sheetText, false, null, file.name, 'excel');
+        }
       } else if(isPDF){
         setMsg('Reading PDF pages…', 15);
         const {pageTexts, pageImages} = await extractPDFPages(file);
@@ -2082,6 +2101,147 @@ function _isSpreadsheetFile(file){
 // order and row hierarchy vary per customer, and the AI already knows how to
 // find a BOM table — this just gets the cells in front of it losslessly.
 // Blank rows/columns are dropped so the payload stays small.
+// When on, sub-assembly / internal-document rows (SpecTdp, DocumentTdp and
+// their Revisions) are imported alongside the real purchasable components.
+// Off by default: those rows have no manufacturer and no price, so they'd only
+// add noise to a quote — but some assemblies legitimately need them listed.
+let _xlsIncludeSubAssemblies=false;
+
+// Column-name aliases for the deterministic spreadsheet parser below. Matched
+// case-insensitively against the detected header row.
+const _XLS_COL_ALIASES={
+  internal_pn : ['part num','part number','partnumber','part no','item id','catalog','catalog no','internal pn','cust pn','customer pn','מק"ט','מקט'],
+  name        : ['name','title','part name'],
+  description : ['description','desc','long description','item description','תיאור','תאור'],
+  uom         : ['uom','unit','units','u/m','unit of measure',"יח'"],
+  type        : ['type','row type','record type','level type'],
+  mfpn        : ['mfpn','mpn','mfg pn','mfr pn','manufacturer pn','manufacturer part number','vendor pn','nfpn'],
+  vendor      : ['vendor','manufacturer','mfg','supplier','maker','יצרן','ספק'],
+  qty         : ['qty','quantity',"no. req'd",'no req','amount','usage','required','כמות'],
+  item        : ['item','item no','seq','#','no.','line'],
+  status      : ['nfpn status','status','approval','approval status'],
+};
+// Row-TYPE semantics in hierarchical ERP/PLM exports (ELBIT "BOM QVL Report"
+// and friends). Classified with ANCHORED patterns on purpose: a loose
+// substring test is actively dangerous here — "StdPart" happens to contain the
+// letters "tdp", so a /tdp/ test silently swallows every real component.
+// Returns: 'vendor' | 'subassembly' | 'component'.
+function _xlsClassifyType(rawType){
+  // "<Type> Revision" rows restate an existing row — same class, handled as a
+  // duplicate by the caller — so strip the suffix before classifying.
+  const t=String(rawType||'').trim().toLowerCase().replace(/\s+revision$/,'').trim();
+  if(!t) return 'component';                                          // no type column at all
+  if(/^(qvl|avl)$|qualified\s*vendor|approved\s*vendor/.test(t)) return 'vendor';
+  if(/^std\s*part$|^part$|^component$|^item$/.test(t)) return 'component';
+  if(/tdp$|^document|^spec\b|^assembly$|^drawing$|^phantom$/.test(t)) return 'subassembly';
+  return 'component';
+}
+const _XLS_TYPE_REVISION=/\srevision$/i;
+
+// Deterministic BOM extraction from a spreadsheet grid.
+// Why not just ask the AI: these exports are a mechanical transformation —
+// find the header, fold vendor child rows into their parent, drop the row
+// types that aren't real parts, dedupe. An LLM does that inconsistently on a
+// long sheet (it returned 8 rows for a file with 5 unique components), while
+// the rules themselves are exact. The AI is kept only as a fallback for files
+// with no recognisable header row (see handleFiles/handleSDFiles).
+// Returns null when the sheet doesn't look like a structured BOM at all.
+function _parseStructuredBOMSheet(rows){
+  const norm=s=>String(s??'').trim().toLowerCase();
+  // 1. Find the header row — the first row within the top 30 that matches at
+  //    least two known column names (a title/date banner won't).
+  let hdrIdx=-1, colMap=null;
+  for(let i=0;i<Math.min(30,rows.length);i++){
+    const cells=(rows[i]||[]).map(norm);
+    const map={};
+    cells.forEach((c,ci)=>{
+      if(!c) return;
+      for(const key in _XLS_COL_ALIASES){
+        if(map[key]!==undefined) continue;
+        if(_XLS_COL_ALIASES[key].includes(c)) map[key]=ci;
+      }
+    });
+    const hits=Object.keys(map).length;
+    if(hits>=2 && (map.internal_pn!==undefined||map.mfpn!==undefined||map.description!==undefined||map.name!==undefined)){
+      hdrIdx=i; colMap=map; break;
+    }
+  }
+  if(hdrIdx<0) return null;
+
+  const cell=(row,key)=>colMap[key]===undefined?'':String(row[colMap[key]]??'').trim();
+  const out=[];          // components in first-seen order
+  const byKey=new Map(); // dedupe key -> row already emitted
+  let current=null;      // last emitted component, for attaching its vendor rows
+
+  for(let i=hdrIdx+1;i<rows.length;i++){
+    const row=rows[i]||[];
+    if(!row.some(c=>String(c??'').trim())) continue;
+    const type=cell(row,'type');
+    const pn=cell(row,'internal_pn');
+    const nm=cell(row,'name');
+    const desc=cell(row,'description');
+    const kind=_xlsClassifyType(type);
+
+    // ── Vendor / QVL child row: not its own BOM line. Supplies the
+    //    manufacturer PN + name for the component above it. FIRST one wins.
+    if(kind==='vendor'){
+      if(current && !current.part_number){
+        current.part_number = cell(row,'mfpn');
+        current.manufacturer = cell(row,'vendor');
+      }
+      continue;
+    }
+    // ── Sub-assembly / internal document row.
+    const isSub = kind==='subassembly';
+    if(isSub && !_xlsIncludeSubAssemblies){ current=null; continue; }
+    // A "... Revision" row is a historical restatement of the row it belongs
+    // to — never a separate part. Skip, but keep `current` so any vendor rows
+    // that follow still attach to the right component.
+    if(_XLS_TYPE_REVISION.test(type)) continue;
+    // Must carry some identity to be a real row.
+    if(!pn && !nm && !desc) continue;
+
+    const key=(pn||nm||desc).toLowerCase();
+    if(byKey.has(key)){ current=byKey.get(key); continue; } // already emitted — reuse for vendor attachment
+
+    const rec={
+      item:cell(row,'item'),
+      atlantium_pn:pn,
+      part_number:'',                    // filled from the QVL row that follows
+      manufacturer:'',
+      // Prefer the longer of Name / Description — exports often truncate one.
+      description:(desc.length>nm.length?desc:nm)||nm||desc,
+      qty:cell(row,'qty')||'1',          // these exports frequently have no qty column
+      unit:cell(row,'uom'),
+      drawing_number:'', drawing_name:'', pin_count:'', price:'',
+      _isSubAssembly:!!isSub,
+    };
+    out.push(rec); byKey.set(key,rec); current=rec;
+  }
+  return out.length?out:null;
+}
+
+// Reads every sheet into raw row arrays — the shared input for both the
+// deterministic parser and the AI text fallback.
+async function readExcelSheets(file){
+  if(!window.XLSX) throw new Error('Excel library not loaded — please reload the page');
+  const ab=await file.arrayBuffer();
+  const wb=XLSX.read(ab,{type:'array'});
+  return wb.SheetNames.map(name=>({
+    name,
+    rows: XLSX.utils.sheet_to_json(wb.Sheets[name],{header:1,raw:false,defval:''})
+  }));
+}
+// Runs the deterministic parser over each sheet, returning the first sheet that
+// yields real BOM rows. null → hand the file to the AI instead.
+function parseExcelSheetsStructured(sheets){
+  for(const s of sheets){
+    const rows=_parseStructuredBOMSheet(s.rows);
+    if(rows && rows.length) return rows;
+  }
+  return null;
+}
+
 async function extractExcelText(file){
   if(!window.XLSX) throw new Error('Excel library not loaded — please reload the page');
   const ab=await file.arrayBuffer();
@@ -4249,6 +4409,12 @@ function openSDFileModal(){
         <span class="icon-big">📄</span>
         <strong>Drop PDF, Image or Excel here</strong>
         <p>PDF / PNG / JPG / XLSX / XLS / CSV — parts will be added to Sales Desk. You can select multiple files, extracted together into one review.</p>
+        <label style="display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;color:var(--muted);margin-top:8px;cursor:pointer"
+               title="Excel only: also import sub-assembly / internal-document rows (SpecTdp, DocumentTdp). These have no manufacturer or price — off by default."
+               onclick="event.stopPropagation()">
+          <input type="checkbox" class="xls-subassy-chk" ${_xlsIncludeSubAssemblies?'checked':''} style="width:auto">
+          Excel: include sub-assembly / document rows
+        </label>
         <input type="file" id="sd-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.xlsx,.xlsm,.xls,.csv" multiple style="display:none">
       </div>
     </div>
@@ -4302,10 +4468,18 @@ async function handleSDFiles(files){
 
       if(isXls){
         setM('Reading spreadsheet…',20);
+        const sheets=await readExcelSheets(file);
         const sheetText=await extractExcelText(file);
-        if(!sheetText.trim()) throw new Error('the spreadsheet appears to be empty');
-        setM('Sending spreadsheet to AI…',50);
-        extractedRows=await aiExtractBOM(sheetText,false,null,file.name,'excel');
+        // Structured parse first — exact and repeatable (see
+        // _parseStructuredBOMSheet). AI only for unrecognisable layouts.
+        extractedRows=parseExcelSheetsStructured(sheets)||[];
+        if(extractedRows.length){
+          setM(`Parsed ${extractedRows.length} component(s) from the sheet`,60);
+        } else {
+          if(!sheetText.trim()) throw new Error('the spreadsheet appears to be empty');
+          setM('Layout not recognised — asking AI…',50);
+          extractedRows=await aiExtractBOM(sheetText,false,null,file.name,'excel');
+        }
         // Keep the sheet text as the "drawing text" for the cable-process and
         // notes analyses below — there's no page image for a spreadsheet, so
         // those run in text mode off the same content.
