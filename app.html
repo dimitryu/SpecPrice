@@ -425,7 +425,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.80';
+const APP_VER   = '1.8.81';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -1858,8 +1858,13 @@ function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
   const modalEl=body.closest('.modal');
   if(modalEl){ modalEl.style.width='min(94vw,1200px)'; modalEl.style.maxWidth='1200px'; }
 
-  const tBody = rows.map((r,i)=>`<tr data-i="${i}">
-    ${PCOLS.map(k=>`<td contenteditable="true" data-k="${k}" data-i="${i}" style="min-width:70px">${esc(r[k]||'')}</td>`).join('')}
+  // Tool rows are highlighted here too — this preview is the moment the user
+  // first sees them, and it's the only place they can be removed before they
+  // reach the Database. Discovering a synthesized row later, in a quote, is far
+  // more confusing than seeing it flagged at the point it's introduced.
+  const tBody = rows.map((r,i)=>`<tr data-i="${i}"${_toolRowAttrs(r)}>
+    ${PCOLS.map(k=>`<td contenteditable="true" data-k="${k}" data-i="${i}" style="min-width:70px">${esc(r[k]||'')}${
+      k==='description' && _sdIsToolRow(r) ? _TOOL_TAG : ''}</td>`).join('')}
     <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
   </tr>`).join('');
 
@@ -4120,6 +4125,7 @@ function _sdRecalcLaborTotal(r){
 }
 function _sdRecalcRow(r){ _sdRecalcTotal(r); _sdRecalcLaborTotal(r); return r; }
 const _SD_UNIT_OPTIONS=['','pc','mm','gr'];
+const _TOOL_TAG='<span style="margin-inline-start:6px;padding:1px 6px;border-radius:8px;background:#F59E0B;color:#fff;font-size:9px;font-weight:700;vertical-align:middle">TOOL</span>';
 function _sdCellHTML(k,r,i){
   // Does this row have ANY quotable price? Used below to flag rows that still
   // need a number typed in by hand.
@@ -4132,8 +4138,9 @@ function _sdCellHTML(k,r,i){
            placeholder="Part #" style="width:100%;min-width:80px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
     case 'drawing_number': return `<input type="text" class="sd-drawing-number" data-i="${i}" value="${esc(r.drawing_number||'')}"
            style="width:100%;min-width:70px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
-    case 'description': return `<input type="text" class="sd-description" data-i="${i}" value="${esc(r.description||'')}"
-           style="width:100%;min-width:140px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
+    case 'description': return `<span style="display:flex;align-items:center;gap:4px"><input type="text" class="sd-description" data-i="${i}" value="${esc(r.description||'')}"
+           style="flex:1;min-width:120px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">${
+           _sdIsToolRow(r)?_TOOL_TAG:''}</span>`;
     case 'qty': return `<input type="number" class="sd-qty" data-i="${i}" value="${r.qty??''}" min="0.001" step="any"
            style="width:60px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
     case 'unit': return `<select class="sd-unit" data-i="${i}" style="padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px">
@@ -4530,6 +4537,17 @@ function _sdActiveGeneralLaborMinutes(){
 // "Tools" line in Cost Summary instead of being folded silently into Parts
 // Total, since a tool is a one-time purchase for the job, not a per-cable part.
 function _sdIsToolRow(r){ return /\btool\b/i.test(String(r.description||'')); }
+// A crimp/insertion TOOL row is SYNTHESIZED by the AI — it is not a line that
+// appeared on the customer's BOM. It also behaves differently from every other
+// row: it never enters the cable price (see _sdComputeSummary). Both facts are
+// invisible from the row itself, which has caused the tool to be read as just
+// another part. Amber tint + left bar + a TOOL tag, applied everywhere such a
+// row is shown, so the distinction is unmissable rather than inferred.
+const _TOOL_ROW_STYLE='background:#FFFBEB;box-shadow:inset 3px 0 0 #F59E0B';
+const _TOOL_ROW_TITLE='Added automatically by the drawing analysis — not a line from the customer BOM. Tools are quoted separately and never included in the cable price.';
+function _toolRowAttrs(r){
+  return _sdIsToolRow(r) ? ` style="${_TOOL_ROW_STYLE}" title="${esc(_TOOL_ROW_TITLE)}"` : '';
+}
 
 // Whether a TOOL row's part number is marked "in Stock" in the Database RIGHT
 // NOW — checked live against allParts every time it's needed (Cost Summary
@@ -4647,7 +4665,7 @@ async function renderSalesDesk(){
     }
     const tbody=visibleIdx.map(i=>{
       const r=sdItems[i];
-      return `<tr data-i="${i}">
+      return `<tr data-i="${i}"${_toolRowAttrs(r)}>
       <td style="text-align:center"><input type="checkbox" class="sd-check" data-i="${i}"></td>
       ${SD_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${_sdCellHTML(c.k,r,i)}</td>`).join('')}
       <td><button class="btn btn-red btn-sm" data-i="${i}">✕</button></td>
@@ -4768,10 +4786,10 @@ async function renderSalesDesk(){
             <span>FINAL PRICE</span>
             <span id="sd-final">$0.00</span>
           </div>
-          <!-- Doubled from 11px: this warning says the headline number is NOT
+          <!-- Raised from 11px: this warning says the headline number is NOT
                what the customer will actually pay. At footnote size it read as
                a footnote, which is exactly the wrong impression. -->
-          <div id="sd-tools-note" style="display:none;font-size:22px;color:#92400e;background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;padding:10px 12px;margin-top:8px;line-height:1.45;font-weight:600"></div>
+          <div id="sd-tools-note" style="display:none;font-size:16px;color:#92400e;background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;padding:9px 11px;margin-top:8px;line-height:1.45;font-weight:600"></div>
           <div id="sd-tools-stock-note" style="display:none;font-size:11px;color:#1F8B4C;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:4px;padding:5px 8px;margin-top:6px"></div>
         </div>
         <button class="btn btn-green" style="width:100%;padding:10px;justify-content:center" id="btn-sd-export">📊 Export to Excel</button>
