@@ -387,9 +387,10 @@ exports.priceLookup = onRequest(
 
     // Both vendors are queried in parallel and failures are isolated: a missing
     // key or a vendor outage must never take the other one down with it.
-    const mouserKey = MOUSER_API_KEY.value();
-    const dkId = DIGIKEY_CLIENT_ID.value();
-    const dkSecret = DIGIKEY_CLIENT_SECRET.value();
+    const creds = await getCredentials();
+    const mouserKey = creds.mouser_api_key;
+    const dkId = creds.digikey_client_id;
+    const dkSecret = creds.digikey_client_secret;
 
     await Promise.all([
       (async () => {
@@ -406,5 +407,215 @@ exports.priceLookup = onRequest(
 
     res.set('Cache-Control', 'private, max-age=900');
     return void res.status(200).json(out);
+  }
+);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * CREDENTIAL STORAGE — Admin UI ➜ Firestore ➜ Cloud Function
+ * ---------------------------------------------------------------------------
+ * The Anthropic/Gemini keys live in each admin's localStorage because the
+ * BROWSER calls those APIs directly. Mouser and DigiKey are different: only
+ * this Cloud Function ever talks to them, so the credentials must live
+ * server-side — and, critically, must NEVER be readable by the browser.
+ *
+ * They're kept in Firestore at secure_config/distributor_api, a path that
+ * firestore.rules denies to every client for both read AND write. That looks
+ * like a mistake but is the whole point: the Admin SDK used here bypasses
+ * security rules entirely, so this function can read and write the document
+ * while no browser — not even a logged-in admin's, not even one running
+ * hand-crafted SDK calls from the console — can fetch it.
+ *
+ * So the admin form POSTs new values to this function (which checks the
+ * caller really is an admin) and only ever GETs back a "configured / not
+ * configured" status. The secrets travel in one direction and never come back.
+ *
+ * Secret Manager remains a fallback, so an install configured with
+ * `firebase functions:secrets:set` keeps working untouched.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+const CONFIG_DOC = 'secure_config/distributor_api';
+const CRED_FIELDS = ['mouser_api_key', 'digikey_client_id', 'digikey_client_secret'];
+
+// A price check runs one lookup per part, so re-reading Firestore for every
+// row would add a pointless round-trip to each. 60s is short enough that a
+// credential change takes effect almost immediately.
+let _credCache = null, _credCacheExp = 0;
+
+async function getCredentials() {
+  if (_credCache && Date.now() < _credCacheExp) return _credCache;
+
+  // Secret Manager first, so an existing CLI-configured deployment is unaffected.
+  const out = {
+    mouser_api_key: safeSecret(MOUSER_API_KEY),
+    digikey_client_id: safeSecret(DIGIKEY_CLIENT_ID),
+    digikey_client_secret: safeSecret(DIGIKEY_CLIENT_SECRET),
+  };
+
+  try {
+    const snap = await admin.firestore().doc(CONFIG_DOC).get();
+    if (snap.exists) {
+      const d = snap.data() || {};
+      // Firestore wins where it has a value — it's the one an admin can change
+      // from the UI without a redeploy.
+      for (const f of CRED_FIELDS) if (d[f]) out[f] = String(d[f]).trim();
+    }
+  } catch (e) {
+    console.warn('[creds] Firestore read failed, using Secret Manager only:', e.message);
+  }
+
+  _credCache = out;
+  _credCacheExp = Date.now() + 60000;
+  return out;
+}
+
+// defineSecret().value() throws if the secret was never set, which would take
+// down the whole request — treat "not configured" as empty instead.
+function safeSecret(param) {
+  try { return (param.value() || '').trim(); } catch { return ''; }
+}
+
+function toIso(v) {
+  try {
+    if (!v) return null;
+    if (typeof v.toDate === 'function') return v.toDate().toISOString();
+    if (v instanceof Date) return v.toISOString();
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  } catch { return null; }
+}
+
+// Enough to confirm you pasted the right key, useless to anyone who steals it.
+function hint(v) {
+  const s = String(v || '');
+  return s.length > 4 ? '…' + s.slice(-4) : (s ? '…' : '');
+}
+
+// Being an authenticated user is not enough here — these credentials are
+// billable and shared, so writing them requires the 'admin' role, read from
+// the same users/{uid}.role field firestore.rules uses.
+async function requireAdmin(req) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!token) throw Object.assign(new Error('Missing auth token'), { code: 401 });
+
+  let decoded;
+  try { decoded = await admin.auth().verifyIdToken(token); }
+  catch { throw Object.assign(new Error('Invalid auth token'), { code: 401 }); }
+
+  const snap = await admin.firestore().doc(`users/${decoded.uid}`).get();
+  const role = snap.exists ? (snap.data() || {}).role : '';
+  if (role !== 'admin') {
+    throw Object.assign(new Error('Admin role required'), { code: 403 });
+  }
+  return decoded;
+}
+
+exports.apiConfig = onRequest(
+  {
+    region: 'us-central1',
+    timeoutSeconds: 60,
+    memory: '256MiB',
+    cors: false,
+    secrets: [MOUSER_API_KEY, DIGIKEY_CLIENT_ID, DIGIKEY_CLIENT_SECRET],
+  },
+  async (req, res) => {
+    const origin = req.headers.origin || '';
+    const originAllowed = !origin || ALLOWED_ORIGINS.some(re => re.test(origin));
+    if (origin && originAllowed) res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Authorization,Content-Type');
+    res.set('Access-Control-Max-Age', '3600');
+    res.set('Cache-Control', 'no-store');
+
+    if (req.method === 'OPTIONS') return void res.status(204).send('');
+    if (!originAllowed) return void res.status(403).json({ error: `Origin not allowed: ${origin}` });
+
+    let user;
+    try { user = await requireAdmin(req); }
+    catch (e) { return void res.status(e.code || 401).json({ error: e.message }); }
+
+    try {
+      // ── Read: status only, never the values ──
+      if (req.method === 'GET') {
+        const creds = await getCredentials();
+        let meta = {};
+        try {
+          const snap = await admin.firestore().doc(CONFIG_DOC).get();
+          if (snap.exists) meta = snap.data() || {};
+        } catch { /* status still useful without metadata */ }
+
+        return void res.status(200).json({
+          mouser: {
+            configured: !!creds.mouser_api_key,
+            hint: hint(creds.mouser_api_key),
+            source: meta.mouser_api_key ? 'ui' : (creds.mouser_api_key ? 'secret-manager' : null),
+          },
+          digikey: {
+            configured: !!(creds.digikey_client_id && creds.digikey_client_secret),
+            clientIdHint: hint(creds.digikey_client_id),
+            secretHint: hint(creds.digikey_client_secret),
+            source: meta.digikey_client_id ? 'ui' : (creds.digikey_client_id ? 'secret-manager' : null),
+          },
+          // Normally a Firestore Timestamp, but tolerate a plain Date or an
+          // ISO string too — a stale field format must not 500 the whole panel
+          // and hide the configured/not answer the admin actually came for.
+          updatedAt: toIso(meta.updatedAt),
+          updatedBy: meta.updatedBy || '',
+        });
+      }
+
+      if (req.method !== 'POST') return void res.status(405).json({ error: 'Use GET or POST' });
+
+      const body = req.body || {};
+
+      // ── Live test: prove the credentials actually work ──
+      // Saving a typo'd key looks identical to saving a good one until the
+      // next price check fails, so let the admin verify on the spot.
+      if (body.action === 'test') {
+        const creds = await getCredentials();
+        const pn = String(body.pn || '').trim() || '1-794610-2';
+        const result = { pn, mouser: null, digikey: null };
+
+        result.mouser = !creds.mouser_api_key
+          ? { ok: false, message: 'No API key saved' }
+          : await lookupMouser(pn, 1, creds.mouser_api_key).then(
+              r => ({ ok: true, message: r ? `Found — $${r.price} @ qty ${r.breakQty}` : 'Connected, but this part was not found' }),
+              e => ({ ok: false, message: e.message }));
+
+        result.digikey = !(creds.digikey_client_id && creds.digikey_client_secret)
+          ? { ok: false, message: 'No credentials saved' }
+          : await lookupDigiKey(pn, 1, creds.digikey_client_id, creds.digikey_client_secret).then(
+              r => ({ ok: true, message: r ? `Found — $${r.price} @ qty ${r.breakQty}` : 'Connected, but this part was not found' }),
+              e => ({ ok: false, message: e.message }));
+
+        return void res.status(200).json(result);
+      }
+
+      // ── Write ──
+      const update = {};
+      const changed = [];
+      for (const f of CRED_FIELDS) {
+        if (!(f in body)) continue;             // field omitted → leave as-is
+        const v = String(body[f] == null ? '' : body[f]).trim();
+        // An empty string is a deliberate "clear this credential", which is how
+        // an admin revokes one. Blank fields the UI didn't submit never get here.
+        update[f] = v;
+        changed.push(f);
+      }
+      if (!changed.length) return void res.status(400).json({ error: 'Nothing to update' });
+
+      update.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+      update.updatedBy = user.email || user.uid;
+      await admin.firestore().doc(CONFIG_DOC).set(update, { merge: true });
+      _credCache = null; // force the next lookup to pick up the new values
+
+      // Deliberately logged without any credential material.
+      console.log(`[apiConfig] ${user.email || user.uid} updated: ${changed.join(', ')}`);
+      return void res.status(200).json({ ok: true, updated: changed });
+    } catch (e) {
+      console.error('[apiConfig]', e);
+      return void res.status(500).json({ error: e.message || 'Internal error' });
+    }
   }
 );
