@@ -569,6 +569,7 @@ exports.apiConfig = onRequest(
       // ── Live test: prove the credentials actually work ──
       // Saving a typo'd key looks identical to saving a good one until the
       // next price check fails, so let the admin verify on the spot.
+      // Tests the SAVED credentials — so click Save before Test.
       if (body.action === 'test') {
         const creds = await getCredentials();
         const pn = String(body.pn || '').trim() || '1-794610-2';
