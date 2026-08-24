@@ -425,7 +425,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.83';
+const APP_VER   = '1.8.84';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3166,7 +3166,21 @@ async function runFCCheckModal(items, mode){
   let stopped=false;
   const total=items.length;
 
-  const money=v=>v>0?('$'+(+v).toFixed(4).replace(/\.?0+$/,'')):'';
+  const money=v=>v>0?('$'+(+v).toFixed(2)):'';
+  // Unit prices need more places than line totals: a connector at $0.0032 and
+  // one at $0.0089 are both "$0.00" at two decimals, which would make the QVL
+  // comparison tooltip look like it picked at random.
+  const moneyUnit=v=>v>0?('$'+(+v).toFixed(4).replace(/\.?0+$/,'')):'';
+  // Every price column in this modal shows the TOTAL for the row's quantity,
+  // not a per-unit figure. That's the number being decided on, and it's the
+  // only basis on which the three sources are comparable at all: Priority
+  // quotes cable per METRE while the distributors quote per FOOT, so ranking
+  // per-unit numbers made Priority look ~3x dearer than it is.
+  const _lineCost=(it,field,price)=>{
+    const p=parseFloat(price)||0;
+    if(!p) return 0;
+    return _sdLineCost({qty:it.qty, unit:it.unit, [field]:p}, field);
+  };
 
   showModal(`<div class="modal" style="width:min(96vw,900px)">
     <div class="modal-head"><h3>🔍 Check Price</h3><button class="close-modal" id="fc-close-x">✕</button></div>
@@ -3176,7 +3190,11 @@ async function runFCCheckModal(items, mode){
       <div style="max-height:340px;overflow:auto;margin-top:12px">
         <table style="width:100%;font-size:12px" id="fc-res-table">
           <thead><tr style="position:sticky;top:0;background:#fff">
-            <th>MNF P/N</th><th>Manufacturer</th><th>QTY</th><th>DigiKey</th><th>Mouser</th><th>Priority</th><th>Stock</th><th>Status</th>
+            <th>MNF P/N</th><th>Manufacturer</th><th>QTY</th>
+            <th title="Total for the row's QTY, not a per-unit price">DigiKey</th>
+            <th title="Total for the row's QTY, not a per-unit price">Mouser</th>
+            <th title="Total for the row's QTY, not a per-unit price">Priority</th>
+            <th>Stock</th><th>Status</th>
           </tr></thead>
           <tbody id="fc-res-tbody">
             ${items.map((it,i)=>`<tr id="fc-row-${i}">
@@ -3187,7 +3205,7 @@ async function runFCCheckModal(items, mode){
               <td>${it.qty||1}</td>
               <td id="fc-dk-${i}" style="color:var(--muted)">—</td>
               <td id="fc-mo-${i}" style="color:var(--muted)">—</td>
-              <td id="fc-pr-${i}" style="color:var(--muted)">${money(parseFloat(it.priority_price)||0)||'—'}</td>
+              <td id="fc-pr-${i}" style="color:var(--muted)">${money(_lineCost(it,'priority_price',parseFloat(it.priority_price)||0))||'—'}</td>
               <td id="fc-s-${i}" style="color:var(--muted)">—</td>
               <td id="fc-st-${i}"><span class="ring" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle"></span></td>
             </tr>`).join('')}
@@ -3207,7 +3225,8 @@ async function runFCCheckModal(items, mode){
           <span><strong style="color:var(--red)">red text</strong> the lookup failed — hover for the reason</span>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:4px;border-top:1px dashed var(--border);padding-top:5px">
-          <span>Prices: <strong style="color:var(--green)">green</strong> = cheapest of the three, <strong style="color:var(--red)">red</strong> = dearest</span>
+          <span><strong>Prices are the TOTAL for the row's QTY</strong>, not per unit — that's the only basis on which the three sources compare (Priority quotes per metre, the distributors per foot)</span>
+          <span><strong style="color:var(--green)">green</strong> = cheapest of the three, <strong style="color:var(--red)">red</strong> = dearest</span>
           <span><strong>Stock 0</strong> = the vendor carries it but has none on hand</span>
         </div>
       </div>
@@ -3316,7 +3335,7 @@ async function runFCCheckModal(items, mode){
         const pnEl=document.getElementById(`fc-pn-${i}`);
         if(pnEl){
           const lines=compared.map(c=>
-            `${c.pn} — ${c.error?('error: '+c.error):(c.price>0?money(c.price):(c.found?'listed, no price':'not found'))}`
+            `${c.pn} — ${c.error?('error: '+c.error):(c.price>0?moneyUnit(c.price)+' /unit':(c.found?'listed, no price':'not found'))}`
           ).join('\n');
           pnEl.innerHTML=`${esc(chosenPn)}<span style="margin-left:5px;padding:1px 5px;border-radius:8px;background:#DCFCE7;color:#166534;font-size:9px;font-weight:700;cursor:help" title="${esc('Cheapest of '+candidates.length+' QVL-approved alternatives:\n\n'+lines)}">best of ${candidates.length}</span>`;
         }
@@ -3324,7 +3343,12 @@ async function runFCCheckModal(items, mode){
 
       const dkNum = r.digikey ? r.digikey.price : '';
       const moNum = r.mouser  ? r.mouser.price  : '';
-      paintRow(i, dkNum||0, moNum||0, prPrice);
+      // Stored per-unit (that's what the columns elsewhere hold), displayed as
+      // the line total for this row's quantity.
+      paintRow(i,
+        _lineCost(it,'digikey_price',dkNum),
+        _lineCost(it,'mouser_price',moNum),
+        _lineCost(it,'priority_price',prPrice));
 
       // Stock is shown for every listed part, in stock or not — 0 is a useful
       // answer ("they carry it, none on hand"), quite different from a blank.
@@ -3352,7 +3376,7 @@ async function runFCCheckModal(items, mode){
         ? `Listed by ${r.best.name} as "${r.best.mpn}"${r.best.status?` (${r.best.status})`:''} but no price is published — usually non-stocked or quote-only.`
         : (r.best.exact ? '' : `Matched ${r.best.name} part "${r.best.mpn}" — punctuation/zero-padding differs from "${it.part_number}"`);
       if(savedVs>pick.price){
-        tip=(tip?tip+'\n\n':'')+`Cheapest QVL alternative: ${money(pick.price)} vs ${money(savedVs)} for the dearest approved option.`;
+        tip=(tip?tip+'\n\n':'')+`Cheapest QVL alternative: ${moneyUnit(pick.price)}/unit vs ${moneyUnit(savedVs)}/unit for the dearest approved option.`;
       }
       setStatus(i, glyph, noPrice?'#B45309':'var(--green)', tip);
 
@@ -4890,8 +4914,15 @@ async function renderSalesDesk(){
         const origQty=String(p.qty||'').trim();
         const qty = hadSelection ? ((qtyOverride!==1||!origQty) ? qtyOverride : (parseFloat(origQty)||1)) : (parseFloat(p.qty)||1);
         const item={part_number:p.part_number||'',description:p.description||'',
+          // Everything the Database already knows about this part comes across.
+          // Re-deriving the manufacturer from a price check when it's sitting
+          // right there in the record is wasted work, and leaves the column
+          // blank until someone happens to run Check Price.
+          manufacturer:p.manufacturer||'',
+          alt_mpns:(p.alt_mpns||[]),
+          est_price:parseFloat(p.est_price)||0,
           drawing_number:p.drawing_number||p.drawing_name||'',
-          qty, unit:p.unit||p.units||'pcs',price:parseFloat(p.price)||0,priority_price:parseFloat(p.priority_price)||0,
+          qty, unit:p.unit||p.units||'pcs',priority_price:parseFloat(p.priority_price)||0,
           mouser_price:parseFloat(p.mouser_price)||'', digikey_price:parseFloat(p.digikey_price)||'',
           total:0, labor_time:'', labor_total:0};
         _sdRecalcRow(item);
@@ -4912,8 +4943,8 @@ async function renderSalesDesk(){
     renderSD();
   });
   document.getElementById('btn-sd-newrow').addEventListener('click',()=>{
-    sdItems.push({part_number:'',description:'',drawing_number:'',qty:1,unit:'',
-      price:0,priority_price:0,total:0,labor_time:'',labor_total:0});
+    sdItems.push({part_number:'',description:'',manufacturer:'',drawing_number:'',qty:1,unit:'',
+      priority_price:0,total:0,labor_time:'',labor_total:0});
     renderSD();
   });
   document.getElementById('btn-sd-export').addEventListener('click',()=>exportSalesDeskExcel());
