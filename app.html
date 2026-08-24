@@ -307,8 +307,9 @@
 import { initializeApp }       from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js';
 import { getAuth, onAuthStateChanged, signOut, sendPasswordResetEmail }
                                from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
-import { getFirestore, doc, getDoc, getDocs, setDoc, addDoc, arrayUnion,
-         updateDoc, deleteDoc, collection, query, orderBy, limit, serverTimestamp }
+import { getFirestore, doc, getDoc, getDocs, setDoc, addDoc, arrayUnion, deleteField,
+         updateDoc, deleteDoc, collection, query, orderBy, limit, serverTimestamp,
+         writeBatch }
                                from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js';
 
 // ── Firebase ──────────────────────────────────────────────────────────────────
@@ -424,7 +425,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.74';
+const APP_VER   = '1.8.75';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -938,8 +939,6 @@ const _PS_DEFAULT_COLS=[
   {k:'atlantium_pn',  l:'Customer PN',     w:'100px'},
   {k:'description',   l:'Description',     w:'200px',wrap:true},
   {k:'manufacturer',  l:'Manufacturer',    w:'110px'},
-  {k:'price',         l:'FC Price',         w:'85px'},
-  {k:'distributor',   l:'Distributor',      w:'110px'},
   {k:'mouser_price',  l:'Mouser Price',     w:'95px'},
   {k:'digikey_price', l:'DigiKey Price',    w:'95px'},
   {k:'priority_price',l:'Priority Price',   w:'95px'},
@@ -949,15 +948,17 @@ const _PS_DEFAULT_COLS=[
   {k:'rfq_names',     l:'RFQ',             w:'140px',wrap:true},
   {k:'pin_count',       l:'Pins',           w:'55px'},
   {k:'updatedAt',     l:'Updated',          w:'90px'},
-  {k:'_fc',           l:'Check Price',      w:'90px'},
+  // Not a price source any more — just a shortcut to eyeball the wider
+  // distributor landscape (Arrow, Avnet, TTI...) that our two APIs don't cover.
+  {k:'_fc',           l:'FindChips',        w:'80px'},
 ];
-// Shared price-comparison colouring for every price column (FC / Priority /
-// Mouser / DigiKey) in BOTH the Database and Sales Desk, so the same number
-// never means two different things depending on which screen you're looking at.
+// Shared price-comparison colouring for every price column (Mouser / DigiKey /
+// Priority) in BOTH the Database and Sales Desk, so the same number never means
+// two different things depending on which screen you're looking at.
 // Across all the prices a row actually HAS: cheapest → green, dearest → red,
 // anything in between → uncoloured. A single price is left uncoloured, since
 // "cheapest" is meaningless with nothing to compare against.
-const _PRICE_FIELDS=['price','priority_price','mouser_price','digikey_price'];
+const _PRICE_FIELDS=['priority_price','mouser_price','digikey_price'];
 function _priceCellHTML(row, field){
   const v=parseFloat(row[field])||0;
   if(!v) return '';
@@ -970,19 +971,20 @@ function _priceCellHTML(row, field){
 
 // Renders the inner HTML for a single Part Stock cell, given a column key and part row
 function _psCellHTML(k,p){
-  const fcUrl=p.findchips_url||`https://www.findchips.com/search/${encodeURIComponent(p.part_number||'')}`;
+  // Built from the part number rather than stored: there's nothing to keep in
+  // sync, and it works for parts that have never been price-checked.
+  const fcUrl=`https://www.findchips.com/search/${encodeURIComponent(p.part_number||'')}`;
   switch(k){
-    // All four price columns share one comparison rule — see _priceCellHTML.
-    case 'price':
+    // All price columns share one comparison rule — see _priceCellHTML.
     case 'priority_price':
     case 'mouser_price':
     case 'digikey_price': return _priceCellHTML(p,k);
     case 'unit': return esc(p.unit||p.units||'');
     case 'rfq_names': return esc((p.rfq_names||[]).join(', '));
     case 'updatedAt': return fmtDate(p.updatedAt);
-    case '_fc': return p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px">🔍 FC</a>`:'';
+    case '_fc': return p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px" title="Open this part on findchips.com">🔍 View</a>`:'';
     // Whether WE physically stock/own this part (distinct from `stock`, which
-    // is a FindChips distributor inventory count) — auto-checked for items
+    // is a distributor inventory count) — auto-checked for items
     // brought in via Import Data → Tools Catalog (see saveToolsImport), but
     // toggleable by hand for any part. Sales Desk reads this flag to decide
     // whether a synthesized crimp/insertion TOOL row is already owned and
@@ -992,10 +994,52 @@ function _psCellHTML(k,p){
   }
 }
 
+// ── One-time cleanup: remove the dead FindChips fields ───────────────────────
+// FindChips scraping was removed — prices now come from the Mouser and DigiKey
+// APIs. Its three leftover fields (price / distributor / findchips_url) would
+// otherwise sit in every one of the ~1000 part documents forever, showing up in
+// exports and confusing anyone reading the data later.
+//
+// Runs at most once per browser: the flag below stops it re-scanning on every
+// visit. It's safe to run again (deleting an absent field is a no-op), so
+// clearing the localStorage key re-triggers it if a document is ever missed —
+// e.g. one created by another user's browser before they upgraded.
+const _FC_PURGE_KEY='fc_fields_purged_v1';
+async function purgeLegacyFindChipsFields(){
+  if(!companyId || localStorage.getItem(_FC_PURGE_KEY)) return;
+  try{
+    const snap=await getDocs(collection(db,'companies',companyId,'parts_cache'));
+    const stale=snap.docs.filter(d=>{
+      const v=d.data()||{};
+      return ('price' in v) || ('distributor' in v) || ('findchips_url' in v);
+    });
+    if(!stale.length){ localStorage.setItem(_FC_PURGE_KEY,'1'); return; }
+    // Batched so ~1000 documents cost a handful of round-trips, not 1000.
+    // 500 is Firestore's hard cap on writes per batch.
+    for(let i=0;i<stale.length;i+=400){
+      const batch=writeBatch(db);
+      for(const d of stale.slice(i,i+400)){
+        batch.update(d.ref,{
+          price:deleteField(), distributor:deleteField(), findchips_url:deleteField(),
+        });
+      }
+      await batch.commit();
+    }
+    localStorage.setItem(_FC_PURGE_KEY,'1');
+    console.info(`[Cleanup] removed FindChips fields from ${stale.length} part(s)`);
+    logSystemAudit('fc_fields_purged',`${stale.length} part(s)`,true);
+  }catch(e){
+    // Never block the screen over cleanup — the app works fine with the fields
+    // still present, they're simply no longer read.
+    console.warn('[Cleanup] FindChips field purge failed:',e.message);
+  }
+}
+
 async function renderPartStock(filter=''){
   setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading parts…</div>`);
   setActions('');
   try { await loadParts(); } catch(e){ setContent(`<p style="color:red;padding:20px">${e.message}</p>`); return; }
+  purgeLegacyFindChipsFields();  // fire-and-forget; never blocks the render
 
   const predicate=parseBoolQuery(filter);
   const filtered=(filter||'').trim()
@@ -1805,8 +1849,8 @@ function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
   // ever populated on a synthesized crimp-tool row (see _BOM_TEXT_PROMPT/
   // _BOM_VISION_PROMPT rule 5) and showing an empty Price column for every
   // normal part is just clutter. It's still carried through to saveCallback
-  // via the stable data-i index below, so the tool row's price still reaches
-  // the Database's FC Price field (see saveBOMToPartStock).
+  // via the stable data-i index below, so the tool row's estimate still reaches
+  // the Database's est_price field (see saveBOMToPartStock).
 
   // Expand modal for comfortable editing
   const modalEl=body.closest('.modal');
@@ -1990,9 +2034,12 @@ async function saveBOMToPartStock(rows, rfqName=''){
         if(r.atlantium_pn && !d.atlantium_pn) patch.atlantium_pn=r.atlantium_pn;
         if(r.pin_count && !d.pin_count) patch.pin_count=r.pin_count;
         // r.price only ever arrives set on a synthesized crimp-tool BOM row (see
-        // _BOM_TEXT_PROMPT/_BOM_VISION_PROMPT rule 5) — fill it in as the part's
-        // FC-price field if the Database doesn't already have a price for it.
-        if(r.price && !d.price) patch.price=parseFloat(r.price)||'';
+        // _BOM_TEXT_PROMPT/_BOM_VISION_PROMPT rule 5). It's an AI ESTIMATE, not a
+        // distributor quote, so it goes in its own field rather than sitting in a
+        // price column next to real Mouser/DigiKey numbers — a guess and a quote
+        // shouldn't be indistinguishable. Sales Desk uses it only as a last
+        // resort when no real source has a price (see _sdRecalcTotal).
+        if(r.price && !d.est_price) patch.est_price=parseFloat(r.price)||'';
         if(rfqName && !(d.rfq_names||[]).includes(rfqName)) patch.rfq_names=arrayUnion(rfqName);
         await updateDoc(ref,patch);
       } else {
@@ -2001,7 +2048,7 @@ async function saveBOMToPartStock(rows, rfqName=''){
           drawing_number:r.drawing_number||'', drawing_name:r.drawing_name||'', manufacturer:r.manufacturer||'',
           unit:_dbNormalizeUnit(r.unit)||'', atlantium_pn:r.atlantium_pn||'', qty:1,
           pin_count:r.pin_count||'',
-          price:r.price?(parseFloat(r.price)||''):'', distributor:'', stock:'', price_description:'',
+          est_price:r.price?(parseFloat(r.price)||''):'', stock:'', price_description:'',
           rfq_names: rfqName ? [rfqName] : [],
           updatedAt:serverTimestamp()
         });
@@ -2795,21 +2842,20 @@ async function aiExtractDrawingNotes(text, isImage, imgData){
 const _NOTE_DOC_STD_RE=/\b(spec(?:ification)?s?|standards?|std\.?|dwg\.?|drawing|document|doc\.?|procedures?|proc\.?|per\s+(?:mil|astm|ipc|ansi|iso|as|ms|nas|sae|j-?std|qq)|mil-[a-z]?-?\d|ipc[\/-]|astm|ansi|iso\s*\d|nasm\d|as\d{3,4}|j-?std|qq-|ms\d{4,5}|sae\s*[a-z]*\d)\b/i;
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ── FindChips price checker ───────────────────────────────────────────────────
-// JS port of core/findchips_scraper.py — same price-break logic
-
-// findchips.com sends no CORS headers, so the page has to come through a proxy.
-// Our own Cloud Function (functions/index.js) is the real answer — it's the
-// only entry here that nobody else can take away. The public services below are
-// kept purely as emergency fallbacks; they all went down at once in Aug 2026
-// (corsproxy.io started returning HTTP 403, the rest timed out), which is what
-// prompted running our own.
-// Each entry is a URL template; "{url}" is replaced with the percent-encoded
-// target URL, "{url_raw}" with the unencoded one (some proxies want it plain).
-// Our OWN proxy (see functions/index.js) is first: it's the only entry that
-// isn't at the mercy of a free third-party service. The public ones stay on as
-// fallbacks in case the function is ever unavailable or not yet deployed.
-const FC_OWN_PROXY = 'https://us-central1-specprice-236a2.cloudfunctions.net/priceProxy?url={url}';
+// ── Part pricing — the vendors' own APIs ──────────────────────────────────────
+// This used to scrape findchips.com through a chain of CORS proxies. That is
+// gone: the site served a different page to datacenter IPs than to a browser,
+// so lookups failed in a way no parser work could fix, and every public proxy
+// we relied on died at once in Aug 2026. Prices now come from Mouser's and
+// DigiKey's documented APIs via our own Cloud Function — no HTML parsing, no
+// proxy chain, nothing to block. findchips.com survives in the UI only as a
+// link, for eyeballing distributors the two APIs don't cover.
+// coinmill.com publishes currency rates as a plain web page with no CORS
+// header, so it still needs a server-side fetch. Our own Cloud Function does
+// it; allorigins stays as a fallback for the case where the function isn't
+// deployed. (This is all that's left of the old proxy chain.)
+const RATE_PROXY_URL = 'https://us-central1-specprice-236a2.cloudfunctions.net/priceProxy?url=';
+const RATE_PROXY_FALLBACK = 'https://api.allorigins.win/raw?url=';
 // Official Mouser/DigiKey APIs via our Cloud Function (see functions/index.js).
 // Unlike the FindChips scrape this is a documented, structured, permitted data
 // source — no HTML parsing and nothing to block — so it's the primary source
@@ -2826,68 +2872,6 @@ async function _apiPriceLookup(pn, qty){
     throw new Error(msg);
   }
   return resp.json();
-}
-const _FC_DEFAULT_PROXIES = [
-  FC_OWN_PROXY,
-  'https://api.allorigins.win/raw?url={url}',
-  'https://api.codetabs.com/v1/proxy/?quest={url}',
-  'https://corsproxy.io/?url={url}',
-];
-function fcProxyList(){ return _FC_DEFAULT_PROXIES; }
-function _fcProxyUrl(tpl, url){
-  return tpl.replace('{url}',encodeURIComponent(url)).replace('{url_raw}',url);
-}
-// Our Cloud Function only serves signed-in SpecPrice users, so requests to it
-// carry the current user's Firebase ID token. Third-party proxies get no
-// headers at all — sending them an auth token would leak it to a stranger.
-function _fcIsOwnProxy(tpl){ return /cloudfunctions\.net|\/priceProxy/i.test(tpl); }
-async function _fcRequestInit(tpl, timeoutMs){
-  const init={signal:AbortSignal.timeout(timeoutMs)};
-  if(_fcIsOwnProxy(tpl) && auth.currentUser){
-    try{ init.headers={Authorization:'Bearer '+await auth.currentUser.getIdToken()}; }
-    catch(e){ console.warn('[Proxy] could not get ID token:',e.message); }
-  }
-  return init;
-}
-const FC_PROXY = 'https://api.allorigins.win/raw?url='; // used by the currency helper below
-// Fetches a URL through the proxy chain. Throws only if EVERY proxy failed,
-// with a message naming what went wrong — that message is surfaced in the
-// price-check table and the audit log, so a proxy outage is identifiable
-// instead of showing a bare "Error".
-async function _fcProxyFetch(url, timeoutMs=0){
-  const problems=[];
-  const proxies=fcProxyList();
-  for(let i=0;i<proxies.length;i++){
-    // Our own Cloud Function needs a MUCH longer budget than a public proxy:
-    // a cold start alone can take ~10s, and a FindChips results page is ~650 KB
-    // that it must fetch and relay. A 15s cap was timing it out before it ever
-    // had a chance to answer — which looked exactly like an outage. Public
-    // proxies keep a short leash: they're only fallbacks and a slow one just
-    // delays reaching the next.
-    const perProxyTimeout = timeoutMs || (_fcIsOwnProxy(proxies[i]) ? 60000 : 12000);
-    try{
-      const resp=await fetch(_fcProxyUrl(proxies[i],url), await _fcRequestInit(proxies[i],perProxyTimeout));
-      if(!resp.ok){
-        // Our own proxy explains itself in JSON (e.g. "FindChips served an
-        // anti-bot page"). Surface that reason verbatim rather than reducing a
-        // precise diagnosis to a bare status code.
-        let detail=`HTTP ${resp.status}`;
-        if(_fcIsOwnProxy(proxies[i])){
-          try{ const j=await resp.json(); if(j&&j.error) detail=j.error+(j.snippet?` [page said: "${j.snippet.slice(0,120)}"]`:''); }catch{}
-        }
-        problems.push(`proxy ${i+1}: ${detail}`);
-        continue;
-      }
-      const html=await resp.text();
-      // A proxy that's up but broken often returns a tiny error page/JSON blob
-      // instead of the real document — treat that as a failure and move on.
-      if(!html || html.length<500){ problems.push(`proxy ${i+1}: empty response`); continue; }
-      return html;
-    }catch(e){
-      problems.push(`proxy ${i+1}: ${e.name==='TimeoutError'?'timed out':(e.message||'failed')}`);
-    }
-  }
-  throw new Error('Could not reach FindChips — '+problems.join('; '));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2925,15 +2909,39 @@ function _normalizeCurrencyCode(raw){
   return _detectCurrency(s);
 }
 
+// Tries our own function first (authenticated), then the public fallback.
+// Throws only if both fail, so a rate lookup degrades rather than dying.
+async function _fetchRatePage(url){
+  const attempts=[];
+  if(auth.currentUser){
+    try{
+      const token=await auth.currentUser.getIdToken();
+      attempts.push(()=>fetch(RATE_PROXY_URL+encodeURIComponent(url),
+        {headers:{Authorization:'Bearer '+token}, signal:AbortSignal.timeout(30000)}));
+    }catch(e){ console.warn('[Currency] no ID token:',e.message); }
+  }
+  attempts.push(()=>fetch(RATE_PROXY_FALLBACK+encodeURIComponent(url),
+    {signal:AbortSignal.timeout(15000)}));
+  let last='';
+  for(const go of attempts){
+    try{
+      const resp=await go();
+      if(!resp.ok){ last='HTTP '+resp.status; continue; }
+      const html=await resp.text();
+      if(html && html.length>200) return html;
+      last='empty response';
+    }catch(e){ last=e.name==='TimeoutError'?'timed out':(e.message||'failed'); }
+  }
+  throw new Error(last||'no rate source available');
+}
+
 async function _fetchCurrencyRate(code){
   if(code==='USD') return 1;
   if(_currencyRateCache[code]) return _currencyRateCache[code];
   const url=_COINMILL_URLS[code];
   if(!url) return null;
   try{
-    const resp=await fetch(FC_PROXY+encodeURIComponent(url),{signal:AbortSignal.timeout(15000)});
-    if(!resp.ok) throw new Error('HTTP '+resp.status);
-    const html=await resp.text();
+    const html=await _fetchRatePage(url);
     // coinmill pages phrase the rate as "1 XXX = Y.YYYYY USD" somewhere in the text
     let m = html.match(new RegExp('1\\s*'+code+'\\s*=\\s*([\\d,]+\\.?\\d*)\\s*USD','i'));
     if(!m) m = html.match(/=\s*([\d,]+\.\d+)\s*USD/i);
@@ -3013,7 +3021,7 @@ function _fcParsePriceBreaks(texts){
 // gr (grams) is treated the same as mm here per business rule — it's a bulk-
 // material quantity, not a per-piece count, so it gets the same non-"pc"
 // lookup treatment. "pc" (and anything unrecognized) passes through unchanged.
-function _fcTargetQty(qty, unit){
+function _priceTargetQty(qty, unit){
   const u=String(unit||'').trim().toLowerCase();
   const n=parseFloat(qty)||0;
   if(u==='mm'||u==='gr') return Math.max(1, Math.round(n*0.00328084));
@@ -3054,142 +3062,41 @@ function _fcPrettyDistributor(haystack){
   const m=String(haystack||'').match(/distributor[-_]results[-_]([a-z0-9]+)/);
   return m ? m[1].charAt(0).toUpperCase()+m[1].slice(1) : '';
 }
-function _fcMatchesDistributor(candidate, re){
-  return re.test(candidate.distKey||'') || re.test((candidate.distributor||'').toLowerCase());
-}
-
-async function _fcFetchPart(partNumber, qty=0){
-  const pn=partNumber.trim();
-  if(!pn) return null;
-  const fcUrl=`https://www.findchips.com/search/${encodeURIComponent(pn)}`;
-  const html=await _fcProxyFetch(fcUrl);
-  if(/no results were found|0 results|no parts found/i.test(html))
-    return{price:'Not found',distributor:'',stock:'',url:fcUrl};
-  const doc=new DOMParser().parseFromString(html,'text/html');
-  // Collect every individual (qty,price) price-break across ALL distributor rows,
-  // then pick the single break whose quantity is closest to the target qty — not
-  // just whichever distributor happens to be cheapest overall (that can pick a
-  // price meant for a completely different order size).
-  //
-  // FindChips' search results page is fuzzy: searching "LM358N" also lists rows for
-  // related-but-different parts like "LM358N/NOPB", "LM358N-NOPB", "LM358NG", etc.
-  // Each result row's first (Part #) cell contains that row's own manufacturer part
-  // number, normally as a link (e.g. "Details <a>LM358N/NOPB</a> DISTI # 34AH0959").
-  // Only rows whose Part # matches the searched part number EXACTLY (case-insensitive)
-  // are used — anything else is a different part and must not contribute pricing.
-  const pnNorm=pn.toUpperCase();
-  const candidates=[];
-  // Diagnostics: when nothing matches we need to know WHY — did the page have
-  // no distributor blocks at all (markup changed / proxy returned a stub), or
-  // did it have rows whose part numbers simply differ from what we searched?
-  // Guessing at this from the outside wasted a round-trip, so the answer is
-  // now reported straight into the price-check table.
-  const diag={sections:0, rows:0, seen:new Set()};
-  for(const sec of doc.querySelectorAll('[class*="distributor-results"]')){
-    diag.sections++;
-    // Which distributor this block belongs to. A visible name tag is the nicest
-    // source but it's also the most fragile — FindChips changes its markup and
-    // then the name comes back empty, which silently broke the Mouser/DigiKey
-    // columns (they matched against an empty string and never filled in).
-    // So build a HAYSTACK from every stable signal on the section — its class
-    // list, id and data-* attributes all carry the distributor slug — and match
-    // against that instead of one hand-picked element.
-    let dist='';
-    for(const sel of ['[class*="distributor-name"]','[class*="distributor-title"]','h2','h3','h4']){
-      const tag=sec.querySelector(sel);
-      if(tag){const t=tag.textContent.trim().replace(/\s+/g,' ');if(t.length>1&&t.length<60){dist=t;break;}}
-    }
-    const distKey=[
-      dist,
-      sec.className||'',
-      sec.id||'',
-      sec.getAttribute('data-distributor')||'',
-      sec.getAttribute('data-distributor-name')||'',
-      sec.getAttribute('data-seller')||'',
-    ].join(' ').toLowerCase();
-    if(!dist) dist=_fcPrettyDistributor(distKey);   // fall back to the slug
-
-    for(const row of sec.querySelectorAll('tr')){
-      const cells=[...row.querySelectorAll('td')];
-      if(cells.length<3) continue;
-      // EXACT part-number match. FindChips' results are fuzzy: searching
-      // "00100424" also lists "00100424-01", "00100424G" etc., and those are
-      // different parts whose prices must never be used. Rather than assume the
-      // Part# lives in cells[0] (column order shifts between layouts, and when
-      // it does the old check silently compared the wrong text), accept the row
-      // only if SOME cell or link in it reads exactly the searched part number.
-      const rowTexts=[
-        ...cells.map(c=>c.textContent.trim()),
-        ...[...row.querySelectorAll('a')].map(a=>a.textContent.trim()),
-      ];
-      diag.rows++;
-      // Remember the part-number-ish strings this row offered, so a "Not found"
-      // can report what WAS on the page instead of just failing silently.
-      if(diag.seen.size<12){
-        for(const t of rowTexts){
-          if(t && t.length<=40 && /[0-9]/.test(t) && !t.includes('$') && !/^details$/i.test(t)) diag.seen.add(t);
-        }
-      }
-      if(!rowTexts.some(t=>t.toUpperCase()===pnNorm)) continue;
-
-      const texts=cells.map(c=>c.textContent.trim().replace(/\s+/g,' '));
-      const brks=_fcParsePriceBreaks(texts);
-      if(!brks.length) continue;
-      let stock='';
-      for(const t of texts){
-        if(!t.includes('$')&&t.length<20){const m=t.match(/^([\d,]+)$/);if(m){stock=m[1];break;}}
-      }
-      for(const [bqty,bprice] of brks){
-        candidates.push({qty:bqty, price:bprice, distributor:dist, distKey, stock});
-      }
-    }
-  }
-  if(!candidates.length){
-    const seen=[...diag.seen].slice(0,8);
-    const why = diag.sections===0
-      ? 'no distributor blocks on the page (markup changed, or the proxy returned a stub page)'
-      : diag.rows===0
-        ? `${diag.sections} distributor block(s) but no priced rows`
-        : `${diag.rows} row(s) across ${diag.sections} block(s), none matching "${pn}" exactly` +
-          (seen.length?` — page listed: ${seen.join(', ')}`:'');
-    return{price:'Not found',distributor:'',stock:'',mouser_price:'',digikey_price:'',url:fcUrl,diag:why};
-  }
-  const target=qty>0?qty:1;
-  // Nearest-qty break within a given subset of candidates (ties broken by the
-  // cheaper price) — the same rule used for the overall best price below.
-  const _bestOf=(list)=>{
-    if(!list.length) return null;
-    let b=list[0], bd=Math.abs(target-b.qty);
-    for(const c of list.slice(1)){
-      const d=Math.abs(target-c.qty);
-      if(d<bd || (d===bd && c.price<b.price)){ b=c; bd=d; }
-    }
-    return b;
-  };
-  const _fmt=(c)=>c?'$'+c.price.toFixed(4).replace(/\.?0+$/,''):'';
-  // Per-distributor prices for the Mouser / DigiKey columns in the Database.
-  // Same page, same price-break data as the overall FC price — just filtered to
-  // that one distributor, so no extra network call is needed.
-  const mouser=_bestOf(candidates.filter(c=>_fcMatchesDistributor(c,/mouser/)));
-  const digikey=_bestOf(candidates.filter(c=>_fcMatchesDistributor(c,/digi-?\s*key/)));
-  const best=_bestOf(candidates);
-  return {
-    price: _fmt(best),
-    distributor: best.distributor,
-    stock: best.stock,
-    mouser_price: _fmt(mouser),
-    digikey_price: _fmt(digikey),
-    url: fcUrl
-  };
+// Looks up one part with the Mouser + DigiKey APIs and normalises the answer
+// into the shape the rest of the app expects. Returns per-vendor entries plus
+// `best` (the cheaper of the two) — never throws for "not found", which is a
+// legitimate answer, only for an actual transport/credential failure.
+async function lookupPartPrices(partNumber, qty=0){
+  const data=await _apiPriceLookup(partNumber, qty||1);
+  if(!data) return {mouser:null, digikey:null, best:null, errors:[]};
+  const norm=v=>v&&v.price>0 ? {
+    price:+v.price, stock:v.stock||'', url:v.url||'', mpn:v.mpn||'',
+    breakQty:v.breakQty||0, exact:v.exactMatch!==false,
+  } : null;
+  const mouser=norm(data.mouser), digikey=norm(data.digikey);
+  const both=[mouser&&{...mouser,name:'Mouser'}, digikey&&{...digikey,name:'DigiKey'}].filter(Boolean);
+  const best=both.length ? both.reduce((a,b)=>b.price<a.price?b:a) : null;
+  return {mouser, digikey, best, errors:data.errors||[]};
 }
 
 // mode: 'parts' → save to Firestore allParts; 'sd' → update sdItems in memory
+//
+// Runs lookups CONCURRENTLY. The old sequential loop with a 400ms pause between
+// parts existed to avoid hammering a site we were scraping without permission;
+// against the vendors' own APIs that caution is pointless, and it made a 13-part
+// check take the better part of a minute. The pool below is deliberately small
+// so we stay well inside Mouser's per-minute rate limit — going wider risks
+// HTTP 429s that would make the whole run slower, not faster.
+const PRICE_CHECK_CONCURRENCY = 5;
+
 async function runFCCheckModal(items, mode){
   if(!items.length){toast('No parts to check','error');return;}
   let stopped=false;
   const total=items.length;
 
-  showModal(`<div class="modal" style="width:min(94vw,820px)">
+  const money=v=>v>0?('$'+(+v).toFixed(4).replace(/\.?0+$/,'')):'';
+
+  showModal(`<div class="modal" style="width:min(96vw,900px)">
     <div class="modal-head"><h3>🔍 Check Price</h3><button class="close-modal" id="fc-close-x">✕</button></div>
     <div class="modal-body" id="fc-modal-body">
       <div class="ai-status" style="margin-bottom:8px"><div class="ring"></div><span id="fc-status">Starting…</span></div>
@@ -3197,13 +3104,14 @@ async function runFCCheckModal(items, mode){
       <div style="max-height:340px;overflow:auto;margin-top:12px">
         <table style="width:100%;font-size:12px" id="fc-res-table">
           <thead><tr style="position:sticky;top:0;background:#fff">
-            <th>MNF P/N</th><th>QTY</th><th>Price</th><th>Distributor</th><th>Stock</th><th>Status</th>
+            <th>MNF P/N</th><th>QTY</th><th>DigiKey</th><th>Mouser</th><th>Priority</th><th>Stock</th><th>Status</th>
           </tr></thead>
           <tbody id="fc-res-tbody">
             ${items.map((it,i)=>`<tr id="fc-row-${i}">
               <td>${esc(it.part_number)}</td><td>${it.qty||1}</td>
-              <td id="fc-p-${i}" style="color:var(--muted)">—</td>
-              <td id="fc-d-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-dk-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-mo-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-pr-${i}" style="color:var(--muted)">${money(parseFloat(it.priority_price)||0)||'—'}</td>
               <td id="fc-s-${i}" style="color:var(--muted)">—</td>
               <td id="fc-st-${i}"><span class="ring" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle"></span></td>
             </tr>`).join('')}
@@ -3222,182 +3130,153 @@ async function runFCCheckModal(items, mode){
   document.getElementById('fc-close-x').addEventListener('click',()=>{stopped=true;closeModal();_fcRefresh();});
 
   let done=0, found=0, failures=0, lastError='';
-  // Distinct API-side problems (missing key, auth failure, vendor outage),
-  // collected so the run summary can name them once instead of per part.
+  // Distinct API-side problems (bad credentials, vendor outage), collected so
+  // the run summary names each once instead of repeating it per part.
   const apiErrors=new Set();
-  for(let i=0;i<items.length;i++){
-    if(stopped) break;
-    const it=items[i];
-    const setStatus=(txt,color='var(--muted)')=>{
-      const el=document.getElementById(`fc-st-${i}`);
-      if(el) el.innerHTML=`<span style="color:${color};font-size:11px">${txt}</span>`;
+
+  // Colour the three price cells against each other, same rule as the tables:
+  // cheapest green, dearest red. Priority is included so the comparison the
+  // user actually cares about — "is the distributor cheaper than our ERP?" —
+  // is answerable without leaving this modal.
+  const paintRow=(i, dk, mo, pr)=>{
+    const vals=[dk,mo,pr].filter(v=>v>0);
+    const lo=vals.length?Math.min(...vals):0, hi=vals.length?Math.max(...vals):0;
+    const put=(id,v)=>{
+      const el=document.getElementById(id); if(!el) return;
+      if(!(v>0)){ el.textContent='—'; el.style.color='var(--muted)'; return; }
+      el.textContent=money(v);
+      el.style.color = vals.length<2 ? 'var(--text)'
+                     : (v<=lo ? 'var(--green)' : (v>=hi ? 'var(--red)' : 'var(--text)'));
+      el.style.fontWeight = (vals.length>1 && v<=lo) ? '700' : '400';
     };
-    const prog=document.getElementById('fc-prog');
-    if(prog) prog.style.width=Math.round(100*i/total)+'%';
-    const stEl=document.getElementById('fc-status');
-    if(stEl) stEl.textContent=`Checking ${i+1}/${total}: ${it.part_number}`;
-    setStatus('⏳');
-    try{
-      // Labels/markers aren't real electronic components — FindChips has
-      // nothing useful to say about them, so skip the network lookup
-      // entirely and use a fixed nominal price instead.
-      const _targetQty=_fcTargetQty(it.qty, it.unit);
-      const _isLabel=/\b(label|marker)\b/i.test(it.description||'');
+    put(`fc-dk-${i}`,dk); put(`fc-mo-${i}`,mo); put(`fc-pr-${i}`,pr);
+  };
 
-      // ── Primary source: the vendors' official APIs ──
-      // Structured, permitted and immune to the markup/bot-blocking problems
-      // that make scraping unreliable. Runs first so Mouser/DigiKey prices land
-      // even when the FindChips scrape fails outright.
-      let api=null;
-      if(!_isLabel){
-        try{ api=await _apiPriceLookup(it.part_number,_targetQty); }
-        catch(e){ console.warn('[Price API]',it.part_number,e.message); apiErrors.add(e.message); }
-      }
-
-      // ── Secondary: FindChips scrape, for the other distributors ──
-      // Best-effort only now — its failure must not discard a good API result.
-      let res=null, fcError='';
-      if(_isLabel){
-        res={price:'$0.2', distributor:'', stock:'', url:''};
-      } else {
-        try{ res=await _fcFetchPart(it.part_number,_targetQty); }
-        catch(e){ fcError=e.message||String(e); }
-      }
-
-      // Fold the API result in: it wins for the Mouser/DigiKey columns, and
-      // supplies the headline price too when scraping came back empty.
-      const _apiFmt=v=>v?('$'+Number(v).toFixed(4).replace(/\.?0+$/,'')):'';
-      if(api&&(api.mouser||api.digikey)){
-        if(!res||res.price==='Not found'){
-          const cheapest=[api.mouser,api.digikey].filter(Boolean)
-            .sort((a,b)=>a.price-b.price)[0];
-          res={
-            price:_apiFmt(cheapest.price),
-            distributor:api.mouser&&cheapest===api.mouser?'Mouser':'DigiKey',
-            stock:cheapest.stock||'', url:cheapest.url||'',
-            mouser_price:'', digikey_price:'',
-          };
-        }
-        if(api.mouser)  res.mouser_price =_apiFmt(api.mouser.price);
-        if(api.digikey) res.digikey_price=_apiFmt(api.digikey.price);
-      }
-      if(!res){
-        // Nothing from either source — report the scrape's error, since the API
-        // path already logged its own into apiErrors.
-        throw new Error(fcError||'no price source available');
-      }
-      if(res.price==='Not found'){
-        // Show WHY nothing matched (hover for the full reason) — "Not found"
-        // on its own can't distinguish "part isn't stocked" from "our parser
-        // no longer understands the page".
-        const why=res&&res.diag?res.diag:'';
-        const el=document.getElementById(`fc-st-${i}`);
-        if(el) el.innerHTML=`<span style="color:var(--muted);font-size:11px;${why?'cursor:help;text-decoration:underline dotted':''}" title="${esc(why)}">Not found${why?' ⓘ':''}</span>`;
-        if(why) console.info('[Check Price]',it.part_number,'→',why);
-        const pd=document.getElementById(`fc-p-${i}`); if(pd) pd.textContent='—';
-      } else {
-        found++;
-        const priceNum=parseFloat(res.price.replace(/[^0-9.]/g,''))||0;
-        // Per-distributor prices for the Mouser / DigiKey Database columns.
-        // '' (not 0) when that distributor didn't list the part, so an absent
-        // offer stays visually blank instead of reading as a $0.00 price.
-        const mouserNum = res.mouser_price ? (parseFloat(res.mouser_price.replace(/[^0-9.]/g,''))||'') : '';
-        const digikeyNum = res.digikey_price ? (parseFloat(res.digikey_price.replace(/[^0-9.]/g,''))||'') : '';
-        const pd=document.getElementById(`fc-p-${i}`); if(pd){pd.textContent=res.price;pd.style.color='var(--green)';}
-        const dd=document.getElementById(`fc-d-${i}`); if(dd){dd.textContent=res.distributor||'';dd.style.color='var(--text)';}
-        const sd=document.getElementById(`fc-s-${i}`); if(sd){sd.textContent=res.stock||'';sd.style.color='var(--text)';}
-        setStatus('✓','var(--green)');
-        // Update data
-        if(mode==='parts'){
-          const partId=it._id;
-          if(partId){
-            try{
-              await updateDoc(doc(db,'companies',companyId,'parts_cache',partId),{
-                price:priceNum, distributor:res.distributor||'',
-                mouser_price:mouserNum, digikey_price:digikeyNum,
-                stock:res.stock||'', findchips_url:res.url||'',
-                updatedAt:serverTimestamp(), qty:1
-              });
-              const ap=allParts.find(p=>p._id===partId);
-              if(ap){ap.price=priceNum;ap.distributor=res.distributor||'';ap.stock=res.stock||'';ap.findchips_url=res.url||'';
-                     ap.mouser_price=mouserNum;ap.digikey_price=digikeyNum;}
-            }catch(e){console.warn('FC save error:',e.message);}
-          }
-        } else if(mode==='sd'){
-          const sdIdx=it._sdIdx;
-          if(sdIdx!==undefined&&sdItems[sdIdx]){
-            sdItems[sdIdx].price=priceNum;
-            sdItems[sdIdx].mouser_price=mouserNum;
-            sdItems[sdIdx].digikey_price=digikeyNum;
-            _sdRecalcTotal(sdItems[sdIdx]);
-          }
-          // Also save the result to Part Stock (parts_cache) — upsert by part_number
-          try{
-            const pn=(it.part_number||'').trim();
-            if(pn){
-              const existing=allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
-              if(existing){
-                await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),{
-                  price:priceNum, distributor:res.distributor||'',
-                  mouser_price:mouserNum, digikey_price:digikeyNum,
-                  stock:res.stock||'', findchips_url:res.url||'',
-                  updatedAt:serverTimestamp(), qty:1
-                });
-                existing.price=priceNum; existing.distributor=res.distributor||'';
-                existing.stock=res.stock||''; existing.findchips_url=res.url||'';
-                existing.mouser_price=mouserNum; existing.digikey_price=digikeyNum;
-              } else {
-                const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
-                const ref=doc(db,'companies',companyId,'parts_cache',key);
-                await setDoc(ref,{
-                  part_number:pn, description:'', drawing_number:'', manufacturer:'',
-                  unit:'', atlantium_pn:'', qty:1,
-                  price:priceNum, distributor:res.distributor||'', stock:res.stock||'',
-                  mouser_price:mouserNum, digikey_price:digikeyNum,
-                  price_description:'', findchips_url:res.url||'',
-                  updatedAt:serverTimestamp()
-                },{merge:true});
-                allParts.push({_id:key, part_number:pn, price:priceNum, qty:1,
-                  distributor:res.distributor||'', stock:res.stock||'', findchips_url:res.url||'',
-                  mouser_price:mouserNum, digikey_price:digikeyNum});
-              }
-            }
-          }catch(e){ console.warn('FC->PartStock save error:',e.message); }
-        }
-      }
-    }catch(e){
-      // Show WHAT failed, not just that something did — the message is also
-      // kept for the audit log and the run summary below, so an outage (dead
-      // proxy, timeout) is diagnosable without opening the browser console.
-      failures++;
-      lastError=e.message||String(e);
-      const short=lastError.length>60?lastError.slice(0,60)+'…':lastError;
-      const el=document.getElementById(`fc-st-${i}`);
-      if(el) el.innerHTML=`<span style="color:var(--red);font-size:11px;cursor:help" title="${esc(lastError)}">${esc(short)}</span>`;
-      console.warn('FC error',it.part_number,lastError);
-    }
+  const setStatus=(i,txt,color='var(--muted)',title='')=>{
+    const el=document.getElementById(`fc-st-${i}`);
+    if(el) el.innerHTML=`<span style="color:${color};font-size:11px${title?';cursor:help':''}"${title?` title="${esc(title)}"`:''}>${txt}</span>`;
+  };
+  const tick=()=>{
     done++;
+    const prog=document.getElementById('fc-prog');
+    if(prog) prog.style.width=Math.round(100*done/total)+'%';
+    const stEl=document.getElementById('fc-status');
+    if(stEl) stEl.textContent=`Checked ${done}/${total}…`;
     const sumEl=document.getElementById('fc-summary');
     if(sumEl) sumEl.textContent=`${done}/${total} checked, ${found} prices found${failures?`, ${failures} failed`:''}`;
-    // Small delay to avoid hammering FindChips
-    if(i<items.length-1&&!stopped) await new Promise(r=>setTimeout(r,400));
+  };
+
+  async function checkOne(it, i){
+    if(stopped) return;
+    setStatus(i,'⏳');
+    const prPrice=parseFloat(it.priority_price)||0;
+    try{
+      // Labels/markers aren't catalogue parts — no distributor lists them, so
+      // skip the network round-trip and use the agreed nominal price.
+      if(/\b(label|marker)\b/i.test(it.description||'')){
+        setStatus(i,'✓ nominal','var(--muted)','Labels/markers use a fixed $0.2 price');
+        return;
+      }
+      const r=await lookupPartPrices(it.part_number, _priceTargetQty(it.qty, it.unit));
+      for(const m of (r.errors||[])) apiErrors.add(m);
+
+      const dkNum = r.digikey ? r.digikey.price : '';
+      const moNum = r.mouser  ? r.mouser.price  : '';
+      paintRow(i, dkNum||0, moNum||0, prPrice);
+
+      const sEl=document.getElementById(`fc-s-${i}`);
+      if(sEl && r.best){ sEl.textContent=r.best.stock||''; sEl.style.color='var(--text)'; }
+
+      if(!r.best){
+        setStatus(i,'Not found','var(--muted)',
+          'Neither Mouser nor DigiKey lists this part number.');
+        return;
+      }
+      found++;
+      // A normalised (non-exact) match found the part under a differently
+      // formatted MPN — worth flagging so the user can sanity-check it.
+      setStatus(i, r.best.exact?'✓':'✓ ≈', 'var(--green)',
+        r.best.exact?'' : `Matched ${r.best.name} part "${r.best.mpn}" — punctuation/zero-padding differs from "${it.part_number}"`);
+
+      const stock=r.best.stock||'';
+      if(mode==='parts'){
+        if(it._id){
+          try{
+            await updateDoc(doc(db,'companies',companyId,'parts_cache',it._id),{
+              mouser_price:moNum, digikey_price:dkNum,
+              stock, updatedAt:serverTimestamp(), qty:1
+            });
+            const ap=allParts.find(p=>p._id===it._id);
+            if(ap){ ap.mouser_price=moNum; ap.digikey_price=dkNum; ap.stock=stock; }
+          }catch(e){ console.warn('price save error:',e.message); }
+        }
+      } else if(mode==='sd'){
+        const sdIdx=it._sdIdx;
+        if(sdIdx!==undefined&&sdItems[sdIdx]){
+          sdItems[sdIdx].mouser_price=moNum;
+          sdItems[sdIdx].digikey_price=dkNum;
+          _sdRecalcTotal(sdItems[sdIdx]);
+        }
+        // Mirror into the Database so the next quote starts from a known price.
+        try{
+          const pn=(it.part_number||'').trim();
+          if(pn){
+            const existing=allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
+            if(existing){
+              await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),{
+                mouser_price:moNum, digikey_price:dkNum,
+                stock, updatedAt:serverTimestamp(), qty:1
+              });
+              existing.mouser_price=moNum; existing.digikey_price=dkNum; existing.stock=stock;
+            } else {
+              const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
+              await setDoc(doc(db,'companies',companyId,'parts_cache',key),{
+                part_number:pn, description:'', drawing_number:'', manufacturer:'',
+                unit:'', atlantium_pn:'', qty:1, stock,
+                mouser_price:moNum, digikey_price:dkNum,
+                price_description:'', updatedAt:serverTimestamp()
+              },{merge:true});
+              allParts.push({_id:key, part_number:pn, qty:1, stock,
+                mouser_price:moNum, digikey_price:dkNum});
+            }
+          }
+        }catch(e){ console.warn('price->Database save error:',e.message); }
+      }
+    }catch(e){
+      failures++;
+      lastError=e.message||String(e);
+      const short=lastError.length>50?lastError.slice(0,50)+'…':lastError;
+      setStatus(i, esc(short), 'var(--red)', lastError);
+      console.warn('price check error',it.part_number,lastError);
+    }
   }
+
+  // Fixed-size worker pool: each worker pulls the next index until they run out.
+  // Simpler than batching and keeps every slot busy even when one part is slow.
+  let next=0;
+  const worker=async()=>{
+    while(!stopped){
+      const i=next++;
+      if(i>=items.length) return;
+      await checkOne(items[i], i);
+      tick();
+    }
+  };
+  await Promise.all(Array.from({length:Math.min(PRICE_CHECK_CONCURRENCY,total)}, worker));
 
   const prog=document.getElementById('fc-prog'); if(prog) prog.style.width='100%';
   const stEl=document.getElementById('fc-status');
   if(stEl){
     stEl.textContent=`Done — ${found}/${total} prices found${failures?`, ${failures} failed`:''}`;
-    // If EVERY part failed it's an outage, not a data problem — say so plainly
-    // and show the underlying reason rather than leaving the user guessing.
+    // If EVERY part failed it's an outage or a credential problem, not a data
+    // problem — say so plainly instead of leaving the user guessing.
     if(failures===total && total>0){
       stEl.innerHTML=`<span style="color:var(--red)">Price check failed for all ${total} part(s) — ${esc(lastError)}</span>`;
     }
-    // Surface API-side problems separately — they're a one-time admin fix, not
-    // a transient failure, and shouldn't hide behind a scraping error.
     // Deliberately NOT warned about: a vendor with no credentials at all.
-    // Running with only one of the two is a supported setup, and nagging about
-    // the other on every single price check would train the user to ignore
-    // this line entirely — including when it says something that matters.
+    // Running with only one of the two is a supported setup, and nagging on
+    // every check would train the user to ignore this line — including when it
+    // says something that matters.
     for(const m of [...apiErrors]) if(/no (api key|credentials) configured/i.test(m)) apiErrors.delete(m);
     if(apiErrors.size){
       const note=document.createElement('div');
@@ -3413,7 +3292,7 @@ async function runFCCheckModal(items, mode){
   const ringEl=document.querySelector('#fc-modal-body .ring');
   if(ringEl){ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';ringEl.textContent='✓';}
   // Audit trail for every price check — success AND failure, so a run that
-  // found nothing is distinguishable from one that never reached FindChips.
+  // found nothing is distinguishable from one that never reached the vendors.
   logSystemAudit('price_check',{
     screen: mode==='parts'?'Database':'Sales Desk',
     checked: done, found, failed: failures, stopped,
@@ -3983,7 +3862,6 @@ const _SD_DEFAULT_COLS=[
   {k:'description',    l:'Description',     w:'190px',wrap:true},
   {k:'qty',            l:'QTY',             w:'75px'},
   {k:'unit',           l:'Units',           w:'55px'},
-  {k:'price',          l:'FC Price',        w:'85px'},
   {k:'priority_price', l:'Priority Price',  w:'95px'},
   {k:'mouser_price',   l:'Mouser Price',    w:'95px'},
   {k:'digikey_price',  l:'DigiKey Price',   w:'95px'},
@@ -3991,16 +3869,18 @@ const _SD_DEFAULT_COLS=[
   {k:'labor_time',     l:'Labor Time',      w:'85px'},
 ];
 // Length constants for "mm"-unit (length) rows — Priority lists cable/wire
-// pricing per METER, while FindChips/FC lists it per FOOT (see _fcTargetQty,
-// which already converts mm→feet the same way when looking FC prices up).
-// A flat qty×price would overshoot by ~1000x for Priority and ~305x for FC
-// if the row's mm quantity were multiplied straight against either price
-// without first converting it into the unit that price is actually quoted in.
+// pricing per METER, while Mouser and DigiKey quote it per FOOT (see
+// _priceTargetQty, which already converts mm→feet when looking those prices up).
+// A flat qty×price would overshoot by ~1000x for Priority and ~305x for the
+// distributors if the row's mm quantity were multiplied straight against either
+// price without first converting it into the unit that price is quoted in.
 const MM_PER_METER=1000, MM_PER_FOOT=304.8;
-// Actual dollar cost of this row if priced from `priceField` ('price'=FC,
-// 'priority_price'=Priority) — for "pc" (and any other non-length) rows the
-// price is already per-piece, so qty multiplies directly; for "mm" rows the
-// qty is converted into whatever unit that price source is quoted in first.
+// Every price source the app can quote from. Order matters only for tie-breaks.
+const _SD_PRICE_SOURCES=['priority_price','mouser_price','digikey_price'];
+// Actual dollar cost of this row if priced from `priceField` — for "pc" (and any
+// other non-length) rows the price is already per-piece, so qty multiplies
+// directly; for "mm" rows the qty is first converted into whatever unit that
+// particular source quotes in.
 function _sdLineCost(r, priceField){
   const price=parseFloat(r[priceField])||0;
   if(!price) return 0;
@@ -4008,7 +3888,8 @@ function _sdLineCost(r, priceField){
   const unit=String(r.unit||'').trim().toLowerCase();
   if(unit==='mm'){
     if(priceField==='priority_price') return price*(qty/MM_PER_METER);
-    if(priceField==='price') return price*(qty/MM_PER_FOOT);
+    // Mouser and DigiKey both sell bulk wire by the foot.
+    return price*(qty/MM_PER_FOOT);
   }
   return price*qty;
 }
@@ -4017,18 +3898,33 @@ function _sdLineCost(r, priceField){
 // line's cost (not a per-unit price), useful when there's no FC/Priority price
 // at all or when the user has a better number (e.g. a vendor quote). Clearing
 // the field goes back to the normal auto-calculation below.
-// When both FC and Priority prices exist, Part Cost uses whichever produces
-// the LOWER actual dollar cost for this row (mirrors the Windows app's
-// _update_row_total) — compared on real cost, not on the two sources' raw
-// per-unit numbers, since those aren't on the same unit basis for mm rows.
+// Part Cost uses whichever available source produces the LOWEST actual dollar
+// cost for this row (mirrors the Windows app's _update_row_total). Compared on
+// real cost, never on the sources' raw per-unit numbers: those aren't on the
+// same unit basis for mm rows, so a naive min() would pick per-foot over
+// per-metre and understate the line by ~3x.
+// r._costSource records which one won, so the UI can say where a number came
+// from instead of leaving the user to reverse-engineer it.
 function _sdRecalcTotal(r){
   if(r.manual_total!=null && r.manual_total!==''){
     r.total=parseFloat(r.manual_total)||0;
+    r._costSource='manual';
     return r.total;
   }
-  const fcHas=(parseFloat(r.price)||0)>0, prHas=(parseFloat(r.priority_price)||0)>0;
-  const fcCost=fcHas?_sdLineCost(r,'price'):0, prCost=prHas?_sdLineCost(r,'priority_price'):0;
-  r.total = (fcHas&&prHas) ? Math.min(fcCost,prCost) : (fcHas?fcCost:(prHas?prCost:0));
+  let best=0, bestField='';
+  for(const f of _SD_PRICE_SOURCES){
+    const c=_sdLineCost(r,f);
+    if(c>0 && (best===0 || c<best)){ best=c; bestField=f; }
+  }
+  // Only if no real source quoted this part: fall back to the AI's crimp-tool
+  // estimate. Deliberately last — a real quote always beats a guess, however
+  // close the guess looks.
+  if(!best){
+    const est=_sdLineCost(r,'est_price');
+    if(est>0){ best=est; bestField='est_price'; }
+  }
+  r.total=best;
+  r._costSource=bestField;
   return r.total;
 }
 // Labor Total = labor_time(min) × qty_for_labor, for "pc"-counted rows only —
@@ -4082,9 +3978,9 @@ function _sdRecalcLaborTotal(r){
 function _sdRecalcRow(r){ _sdRecalcTotal(r); _sdRecalcLaborTotal(r); return r; }
 const _SD_UNIT_OPTIONS=['','pc','mm','gr'];
 function _sdCellHTML(k,r,i){
-  const fcPrice=parseFloat(r.price)||0, prPrice=parseFloat(r.priority_price)||0;
-  let fcC='',prC='';
-  if(fcPrice&&prPrice){fcC=fcPrice<=prPrice?'price-green':'price-red';prC=prPrice<=fcPrice?'price-green':'price-red';}
+  // Does this row have ANY quotable price? Used below to flag rows that still
+  // need a number typed in by hand.
+  const hasAnyPrice=_SD_PRICE_SOURCES.some(f=>(parseFloat(r[f])||0)>0);
   switch(k){
     // part_number/drawing_number/description/unit are editable text fields
     // (not just for manually-added blank rows — any row can be corrected
@@ -4100,18 +3996,17 @@ function _sdCellHTML(k,r,i){
     case 'unit': return `<select class="sd-unit" data-i="${i}" style="padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px">
            ${_SD_UNIT_OPTIONS.map(u=>`<option value="${u}" ${String(r.unit||'')===u?'selected':''}>${u||'—'}</option>`).join('')}
          </select>`;
-    // All four price columns share the Database's comparison rule — cheapest
-    // green, dearest red — so a price means the same thing on both screens.
-    case 'price':
+    // All price columns share the Database's comparison rule — cheapest green,
+    // dearest red — so a price means the same thing on both screens.
     case 'priority_price':
     case 'mouser_price':
     case 'digikey_price': return _priceCellHTML(r,k);
     // Part Cost is always editable — type a number to set/correct it directly
-    // (see _sdRecalcTotal). Highlighted cyan when there's no FC/Priority price
-    // and no manual override yet, so missing-price rows are easy to spot.
+    // (see _sdRecalcTotal). Highlighted cyan when no source has a price and
+    // there's no manual override yet, so missing-price rows are easy to spot.
     case 'total': {
       const hasManual = r.manual_total!=null && r.manual_total!=='';
-      const noSourcePrice = !(fcPrice>0) && !(prPrice>0) && !hasManual;
+      const noSourcePrice = !hasAnyPrice && !hasManual;
       const ownedNote = _sdIsToolOwned(r)
         ? `<div style="font-size:9px;color:#1F8B4C;font-weight:700;white-space:nowrap" title="This tool is marked in Stock in the Database — not charged in the final price">✓ in stock</div>`
         : '';
@@ -4673,7 +4568,7 @@ function openPartPickerModal(onAdd){
           <thead><tr>
             <th style="width:28px"><input type="checkbox" id="pp-check-all"></th>
             <th>MNF P/N</th><th>Drawing #</th><th>Drawing Name</th><th>Description</th>
-            <th>QTY</th><th>Units</th><th>FC Price</th><th>Priority Price</th>
+            <th>QTY</th><th>Units</th><th>Priority Price</th>
           </tr></thead>
           <tbody id="pp-tbody"></tbody>
         </table>
@@ -5057,9 +4952,9 @@ async function handleSDFiles(files){
           // won't be found in the Database (allParts/match) yet since it was
           // just created by saveBOMToPartStock a few lines above and the local
           // allParts cache hasn't been refreshed. Prefer r.price when present
-          // so the tool's price shows up immediately instead of appearing as
+          // so the tool's estimate shows up immediately instead of appearing as
           // $0.00 until the next Database refresh.
-          price:r.price?(parseFloat(r.price)||0):(match?parseFloat(match.price)||0:0),
+          est_price:r.price?(parseFloat(r.price)||0):(match?parseFloat(match.est_price)||0:0),
           priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
           mouser_price:match?parseFloat(match.mouser_price)||'':'',
           digikey_price:match?parseFloat(match.digikey_price)||'':'',
@@ -5125,7 +5020,6 @@ function exportPartStockExcel(rows, totalCount, cols){
   rows.forEach(p=>{
     aoa.push(exportCols.map(c=>{
       if(c.k==='updatedAt') return fmtDate(p.updatedAt);
-      if(c.k==='price') return parseFloat(p.price)||'';
       if(c.k==='priority_price') return parseFloat(p.priority_price)||'';
       if(c.k==='mouser_price') return parseFloat(p.mouser_price)||'';
       if(c.k==='digikey_price') return parseFloat(p.digikey_price)||'';
@@ -5169,15 +5063,15 @@ function exportBOMExcel(rows, totalCount, cols, projectName){
 // ── Sales Desk → Excel quote export (client-side via SheetJS) ─────────────────
 // Replaces the old Print/Save-PDF button. Mirrors the layout/columns/summary rows
 // of the Windows app's ui/sales_desk_dialog.py _generate_quote_xlsx (item, drawing#,
-// part#, drawing name, customer PN, description, qty, unit, manufacturer, FC price,
-// priority price, part cost, labor time, labor total, then a summary block).
+// part#, drawing name, customer PN, description, qty, unit, manufacturer,
+// priority/Mouser/DigiKey price, part cost, labor time, then a summary block).
 function exportSalesDeskExcel(){
   if(!sdItems.length){ toast('No items to export','error'); return; }
   if(!window.XLSX){ toast('Excel library not loaded — please reload the page','error'); return; }
 
   const {partsTotal,laborCost,subtotal,final,toolsTotal,missingToolRows}=_sdComputeSummary();
   const headers=['Item','Drawing #','MNF P/N','Description','QTY','Units',
-    'FC Price','Priority Price','Mouser Price','DigiKey Price','Part Cost','Labor Time (min)'];
+    'Priority Price','Mouser Price','DigiKey Price','Part Cost','Labor Time (min)'];
   const aoa=[['SALES DESK — PRICE QUOTATION'],
     ['Generated', new Date().toLocaleString()],
     [],
@@ -5185,16 +5079,16 @@ function exportSalesDeskExcel(){
   sdItems.forEach((r,i)=>{
     aoa.push([i+1, r.drawing_number||'', r.part_number||'', r.description||'',
       parseFloat(r.qty)||0, r.unit||'',
-      parseFloat(r.price)||'', parseFloat(r.priority_price)||'',
+      parseFloat(r.priority_price)||'',
       parseFloat(r.mouser_price)||'', parseFloat(r.digikey_price)||'',
       +(r.total||0).toFixed(2), +(r.labor_total||0).toFixed(2)]);
   });
   aoa.push([]);
-  aoa.push(['','','','','','','','','','','Parts Total', +partsTotal.toFixed(2)]);
-  aoa.push(['','','','','','','','','','','Labor Cost', +laborCost.toFixed(2)]);
-  aoa.push(['','','','','','','','','','','Subtotal', +subtotal.toFixed(2)]);
-  aoa.push(['','','','','','','','','','',`Profit (${_sdProfitPct}%)`, +(final-subtotal).toFixed(2)]);
-  aoa.push(['','','','','','','','','','','FINAL PRICE', +final.toFixed(2)]);
+  aoa.push(['','','','','','','','','','Parts Total', +partsTotal.toFixed(2)]);
+  aoa.push(['','','','','','','','','','Labor Cost', +laborCost.toFixed(2)]);
+  aoa.push(['','','','','','','','','','Subtotal', +subtotal.toFixed(2)]);
+  aoa.push(['','','','','','','','','',`Profit (${_sdProfitPct}%)`, +(final-subtotal).toFixed(2)]);
+  aoa.push(['','','','','','','','','','FINAL PRICE', +final.toFixed(2)]);
   // Tools are quoted separately, never inside FINAL PRICE (see _sdComputeSummary)
   if(missingToolRows.length){
     aoa.push([]);
@@ -5203,7 +5097,7 @@ function exportSalesDeskExcel(){
     missingToolRows.forEach(r=>{
       aoa.push(['', r.part_number||'', r.description||'', '', '', '', '', '', '', '', +(r.total||0).toFixed(2)]);
     });
-    aoa.push(['','','','','','','','','','','TOOLS TOTAL (separate)', +toolsTotal.toFixed(2)]);
+    aoa.push(['','','','','','','','','','TOOLS TOTAL (separate)', +toolsTotal.toFixed(2)]);
   }
 
   const ws=XLSX.utils.aoa_to_sheet(aoa);
