@@ -425,7 +425,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.84';
+const APP_VER   = '1.8.85';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -974,18 +974,26 @@ function _priceRankValue(row, field){
   return typeof _sdLineCost==='function' ? _sdLineCost(row, field)
                                          : (parseFloat(row[field])||0);
 }
+// Shows the COST FOR THE ROW'S QUANTITY, not the per-unit price. Change QTY
+// and every price column moves with it, which is what makes the three figures
+// answerable ("which supplier is cheaper for what I'm actually buying?") and
+// consistent with Part Cost, the Check Price modal and the exported quotation.
+// The per-unit price is kept in the tooltip — it's still the number you'd read
+// off a datasheet or paste into a PO, just not the one you compare on.
+// In the Database every row has QTY 1, so cost and unit price coincide there
+// and nothing about that screen changes.
 function _priceCellHTML(row, field){
-  const v=parseFloat(row[field])||0;
-  if(!v) return '';
+  const unit=parseFloat(row[field])||0;
+  if(!unit) return '';
   const mine=_priceRankValue(row, field);
+  if(!(mine>0)) return '';
+  const qty=parseFloat(row.qty)||1;
   const all=_PRICE_FIELDS.map(f=>_priceRankValue(row,f)).filter(n=>n>0);
-  if(all.length<2) return fmtPrice(v);
-  const lo=Math.min(...all), hi=Math.max(...all);
-  const cls = mine<=lo ? 'price-green' : (mine>=hi ? 'price-red' : '');
-  // The tooltip carries the real line cost, so a colour that looks surprising
-  // can be checked instead of just distrusted.
-  const title = mine>0 ? ` title="Line cost at QTY ${row.qty??1}${row.unit?' '+row.unit:''}: $${mine.toFixed(2)}"` : '';
-  return `<span class="${cls}"${title}>${fmtPrice(v)}</span>`;
+  const cls = all.length<2 ? ''
+            : (mine<=Math.min(...all) ? 'price-green'
+            : (mine>=Math.max(...all) ? 'price-red' : ''));
+  const title=`Unit price ${fmtPrice(unit)} × QTY ${qty}${row.unit?' '+row.unit:''} = $${mine.toFixed(2)}`;
+  return `<span class="${cls}" title="${esc(title)}">$${mine.toFixed(2)}</span>`;
 }
 
 // Renders the inner HTML for a single Part Stock cell, given a column key and part row
@@ -4076,9 +4084,9 @@ const _SD_DEFAULT_COLS=[
   {k:'manufacturer',   l:'Manufacturer',    w:'120px'},
   {k:'qty',            l:'QTY',             w:'75px'},
   {k:'unit',           l:'Units',           w:'55px'},
-  {k:'priority_price', l:'Priority Price',  w:'95px'},
-  {k:'mouser_price',   l:'Mouser Price',    w:'95px'},
-  {k:'digikey_price',  l:'DigiKey Price',   w:'95px'},
+  {k:'priority_price', l:'Priority Cost',  w:'95px'},
+  {k:'mouser_price',   l:'Mouser Cost',     w:'95px'},
+  {k:'digikey_price',  l:'DigiKey Cost',    w:'95px'},
   {k:'total',          l:'Part Cost',       w:'85px'},
   {k:'labor_time',     l:'Labor Time',      w:'85px'},
 ];
@@ -5572,7 +5580,7 @@ async function exportSalesDeskExcel(){
     });
 
     const COLS=['Item','Drawing #','MNF P/N','Description','Manufacturer','QTY','Units',
-                'Priority Price','Mouser Price','DigiKey Price','Part Cost','Labor Time (min)'];
+                'Priority Cost','Mouser Cost','DigiKey Cost','Part Cost','Labor Time (min)'];
     const LAST=COLS.length;                 // 12 columns, A..L
     ws.columns=[{width:6},{width:18},{width:24},{width:42},{width:22},{width:9},{width:8},
                 {width:13},{width:13},{width:13},{width:12},{width:15}];
@@ -5665,16 +5673,20 @@ async function exportSalesDeskExcel(){
       const vals=[i+1, r.drawing_number||'', r.part_number||'', r.description||'',
                   r.manufacturer||'',
                   parseFloat(r.qty)||0, r.unit||'',
-                  parseFloat(r.priority_price)||null,
-                  parseFloat(r.mouser_price)||null,
-                  parseFloat(r.digikey_price)||null,
+                  // Line costs for the row's quantity — the same figures shown
+                  // on screen. Writing per-unit prices here while the Sales Desk
+                  // shows costs would have the quote disagree with the app it
+                  // came from.
+                  _sdLineCost(r,'priority_price')||null,
+                  _sdLineCost(r,'mouser_price')||null,
+                  _sdLineCost(r,'digikey_price')||null,
                   +(r.total||0), +(r.labor_total||0)];
       vals.forEach((v,ci)=>{
         const c=ws.getCell(row,ci+1);
         c.value=v;
         c.font={size:10, color:{argb:isTool?'FF92400E':'FF0F172A'}, italic:isTool};
         c.border=_xlBoxed;
-        if(ci>=7&&ci<=10) c.numFmt='$#,##0.0000';
+        if(ci>=7&&ci<=10) c.numFmt='$#,##0.00';
         if(ci===11) c.numFmt='0.0';
         if(ci===5)  c.numFmt='#,##0.###';
         c.alignment={vertical:'middle',
