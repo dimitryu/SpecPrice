@@ -425,7 +425,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.85';
+const APP_VER   = '1.8.86';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2785,7 +2785,7 @@ async function _anthropicCableProcess(text, isImage, imgData, rowsList){
   const messages = isImage ? [{role:'user',content:[
     {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
     {type:'text',text:prompt}
-  ]}] : [{role:'user', content: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000)}];
+  ]}] : [{role:'user', content: prompt + (hasDrawing ? '\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000) : '')}];
   const resp = await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
     method:'POST',
     headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
@@ -2797,11 +2797,11 @@ async function _anthropicCableProcess(text, isImage, imgData, rowsList){
   const data=await resp.json();
   return _parseCableProcessJson(data.content[0].text.trim());
 }
-async function _geminiCableProcess(text, isImage, imgData, rowsList){
-  const prompt=_cableProcessPrompt(rowsList);
+async function _geminiCableProcess(text, isImage, imgData, rowsList, hasDrawing=true){
+  const prompt=_cableProcessPrompt(rowsList, hasDrawing);
   const parts = isImage
     ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:prompt}]
-    : [{text: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000)}];
+    : [{text: prompt + (hasDrawing ? '\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000) : '')}];
   const resp = await _fetchWithRetry(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
     {method:'POST',headers:{'content-type':'application/json'},
@@ -2813,18 +2813,18 @@ async function _geminiCableProcess(text, isImage, imgData, rowsList){
   const raw=(data.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
   return _parseCableProcessJson(raw.trim());
 }
-async function aiAnalyzeCableProcess(text, isImage, imgData, rowsList){
+async function aiAnalyzeCableProcess(text, isImage, imgData, rowsList, hasDrawing=true){
   if(!rowsList) return null;
   let proc, provider;
   if(geminiKey){
-    try { proc=await _geminiCableProcess(text, isImage, imgData, rowsList); provider='gemini'; }
+    try { proc=await _geminiCableProcess(text, isImage, imgData, rowsList, hasDrawing); provider='gemini'; }
     catch(e){
       if(!anthKey){ logSystemAudit('drawing_price_calculation',{error:e.message},false); return null; }
       console.warn('Gemini cable-process failed, using Anthropic:', e.message);
     }
   }
   if(proc===undefined && anthKey){
-    try { proc=await _anthropicCableProcess(text, isImage, imgData, rowsList); provider='anthropic'; }
+    try { proc=await _anthropicCableProcess(text, isImage, imgData, rowsList, hasDrawing); provider='anthropic'; }
     catch(e){ console.warn('Cable-process analysis failed:', e.message); logSystemAudit('drawing_price_calculation',{error:e.message},false); return null; }
   }
   if(proc===undefined) return null;
@@ -4259,7 +4259,118 @@ function _sdCellHTML(k,r,i){
 // process analysis run per drawing (see aiAnalyzeCableProcess/handleSDFiles)
 // or typed in manually. This is kept as a no-op so its existing call sites
 // don't need to change.
-async function _sdAutoMatchLabor(){}
+// ══════════════════════════════════════════════════════════════════════════════
+// Labor Time for parts added from the Database
+// ------------------------------------------------------------------------------
+// Adding a drawing runs the AI cable-process analysis and every row comes back
+// with its labor minutes. Adding the same parts from the Database used to give
+// zero, because this function was an empty stub — a leftover from when labor
+// came from the Manufacturing Routings table, which was removed. Nothing
+// replaced it, so the Sales Desk silently quoted those assemblies with no labor
+// at all: the parts cost was right and the price was too low.
+//
+// It now runs the SAME analysis as the drawing path. The one honest difference
+// is the input: there is no drawing, so the AI works from the part list alone
+// (see _cableProcessPrompt's hasDrawing=false wording). It can read "26 POS"
+// out of a description, but it cannot count pins or measure a length off a
+// drawing it was never given — so treat these as estimates and adjust the Labor
+// Time column where the drawing would have told a different story.
+// ══════════════════════════════════════════════════════════════════════════════
+async function _sdAutoMatchLabor(){
+  if(!anthKey && !geminiKey) return;
+
+  // Only rows that have no labor yet. Re-analysing a row that already carries a
+  // drawing-derived total would replace a figure read from the actual drawing
+  // with a guess made without one — strictly worse.
+  const pending=sdItems
+    .map((r,i)=>({r,i}))
+    .filter(({r})=>!(parseFloat(r.labor_time)>0) && !(parseFloat(r.labor_total)>0)
+                   && !r._laborManualOverride && !_sdIsToolRow(r));
+  if(!pending.length) return;
+
+  // One analysis per drawing, mirroring the drawing path: steps not tied to a
+  // single row become that drawing's generalMinutes, and the breakdown modal
+  // finds a section by matching drawingName against rows in Sales Desk.
+  const groups=new Map();
+  for(const item of pending){
+    const key=String(item.r.drawing_number||'').trim();
+    if(!groups.has(key)) groups.set(key,[]);
+    groups.get(key).push(item);
+  }
+
+  for(const [dwg,members] of groups){
+    // A breakdown whose drawingName matches nothing in sdItems would be
+    // invisible in the modal and its general minutes uncounted. Rows with no
+    // drawing number can't be represented that way, so their steps are all
+    // treated as row-tied and no breakdown section is created for them.
+    const canTrack=!!dwg;
+    try{
+      const rowsList=members
+        .map(({r},idx)=>`${idx}: ${r.description||r.part_number||''} (qty=${r.qty||''}${r.unit?' '+r.unit:''})`)
+        .join('\n');
+      const proc=await aiAnalyzeCableProcess('', false, null, rowsList, /*hasDrawing*/false);
+      if(!proc || !proc.steps || !proc.steps.length) continue;
+
+      let generalMinutes=0, rowTiedMinutes=0;
+      const displaySteps=[];
+      for(const step of proc.steps){
+        const unitMins=parseFloat(step.unit_minutes)||0;
+        if(!unitMins) continue;
+        // Same contract as the drawing path: the AI reports a per-occurrence
+        // time and a repeat count separately, and WE multiply. Never trust the
+        // model to have done the arithmetic.
+        const qtyInDrawing=parseFloat(step.qty_in_drawing)||1;
+        const totalMins=unitMins*qtyInDrawing;
+        const target=(step.row_idx!=null) ? members[step.row_idx] : null;
+        displaySteps.push({operation:step.operation, unitMinutes:unitMins, qty:qtyInDrawing, minutes:totalMins});
+        if(target && sdItems[target.i]){
+          const row=sdItems[target.i];
+          row.labor_time=String((parseFloat(row.labor_time)||0)+totalMins);
+          // Already a total for one assembly — _sdRecalcLaborTotal must use it
+          // as-is rather than multiplying it by the row's own qty again.
+          row._laborFixedTotal=true;
+          _sdRecalcLaborTotal(row);
+          rowTiedMinutes+=totalMins;
+        } else if(canTrack){
+          generalMinutes+=totalMins;
+        } else {
+          // Nowhere to attribute it and no breakdown to hold it — fold it into
+          // the first row so the time isn't silently lost from the quote.
+          const first=sdItems[members[0].i];
+          if(first){
+            first.labor_time=String((parseFloat(first.labor_time)||0)+totalMins);
+            first._laborFixedTotal=true;
+            _sdRecalcLaborTotal(first);
+            rowTiedMinutes+=totalMins;
+          }
+        }
+      }
+
+      if(canTrack){
+        _sdLaborBreakdowns.push({
+          drawingName: dwg,
+          steps: displaySteps,
+          rowTiedMinutes,
+          seriesTotal: rowTiedMinutes+generalMinutes,
+          // Floored at the series total for the same reason as the drawing
+          // path: a single stand-alone build can't take LESS than the batch
+          // per-unit time, and the AI's estimate is an independent guess.
+          singleUnitMinutes: Math.max(parseFloat(proc.single_unit_minutes)||0, rowTiedMinutes+generalMinutes),
+          generalMinutes,
+          // Marks this section as estimated without a drawing — surfaced in the
+          // breakdown modal so the number is never mistaken for a drawing-derived one.
+          fromPartsOnly:true,
+        });
+      }
+      logSystemAudit('labor_estimate_from_parts',
+        {drawing:dwg||'(none)', rows:members.length, steps:displaySteps.length,
+         minutes:+(rowTiedMinutes+generalMinutes).toFixed(1)}, true);
+    }catch(e){
+      console.warn('[SD] labor estimate from parts failed:', e.message);
+      logSystemAudit('labor_estimate_from_parts', e.message, false);
+    }
+  }
+}
 
 // Shows the manufacturing-step breakdown behind the Labor Time number — one
 // section per drawing analyzed by aiAnalyzeCableProcess (see handleSDFiles),
@@ -4415,7 +4526,9 @@ function openLaborBreakdownModal(){
   }
   const sections = activeBreakdowns.map(b=>`
     <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)">
-      <div style="font-weight:700;margin-bottom:6px">${esc(b.drawingName||'(drawing)')}</div>
+      <div style="font-weight:700;margin-bottom:6px">${esc(b.drawingName||'(drawing)')}${b.fromPartsOnly
+        ? `<span style="margin-inline-start:7px;padding:2px 7px;border-radius:9px;background:#FEF3C7;color:#92400e;font-size:10px;font-weight:700;cursor:help" title="Estimated from the parts list alone — no drawing was analysed, so pin counts and lengths could not be read. Adjust Labor Time where the drawing would say otherwise.">estimated from parts</span>`
+        : ''}</div>
       <!-- table-layout:fixed stops the long Operation text from stretching the
            table past the modal and re-introducing the horizontal scrollbar. -->
       <table style="width:100%;font-size:12px;border-collapse:collapse;table-layout:fixed">
@@ -4940,7 +5053,14 @@ async function renderSalesDesk(){
       renderSalesDesk();
       toast(`Added ${added} part(s) to Sales Desk`,'success');
       logAudit('sales_desk_add_from_picker',{count:added},true);
-      await _sdAutoMatchLabor();
+      // The labor estimate is an AI call, so it takes a moment. Without this
+      // the Labor Time column just sits at 0 for a few seconds and looks broken
+      // — which is exactly how the old empty stub looked.
+      const _lblEl=document.getElementById('sd-labor-cost-label');
+      const _lblWas=_lblEl?_lblEl.textContent:'';
+      if(_lblEl) _lblEl.textContent='Labor Cost — estimating…';
+      try{ await _sdAutoMatchLabor(); }
+      finally{ if(_lblEl) _lblEl.textContent=_lblWas||'Labor Cost'; }
       renderSalesDesk();
     });
   });
