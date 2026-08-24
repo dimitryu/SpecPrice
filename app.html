@@ -430,7 +430,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.8.89';
+const APP_VER   = '1.8.90';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2851,7 +2851,14 @@ async function _anthropicCableProcess(text, isImage, imgData, rowsList, hasDrawi
     method:'POST',
     headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
              'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-    body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:2048, messages})
+    // temperature 0. Anthropic defaults to 1.0, i.e. maximum sampling
+    // variability — which is why pressing Estimate Labor twice produced
+    // materially different minutes for the same parts. Estimating assembly
+    // time is not a creative task: the same BOM should give the same answer,
+    // and a number that moves every time it's asked can't be trusted or
+    // checked. It won't be bit-identical (no LLM guarantees that), but the
+    // spread drops from "significantly different" to noise.
+    body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:2048, temperature:0, messages})
   });
   if(!resp.ok){let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
@@ -2866,7 +2873,9 @@ async function _geminiCableProcess(text, isImage, imgData, rowsList, hasDrawing=
   const resp = await _fetchWithRetry(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
     {method:'POST',headers:{'content-type':'application/json'},
-     body:JSON.stringify({contents:[{parts}],generationConfig:{thinkingConfig:{thinkingBudget:0}}})}
+     // temperature 0 — see the note in _anthropicCableProcess.
+     body:JSON.stringify({contents:[{parts}],
+       generationConfig:{temperature:0, thinkingConfig:{thinkingBudget:0}}})}
   );
   if(!resp.ok){let m=`Gemini error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
@@ -4350,7 +4359,7 @@ function _sdCellHTML(k,r,i){
 // path, so "no labor appeared" was indistinguishable from "no AI key", "the
 // model returned no steps" and "the request failed" — which is precisely why
 // this took two attempts to diagnose.
-async function _sdAutoMatchLabor(){
+async function _sdAutoMatchLabor(onProgress){
   if(!anthKey && !geminiKey){
     return {applied:0, minutes:0, reason:'No AI key configured — add one in Admin → AI API Keys'};
   }
@@ -4379,7 +4388,13 @@ async function _sdAutoMatchLabor(){
     groups.get(key).push(item);
   }
 
+  let groupNo=0;
+  const groupCount=groups.size;
   for(const [dwg,members] of groups){
+    groupNo++;
+    // A 10-second silent pause reads as a broken button, so report which
+    // drawing is being worked on as the loop advances.
+    if(onProgress) onProgress({done:groupNo, total:groupCount, drawing:dwg, rows:members.length});
     // ── Re-estimating must REPLACE, not accumulate ──
     // Each run used to push a fresh breakdown and add to whatever minutes a row
     // already had. Running it twice on one drawing therefore produced two
@@ -4897,6 +4912,45 @@ async function renderSalesDesk(){
   setActions('');
   const SD_COLS=loadColOrder('salesdesk',_SD_DEFAULT_COLS);
 
+  // Shown during the AI labor estimate. Kept out of renderSD() so a re-render
+  // mid-estimate can't wipe it.
+  const _sdLaborBusy=(txt)=>{
+    const el=document.getElementById('sd-labor-progress');
+    const t=document.getElementById('sd-labor-progress-txt');
+    if(!el) return;
+    if(txt){ el.style.display='flex'; if(t) t.textContent=txt; }
+    else { el.style.display='none'; }
+    // Both entry points get disabled — starting a second estimate on top of a
+    // running one would interleave two passes over the same rows.
+    ['btn-sd-labor','btn-sd-addpick','btn-sd-fc'].forEach(id=>{
+      const b=document.getElementById(id); if(b) b.disabled=!!txt;
+    });
+  };
+  // Wraps the estimate with the banner, the progress text and the result
+  // message, so the picker and the button behave identically.
+  const _sdRunLaborEstimate=async()=>{
+    _sdLaborBusy('Estimating labor time with AI — this usually takes 5–15 seconds…');
+    try{
+      const res=await _sdAutoMatchLabor(({done,total,drawing,rows})=>{
+        _sdLaborBusy(total>1
+          ? `Estimating labor time — drawing ${done} of ${total} (${drawing||'no drawing #'}, ${rows} rows)…`
+          : `Estimating labor time for ${rows} row(s)${drawing?' — '+drawing:''}…`);
+      });
+      renderSalesDesk();
+      if(res && res.applied){
+        toast(`Labor estimated — ${res.minutes.toFixed(1)} min across ${res.applied} row(s)`,'success');
+      } else if(res && res.reason){
+        toast('Labor not estimated: '+res.reason,'warn');
+      }
+      return res;
+    }catch(e){
+      toast('Labor estimate failed: '+e.message,'error');
+      return null;
+    }finally{
+      _sdLaborBusy('');
+    }
+  };
+
   const _sdUpdateSummaryUI=()=>{
     const {partsTotal,toolsTotal,laborMinutes,laborCost,subtotal,final,ownedToolRows,missingToolRows}=_sdComputeSummary();
     const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent='$'+v.toFixed(2); };
@@ -5054,6 +5108,14 @@ async function renderSalesDesk(){
           </table>
         </div>
         <div id="sd-notes-panel" style="display:none;padding:11px;border-top:1px solid var(--border)"></div>
+        <!-- Labor estimation is a 5-15 second AI call. Without this the table
+             just sits there and the button looks dead — the user has no way to
+             know work is happening, let alone that it's nearly done. -->
+        <div id="sd-labor-progress" style="display:none;padding:10px 12px;border-top:1px solid var(--border);
+             background:#EFF6FF;color:#1E40AF;font-size:12px;align-items:center;gap:9px">
+          <div class="ring" style="width:15px;height:15px;border-width:2px;flex-shrink:0"></div>
+          <span id="sd-labor-progress-txt">Estimating labor time…</span>
+        </div>
       </div>
 
       <div style="display:flex;flex-direction:column;gap:12px">
@@ -5168,20 +5230,7 @@ async function renderSalesDesk(){
       // The labor estimate is an AI call, so it takes a moment. Without this
       // the Labor Time column just sits at 0 for a few seconds and looks broken
       // — which is exactly how the old empty stub looked.
-      const _lblEl=document.getElementById('sd-labor-cost-label');
-      const _lblWas=_lblEl?_lblEl.textContent:'';
-      if(_lblEl) _lblEl.textContent='Labor Cost — estimating…';
-      let _res=null;
-      try{ _res=await _sdAutoMatchLabor(); }
-      finally{ if(_lblEl) _lblEl.textContent=_lblWas||'Labor Cost'; }
-      renderSalesDesk();
-      // Say what happened either way. Silence here is what made this look
-      // broken rather than "the AI had nothing to say".
-      if(_res && _res.applied){
-        toast(`Labor estimated — ${_res.minutes.toFixed(1)} min across ${_res.applied} row(s)`,'success');
-      } else if(_res && _res.reason){
-        toast('Labor not estimated: '+_res.reason,'warn');
-      }
+      await _sdRunLaborEstimate();
     });
   });
 
@@ -5196,20 +5245,8 @@ async function renderSalesDesk(){
     renderSD();
   });
   document.getElementById('btn-sd-labor')?.addEventListener('click',async()=>{
-    const btn=document.getElementById('btn-sd-labor');
     if(!sdItems.length){ toast('No parts in Sales Desk','error'); return; }
-    btn.disabled=true; const was=btn.textContent; btn.textContent='⏱ Estimating…';
-    try{
-      const res=await _sdAutoMatchLabor();
-      renderSalesDesk();
-      if(res && res.applied) toast(`Labor estimated — ${res.minutes.toFixed(1)} min across ${res.applied} row(s)`,'success');
-      else toast('Labor not estimated: '+((res&&res.reason)||'unknown reason'),'warn');
-    }catch(e){
-      toast('Labor estimate failed: '+e.message,'error');
-    }finally{
-      const b=document.getElementById('btn-sd-labor');
-      if(b){ b.disabled=false; b.textContent=was; }
-    }
+    await _sdRunLaborEstimate();
   });
 
   document.getElementById('btn-sd-export').addEventListener('click',()=>exportSalesDeskExcel());
