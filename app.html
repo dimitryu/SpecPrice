@@ -425,7 +425,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.75';
+const APP_VER   = '1.8.76';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3069,14 +3069,21 @@ function _fcPrettyDistributor(haystack){
 async function lookupPartPrices(partNumber, qty=0){
   const data=await _apiPriceLookup(partNumber, qty||1);
   if(!data) return {mouser:null, digikey:null, best:null, errors:[]};
-  const norm=v=>v&&v.price>0 ? {
-    price:+v.price, stock:v.stock||'', url:v.url||'', mpn:v.mpn||'',
-    breakQty:v.breakQty||0, exact:v.exactMatch!==false,
+  // Keep an entry whenever the vendor LISTS the part, even at price 0.
+  // A non-stocked or quote-only part still answers the question "does this
+  // exist and where?", and dropping it was reporting real parts as missing.
+  const norm=v=>v ? {
+    price:+v.price||0, stock:v.stock||'0', url:v.url||'', mpn:v.mpn||'',
+    breakQty:v.breakQty||0, exact:v.exactMatch!==false, status:v.status||'',
   } : null;
   const mouser=norm(data.mouser), digikey=norm(data.digikey);
-  const both=[mouser&&{...mouser,name:'Mouser'}, digikey&&{...digikey,name:'DigiKey'}].filter(Boolean);
-  const best=both.length ? both.reduce((a,b)=>b.price<a.price?b:a) : null;
-  return {mouser, digikey, best, errors:data.errors||[]};
+  const listed=[mouser&&{...mouser,name:'Mouser'}, digikey&&{...digikey,name:'DigiKey'}].filter(Boolean);
+  // "best" = cheapest among those that actually quoted a price; if nobody did,
+  // fall back to any listing so the caller still gets stock and a link.
+  const priced=listed.filter(v=>v.price>0);
+  const best = priced.length ? priced.reduce((a,b)=>b.price<a.price?b:a)
+             : (listed[0]||null);
+  return {mouser, digikey, best, listed, errors:data.errors||[]};
 }
 
 // mode: 'parts' → save to Firestore allParts; 'sd' → update sdItems in memory
@@ -3184,8 +3191,15 @@ async function runFCCheckModal(items, mode){
       const moNum = r.mouser  ? r.mouser.price  : '';
       paintRow(i, dkNum||0, moNum||0, prPrice);
 
+      // Stock is shown for every listed part, in stock or not — 0 is a useful
+      // answer ("they carry it, none on hand"), quite different from a blank.
+      const stockNum = r.best ? (parseInt(r.best.stock,10)||0) : 0;
       const sEl=document.getElementById(`fc-s-${i}`);
-      if(sEl && r.best){ sEl.textContent=r.best.stock||''; sEl.style.color='var(--text)'; }
+      if(sEl && r.best){
+        sEl.textContent=stockNum>0?String(stockNum):'0';
+        sEl.style.color = stockNum>0 ? 'var(--text)' : 'var(--muted)';
+        sEl.title = stockNum>0 ? '' : 'Listed by the distributor, none currently in stock';
+      }
 
       if(!r.best){
         setStatus(i,'Not found','var(--muted)',
@@ -3193,12 +3207,18 @@ async function runFCCheckModal(items, mode){
         return;
       }
       found++;
-      // A normalised (non-exact) match found the part under a differently
-      // formatted MPN — worth flagging so the user can sanity-check it.
-      setStatus(i, r.best.exact?'✓':'✓ ≈', 'var(--green)',
-        r.best.exact?'' : `Matched ${r.best.name} part "${r.best.mpn}" — punctuation/zero-padding differs from "${it.part_number}"`);
+      // Three things worth telling apart in one glyph:
+      //   ✓   priced, exact part-number match
+      //   ✓ ≈ priced, matched under a differently formatted MPN
+      //   ◑   listed but no price quoted (non-stocked / quote-only)
+      const noPrice = !(r.best.price>0);
+      const glyph = noPrice ? '◑' : (r.best.exact?'✓':'✓ ≈');
+      const tip = noPrice
+        ? `Listed by ${r.best.name} as "${r.best.mpn}"${r.best.status?` (${r.best.status})`:''} but no price is published — usually non-stocked or quote-only.`
+        : (r.best.exact ? '' : `Matched ${r.best.name} part "${r.best.mpn}" — punctuation/zero-padding differs from "${it.part_number}"`);
+      setStatus(i, glyph, noPrice?'#B45309':'var(--green)', tip);
 
-      const stock=r.best.stock||'';
+      const stock=String(stockNum);
       if(mode==='parts'){
         if(it._id){
           try{
