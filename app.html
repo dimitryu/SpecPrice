@@ -330,7 +330,12 @@ let companyName = '';
 let companyLogoB64 = '';
 let currentUserEmail = '';
 let allParts    = [];
-let anthKey     = '';
+// Seeded from localStorage, which is where the Admin page saves them.
+// This read did not exist: the keys were written on save and then only ever
+// re-read from the company document, so a key typed into Admin worked until
+// the page was reloaded and then silently disappeared — taking every AI
+// feature with it, with no error anywhere.
+let anthKey     = localStorage.getItem('anth_key') || '';
 let currentView = 'home';
 let currentUserRole = '';
 // Role → views visible as buttons on the Home screen. This is now admin-
@@ -424,8 +429,8 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-let geminiKey   = '';
-const APP_VER   = '1.8.86';
+let geminiKey   = localStorage.getItem('gem_key') || '';
+const APP_VER   = '1.8.87';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -492,8 +497,10 @@ async function initCompany(user) {
       const cSnap = await getDoc(doc(db,'companies',companyId));
       const cData = cSnap.data() || {};
       companyName = cData.name || companyId;
-      anthKey   = cData.anthropic_key || '';
-      geminiKey = cData.gemini_key || '';
+      // The company document is a fallback, not an override: a key saved in
+      // Admin (localStorage) must not be wiped by a company doc that has none.
+      anthKey   = anthKey   || cData.anthropic_key || '';
+      geminiKey = geminiKey || cData.gemini_key    || '';
       _sdLaborRateMin = parseFloat(cData.labor_rate_min) || 0.5;
       companyLogoB64 = cData.logo_b64 || '';
     }
@@ -4276,8 +4283,15 @@ function _sdCellHTML(k,r,i){
 // drawing it was never given — so treat these as estimates and adjust the Labor
 // Time column where the drawing would have told a different story.
 // ══════════════════════════════════════════════════════════════════════════════
+// Returns {applied, minutes, reason} so the caller can TELL THE USER what
+// happened. The first version returned nothing and swallowed every failure
+// path, so "no labor appeared" was indistinguishable from "no AI key", "the
+// model returned no steps" and "the request failed" — which is precisely why
+// this took two attempts to diagnose.
 async function _sdAutoMatchLabor(){
-  if(!anthKey && !geminiKey) return;
+  if(!anthKey && !geminiKey){
+    return {applied:0, minutes:0, reason:'No AI key configured — add one in Admin → AI API Keys'};
+  }
 
   // Only rows that have no labor yet. Re-analysing a row that already carries a
   // drawing-derived total would replace a figure read from the actual drawing
@@ -4286,7 +4300,10 @@ async function _sdAutoMatchLabor(){
     .map((r,i)=>({r,i}))
     .filter(({r})=>!(parseFloat(r.labor_time)>0) && !(parseFloat(r.labor_total)>0)
                    && !r._laborManualOverride && !_sdIsToolRow(r));
-  if(!pending.length) return;
+  if(!pending.length){
+    return {applied:0, minutes:0, reason:'Every row already has a Labor Time'};
+  }
+  let applied=0, minutesTotal=0, lastError='';
 
   // One analysis per drawing, mirroring the drawing path: steps not tied to a
   // single row become that drawing's generalMinutes, and the breakdown modal
@@ -4309,7 +4326,10 @@ async function _sdAutoMatchLabor(){
         .map(({r},idx)=>`${idx}: ${r.description||r.part_number||''} (qty=${r.qty||''}${r.unit?' '+r.unit:''})`)
         .join('\n');
       const proc=await aiAnalyzeCableProcess('', false, null, rowsList, /*hasDrawing*/false);
-      if(!proc || !proc.steps || !proc.steps.length) continue;
+      if(!proc || !proc.steps || !proc.steps.length){
+        lastError=lastError||'The AI returned no manufacturing steps for these parts';
+        continue;
+      }
 
       let generalMinutes=0, rowTiedMinutes=0;
       const displaySteps=[];
@@ -4362,14 +4382,19 @@ async function _sdAutoMatchLabor(){
           fromPartsOnly:true,
         });
       }
+      applied+=members.length;
+      minutesTotal+=rowTiedMinutes+generalMinutes;
       logSystemAudit('labor_estimate_from_parts',
         {drawing:dwg||'(none)', rows:members.length, steps:displaySteps.length,
          minutes:+(rowTiedMinutes+generalMinutes).toFixed(1)}, true);
     }catch(e){
-      console.warn('[SD] labor estimate from parts failed:', e.message);
-      logSystemAudit('labor_estimate_from_parts', e.message, false);
+      lastError=e.message||String(e);
+      console.warn('[SD] labor estimate from parts failed:', lastError);
+      logSystemAudit('labor_estimate_from_parts', lastError, false);
     }
   }
+  return {applied, minutes:minutesTotal,
+          reason: applied ? '' : (lastError||'No labor time could be estimated')};
 }
 
 // Shows the manufacturing-step breakdown behind the Labor Time number — one
@@ -4920,6 +4945,11 @@ async function renderSalesDesk(){
           <button class="btn btn-blue" id="btn-sd-file">📎 New Drawing</button>
           <button class="btn btn-blue" id="btn-sd-newrow">➕ New Row</button>
           <button class="btn btn-green" id="btn-sd-fc" style="white-space:nowrap">🔍 Check Price</button>
+          <!-- Runs the same estimate the picker triggers, on demand. Needed
+               because rows can arrive with no labor for several reasons (added
+               before a key was configured, a failed call, manually created) and
+               without this the only way to retry was to delete and re-add. -->
+          <button class="btn" id="btn-sd-labor" style="white-space:nowrap" title="Estimate Labor Time for rows that don't have one yet">⏱ Estimate Labor</button>
           <button class="btn btn-red" id="btn-sd-clear">Clear All</button>
         </div>
         <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap;align-items:center">
@@ -5059,9 +5089,17 @@ async function renderSalesDesk(){
       const _lblEl=document.getElementById('sd-labor-cost-label');
       const _lblWas=_lblEl?_lblEl.textContent:'';
       if(_lblEl) _lblEl.textContent='Labor Cost — estimating…';
-      try{ await _sdAutoMatchLabor(); }
+      let _res=null;
+      try{ _res=await _sdAutoMatchLabor(); }
       finally{ if(_lblEl) _lblEl.textContent=_lblWas||'Labor Cost'; }
       renderSalesDesk();
+      // Say what happened either way. Silence here is what made this look
+      // broken rather than "the AI had nothing to say".
+      if(_res && _res.applied){
+        toast(`Labor estimated — ${_res.minutes.toFixed(1)} min across ${_res.applied} row(s)`,'success');
+      } else if(_res && _res.reason){
+        toast('Labor not estimated: '+_res.reason,'warn');
+      }
     });
   });
 
@@ -5075,6 +5113,23 @@ async function renderSalesDesk(){
       priority_price:0,total:0,labor_time:'',labor_total:0});
     renderSD();
   });
+  document.getElementById('btn-sd-labor')?.addEventListener('click',async()=>{
+    const btn=document.getElementById('btn-sd-labor');
+    if(!sdItems.length){ toast('No parts in Sales Desk','error'); return; }
+    btn.disabled=true; const was=btn.textContent; btn.textContent='⏱ Estimating…';
+    try{
+      const res=await _sdAutoMatchLabor();
+      renderSalesDesk();
+      if(res && res.applied) toast(`Labor estimated — ${res.minutes.toFixed(1)} min across ${res.applied} row(s)`,'success');
+      else toast('Labor not estimated: '+((res&&res.reason)||'unknown reason'),'warn');
+    }catch(e){
+      toast('Labor estimate failed: '+e.message,'error');
+    }finally{
+      const b=document.getElementById('btn-sd-labor');
+      if(b){ b.disabled=false; b.textContent=was; }
+    }
+  });
+
   document.getElementById('btn-sd-export').addEventListener('click',()=>exportSalesDeskExcel());
 
   // SD check-all toggle
