@@ -430,7 +430,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.8.87';
+const APP_VER   = '1.8.88';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2754,7 +2754,11 @@ async function _geminiBOM(text, isImage, imgData, filename, sourceType='drawing'
 // part (general assembly/inspection) come back with row_idx:null. A separate,
 // higher single_unit_minutes figure is also returned purely as a reference
 // ("what would ONE stand-alone cable take, with no batch efficiency").
-function _cableProcessPrompt(rowsList){
+// hasDrawing=false is the "Add from Database" path: there is no drawing, only
+// the chosen parts. It gets its OWN prompt rather than a reworded version of
+// this one — see _partsOnlyProcessPrompt for why that matters.
+function _cableProcessPrompt(rowsList, hasDrawing=true){
+  if(!hasDrawing) return _partsOnlyProcessPrompt(rowsList);
   return `You are a cable/wire-harness manufacturing process engineer. Look at this cable assembly drawing and work out the manufacturing steps required to build it, with the time (in minutes) each step takes.
 
 IMPORTANT: Assume SERIES/BATCH production — this is one of many identical units in an ongoing production run, so use realistic steady-state per-unit time (do NOT include one-off first-article setup/changeover time in these step times).
@@ -2778,17 +2782,67 @@ Return ONLY valid JSON, no explanation, in exactly this shape:
 
 If you can't confidently determine any steps from this drawing, return {"steps":[],"single_unit_minutes":0}`;
 }
-function _parseCableProcessJson(raw){
-  const m=String(raw||'').match(/\{[\s\S]*\}/);
-  if(!m) return null;
-  try{
-    const obj=JSON.parse(m[0]);
-    if(!obj||!Array.isArray(obj.steps)) return null;
-    return obj;
-  }catch{ return null; }
+// Throws (rather than returning null) when the reply can't be read, so the
+// caller can tell three very different situations apart:
+//   • the model answered "no steps"          → proc.steps.length === 0
+//   • the model's answer was unreadable      → throws, provider falls back
+//   • the request itself failed              → throws with the HTTP error
+// Returning null for all three is what made "no manufacturing steps" the
+// catch-all message for problems that had nothing to do with the parts.
+// Asking the drawing prompt to work without a drawing is what produced
+// "the AI returned no manufacturing steps". That prompt opens with "look at
+// this cable assembly drawing", tells the model to count pins off it, and ends
+// with an explicit "if you can't tell, return an empty list". Given a parts
+// list and no drawing — and a BOM that is an RF/PCB assembly rather than a
+// classic wire harness — returning nothing was the model following instructions.
+//
+// This version never mentions a drawing, isn't limited to cable harnesses,
+// states that every physical part carries assembly time, and makes an empty
+// answer the wrong one rather than the safe one.
+function _partsOnlyProcessPrompt(rowsList){
+  return `You are a manufacturing process engineer estimating assembly labor for an electro-mechanical build — a cable harness, wire assembly, connector/PCB assembly, or any mix of these.
+
+You are given the BOM below. There is NO drawing. Estimate the manufacturing steps needed to build ONE complete assembly from these parts, and how long each step takes.
+
+IMPORTANT: Assume SERIES/BATCH production — one of many identical units in an ongoing run — so use realistic steady-state per-unit times and exclude one-off first-article setup.
+
+BOM rows (index: description (qty unit)):
+${rowsList}
+
+Every physical part in a BOM takes SOME labor to handle, position, join and verify. Typical steps: cut and strip wire or cable, crimp a contact, insert contacts into a housing, mate and lock connectors, solder a through-hole or SMT joint, place a PCB component, fit a boot or heat-shrink, apply a label or marker, dress and tie a bundle, torque a fastener, apply conformal coating, continuity or electrical test, final visual inspection.
+
+For each step return:
+- "operation": short description of the step
+- "row_idx": index (from the list above) of the row this step's labor belongs to — or null for a general assembly/test/inspection step not tied to one part
+- "unit_minutes": minutes for ONE SINGLE OCCURRENCE (e.g. crimping exactly ONE contact, soldering exactly ONE joint). Never a pre-multiplied total.
+- "qty_in_drawing": how many times that operation repeats to build ONE assembly. With no drawing, base this on the row's own quantity and on what the description states — "SOCKET RECTANG 26 F" implies 26 contacts, "RECEPT RECT 40 C" implies 40 positions. If the description gives no count, use the row's quantity, or 1. Do not invent counts the BOM does not support.
+
+CRITICAL: unit_minutes and qty_in_drawing must be SEPARATE numbers — the app multiplies them itself. Never combine them into one figure.
+
+Also return:
+- "single_unit_minutes": total reference time to build ONE stand-alone unit including the setup overhead a batch run would not pay per unit — for comparison only.
+
+Return ONLY valid JSON, no explanation, in exactly this shape:
+{"steps":[{"operation":"Solder one SMT receptacle to PCB","unit_minutes":0.4,"qty_in_drawing":40,"row_idx":0},{"operation":"Cut and dress flat cable","unit_minutes":2,"qty_in_drawing":1,"row_idx":1},{"operation":"Final visual inspection","unit_minutes":3,"qty_in_drawing":1,"row_idx":null}],"single_unit_minutes":25}
+
+An empty "steps" list is almost never correct: a BOM of real parts always requires assembly labor, and a rough estimate is far more useful than none. Return an empty list ONLY if the BOM contains no physical parts at all (documents or specifications only).`;
 }
-async function _anthropicCableProcess(text, isImage, imgData, rowsList){
-  const prompt=_cableProcessPrompt(rowsList);
+
+function _parseCableProcessJson(raw){
+  const text=String(raw||'').trim();
+  if(!text) throw new Error('The AI returned an empty response');
+  const m=text.match(/\{[\s\S]*\}/);
+  if(!m) throw new Error('No JSON in the AI response: '+text.slice(0,140));
+  let obj;
+  try{ obj=JSON.parse(m[0]); }
+  catch(e){ throw new Error('Malformed JSON from the AI: '+m[0].slice(0,140)); }
+  if(!obj || !Array.isArray(obj.steps)){
+    throw new Error('AI response had no "steps" array: '+m[0].slice(0,140));
+  }
+  return obj;
+}
+async function _anthropicCableProcess(text, isImage, imgData, rowsList, hasDrawing=true){
+  const prompt=_cableProcessPrompt(rowsList, hasDrawing);
   const messages = isImage ? [{role:'user',content:[
     {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
     {type:'text',text:prompt}
@@ -2822,19 +2876,27 @@ async function _geminiCableProcess(text, isImage, imgData, rowsList, hasDrawing=
 }
 async function aiAnalyzeCableProcess(text, isImage, imgData, rowsList, hasDrawing=true){
   if(!rowsList) return null;
-  let proc, provider;
+  let proc, provider, firstError='';
   if(geminiKey){
     try { proc=await _geminiCableProcess(text, isImage, imgData, rowsList, hasDrawing); provider='gemini'; }
     catch(e){
-      if(!anthKey){ logSystemAudit('drawing_price_calculation',{error:e.message},false); return null; }
-      console.warn('Gemini cable-process failed, using Anthropic:', e.message);
+      firstError=e.message;
+      // Deliberately NOT `return null` — let Anthropic try. This branch used to
+      // give up whenever Gemini produced anything unreadable, so a single bad
+      // reply from one provider silenced the other entirely.
+      if(!anthKey){ logSystemAudit('drawing_price_calculation',{error:e.message},false); throw e; }
+      console.warn('Gemini cable-process failed, falling back to Anthropic:', e.message);
     }
   }
-  if(proc===undefined && anthKey){
+  if(!proc && anthKey){
     try { proc=await _anthropicCableProcess(text, isImage, imgData, rowsList, hasDrawing); provider='anthropic'; }
-    catch(e){ console.warn('Cable-process analysis failed:', e.message); logSystemAudit('drawing_price_calculation',{error:e.message},false); return null; }
+    catch(e){
+      console.warn('Cable-process analysis failed:', e.message);
+      logSystemAudit('drawing_price_calculation',{error:e.message},false);
+      throw new Error(firstError && firstError!==e.message ? `${e.message} (Gemini also failed: ${firstError})` : e.message);
+    }
   }
-  if(proc===undefined) return null;
+  if(!proc) return null;
   logSystemAudit('drawing_price_calculation',{provider,stepsFound:proc?.steps?.length||0},true);
   return proc;
 }
