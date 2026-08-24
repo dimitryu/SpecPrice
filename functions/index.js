@@ -21,19 +21,20 @@
  * your Google project, on your quota and under your IP's reputation.
  */
 const { onRequest } = require('firebase-functions/v2/https');
-const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 
 admin.initializeApp();
 
-// API credentials live in Secret Manager, never in this file or in git.
-// Set them once with:
-//   firebase functions:secrets:set MOUSER_API_KEY
-//   firebase functions:secrets:set DIGIKEY_CLIENT_ID
-//   firebase functions:secrets:set DIGIKEY_CLIENT_SECRET
-const MOUSER_API_KEY        = defineSecret('MOUSER_API_KEY');
-const DIGIKEY_CLIENT_ID     = defineSecret('DIGIKEY_CLIENT_ID');
-const DIGIKEY_CLIENT_SECRET = defineSecret('DIGIKEY_CLIENT_SECRET');
+// NOTE ON CREDENTIALS — deliberately NOT defineSecret().
+// An earlier version bound these functions to three Secret Manager secrets.
+// That made deployment all-or-nothing: the CLI refuses to deploy a function
+// whose declared secrets don't all exist yet, so not having a Mouser key
+// blocked deploying the DigiKey support too.
+//
+// Credentials now live in Firestore, written through the Admin page (see
+// getCredentials / apiConfig below). Environment variables are still honoured
+// as a fallback for anyone who prefers configuring them outside the UI; unlike
+// declared secrets, an absent env var is simply undefined and blocks nothing.
 
 // Only these upstreams may be fetched. findchips = part pricing,
 // iw.coinmill.com = the currency-conversion rates the Priority import uses.
@@ -357,7 +358,6 @@ exports.priceLookup = onRequest(
     timeoutSeconds: 60,
     memory: '256MiB',
     cors: false,
-    secrets: [MOUSER_API_KEY, DIGIKEY_CLIENT_ID, DIGIKEY_CLIENT_SECRET],
   },
   async (req, res) => {
     const origin = req.headers.origin || '';
@@ -429,8 +429,12 @@ exports.priceLookup = onRequest(
  * caller really is an admin) and only ever GETs back a "configured / not
  * configured" status. The secrets travel in one direction and never come back.
  *
- * Secret Manager remains a fallback, so an install configured with
- * `firebase functions:secrets:set` keeps working untouched.
+ * Environment variables remain a fallback for configuring outside the UI.
+ *
+ * EACH VENDOR IS INDEPENDENT. Mouser and DigiKey are configured, tested and
+ * queried separately, so running with only one is a fully supported state —
+ * not a half-broken one. Signing up for the second vendor later needs no code
+ * change and no redeploy.
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 const CONFIG_DOC = 'secure_config/distributor_api';
@@ -444,11 +448,11 @@ let _credCache = null, _credCacheExp = 0;
 async function getCredentials() {
   if (_credCache && Date.now() < _credCacheExp) return _credCache;
 
-  // Secret Manager first, so an existing CLI-configured deployment is unaffected.
+  // Environment first, so an install configured outside the UI still works.
   const out = {
-    mouser_api_key: safeSecret(MOUSER_API_KEY),
-    digikey_client_id: safeSecret(DIGIKEY_CLIENT_ID),
-    digikey_client_secret: safeSecret(DIGIKEY_CLIENT_SECRET),
+    mouser_api_key: (process.env.MOUSER_API_KEY || '').trim(),
+    digikey_client_id: (process.env.DIGIKEY_CLIENT_ID || '').trim(),
+    digikey_client_secret: (process.env.DIGIKEY_CLIENT_SECRET || '').trim(),
   };
 
   try {
@@ -466,12 +470,6 @@ async function getCredentials() {
   _credCache = out;
   _credCacheExp = Date.now() + 60000;
   return out;
-}
-
-// defineSecret().value() throws if the secret was never set, which would take
-// down the whole request — treat "not configured" as empty instead.
-function safeSecret(param) {
-  try { return (param.value() || '').trim(); } catch { return ''; }
 }
 
 function toIso(v) {
@@ -516,7 +514,6 @@ exports.apiConfig = onRequest(
     timeoutSeconds: 60,
     memory: '256MiB',
     cors: false,
-    secrets: [MOUSER_API_KEY, DIGIKEY_CLIENT_ID, DIGIKEY_CLIENT_SECRET],
   },
   async (req, res) => {
     const origin = req.headers.origin || '';
@@ -549,13 +546,13 @@ exports.apiConfig = onRequest(
           mouser: {
             configured: !!creds.mouser_api_key,
             hint: hint(creds.mouser_api_key),
-            source: meta.mouser_api_key ? 'ui' : (creds.mouser_api_key ? 'secret-manager' : null),
+            source: meta.mouser_api_key ? 'ui' : (creds.mouser_api_key ? 'env-var' : null),
           },
           digikey: {
             configured: !!(creds.digikey_client_id && creds.digikey_client_secret),
             clientIdHint: hint(creds.digikey_client_id),
             secretHint: hint(creds.digikey_client_secret),
-            source: meta.digikey_client_id ? 'ui' : (creds.digikey_client_id ? 'secret-manager' : null),
+            source: meta.digikey_client_id ? 'ui' : (creds.digikey_client_id ? 'env-var' : null),
           },
           // Normally a Firestore Timestamp, but tolerate a plain Date or an
           // ISO string too — a stale field format must not 500 the whole panel
@@ -577,14 +574,18 @@ exports.apiConfig = onRequest(
         const pn = String(body.pn || '').trim() || '1-794610-2';
         const result = { pn, mouser: null, digikey: null };
 
+        // "Not configured" is reported distinctly from "configured but broken":
+        // one is a deliberate choice, the other is a problem to fix.
         result.mouser = !creds.mouser_api_key
-          ? { ok: false, message: 'No API key saved' }
+          ? { ok: false, skipped: true, message: 'Not configured — skipped' }
           : await lookupMouser(pn, 1, creds.mouser_api_key).then(
               r => ({ ok: true, message: r ? `Found — $${r.price} @ qty ${r.breakQty}` : 'Connected, but this part was not found' }),
               e => ({ ok: false, message: e.message }));
 
         result.digikey = !(creds.digikey_client_id && creds.digikey_client_secret)
-          ? { ok: false, message: 'No credentials saved' }
+          ? { ok: false, skipped: true, message: creds.digikey_client_id
+              ? 'Client Secret missing — enter it to complete DigiKey setup'
+              : 'Not configured — skipped' }
           : await lookupDigiKey(pn, 1, creds.digikey_client_id, creds.digikey_client_secret).then(
               r => ({ ok: true, message: r ? `Found — $${r.price} @ qty ${r.breakQty}` : 'Connected, but this part was not found' }),
               e => ({ ok: false, message: e.message }));
