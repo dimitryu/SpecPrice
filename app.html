@@ -425,7 +425,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.81';
+const APP_VER   = '1.8.82';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -5421,49 +5421,310 @@ function exportBOMExcel(rows, totalCount, cols, projectName){
 // of the Windows app's ui/sales_desk_dialog.py _generate_quote_xlsx (item, drawing#,
 // part#, drawing name, customer PN, description, qty, unit, manufacturer,
 // priority/Mouser/DigiKey price, part cost, labor time, then a summary block).
-function exportSalesDeskExcel(){
-  if(!sdItems.length){ toast('No items to export','error'); return; }
-  if(!window.XLSX){ toast('Excel library not loaded — please reload the page','error'); return; }
-
-  const {partsTotal,laborCost,subtotal,final,toolsTotal,missingToolRows}=_sdComputeSummary();
-  const headers=['Item','Drawing #','MNF P/N','Description','QTY','Units',
-    'Priority Price','Mouser Price','DigiKey Price','Part Cost','Labor Time (min)'];
-  const aoa=[['SALES DESK — PRICE QUOTATION'],
-    ['Generated', new Date().toLocaleString()],
-    [],
-    headers];
-  sdItems.forEach((r,i)=>{
-    aoa.push([i+1, r.drawing_number||'', r.part_number||'', r.description||'',
-      parseFloat(r.qty)||0, r.unit||'',
-      parseFloat(r.priority_price)||'',
-      parseFloat(r.mouser_price)||'', parseFloat(r.digikey_price)||'',
-      +(r.total||0).toFixed(2), +(r.labor_total||0).toFixed(2)]);
+// ══════════════════════════════════════════════════════════════════════════════
+// SALES DESK — formatted Excel quotation
+// ------------------------------------------------------------------------------
+// Built with ExcelJS, not SheetJS. The SheetJS community build the app already
+// loads cannot write cell styling or embed images at all — those are paid-edition
+// features — so a branded, colour-coded sheet is simply not expressible with it.
+// ExcelJS is loaded on demand (it's ~950 KB) so it costs nothing until someone
+// actually exports.
+// ══════════════════════════════════════════════════════════════════════════════
+let _exceljsPromise=null;
+function loadExcelJS(){
+  if(window.ExcelJS) return Promise.resolve(window.ExcelJS);
+  if(_exceljsPromise) return _exceljsPromise;
+  _exceljsPromise=new Promise((resolve,reject)=>{
+    const el=document.createElement('script');
+    el.src='https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+    el.onload=()=>window.ExcelJS?resolve(window.ExcelJS):reject(new Error('ExcelJS failed to initialise'));
+    el.onerror=()=>reject(new Error('Could not load the Excel formatting library — check your connection'));
+    document.head.appendChild(el);
   });
-  aoa.push([]);
-  aoa.push(['','','','','','','','','','Parts Total', +partsTotal.toFixed(2)]);
-  aoa.push(['','','','','','','','','','Labor Cost', +laborCost.toFixed(2)]);
-  aoa.push(['','','','','','','','','','Subtotal', +subtotal.toFixed(2)]);
-  aoa.push(['','','','','','','','','',`Profit (${_sdProfitPct}%)`, +(final-subtotal).toFixed(2)]);
-  aoa.push(['','','','','','','','','','FINAL PRICE', +final.toFixed(2)]);
-  // Tools are quoted separately, never inside FINAL PRICE (see _sdComputeSummary)
-  if(missingToolRows.length){
-    aoa.push([]);
-    aoa.push(['NOTE: FINAL PRICE above does NOT include manufacturing tools.']);
-    aoa.push([`${missingToolRows.length} tool(s) not in Stock, required to build this cable — quoted separately:`]);
-    missingToolRows.forEach(r=>{
-      aoa.push(['', r.part_number||'', r.description||'', '', '', '', '', '', '', '', +(r.total||0).toFixed(2)]);
-    });
-    aoa.push(['','','','','','','','','','TOOLS TOTAL (separate)', +toolsTotal.toFixed(2)]);
-  }
+  return _exceljsPromise;
+}
 
-  const ws=XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols']=[{wch:6},{wch:16},{wch:20},{wch:38},{wch:8},{wch:8},{wch:12},{wch:14},{wch:13},{wch:13},{wch:12},{wch:14}];
-  ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:11}}];
-  const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,ws,'Quote');
-  const fname=`SalesDesk_Quote_${new Date().toISOString().slice(0,10)}.xlsx`;
-  XLSX.writeFile(wb,fname);
-  toast('Excel quote downloaded','success');
+// Palette. Deliberately the same meanings the app uses on screen, so the
+// exported file reads the same way as what the user was just looking at.
+const _XL = {
+  brand:      'FF1E3A5F',   // header band
+  brandLight: 'FFEFF4FA',   // meta block
+  bomHead:    'FF2E5E8E',   // BOM column headers
+  bomBand:    'FFF7F9FC',   // zebra striping on BOM rows
+  tool:       'FFFFFBEB',   // TOOL rows — matches the amber used in Sales Desk
+  toolEdge:   'FFF59E0B',
+  calc:       'FFF1F5F9',   // cost build-up
+  final:      'FF166534',   // FINAL PRICE
+  warn:       'FFFEF3C7',
+  warnEdge:   'FFF59E0B',
+  border:     'FFCBD5E1',
+};
+const _xlThin={style:'thin',color:{argb:_XL.border}};
+const _xlBoxed={top:_xlThin,left:_xlThin,bottom:_xlThin,right:_xlThin};
+
+// Every drawing represented in the quote — used for both the header block and
+// the file name, since a quote routinely covers more than one drawing.
+function _sdDrawingNumbers(){
+  return [...new Set(sdItems.map(r=>String(r.drawing_number||'').trim()).filter(Boolean))];
+}
+// Windows forbids \ / : * ? " < > | in file names; a drawing number can legally
+// contain some of those, so scrub before using it.
+function _safeFileName(s){
+  return String(s||'').replace(/[\\/:*?"<>|]+/g,'-').replace(/\s+/g,' ').trim();
+}
+
+async function exportSalesDeskExcel(){
+  if(!sdItems.length){ toast('No items to export','error'); return; }
+
+  const btn=document.getElementById('btn-sd-export');
+  const restore=btn?btn.innerHTML:'';
+  if(btn){ btn.disabled=true; btn.textContent='Building…'; }
+
+  try{
+    const ExcelJS=await loadExcelJS();
+    const {partsTotal,laborCost,subtotal,final,toolsTotal,laborMinutes,missingToolRows}=_sdComputeSummary();
+    const dwgs=_sdDrawingNumbers();
+
+    const wb=new ExcelJS.Workbook();
+    wb.creator='SpecPrice'; wb.created=new Date();
+    const ws=wb.addWorksheet('Quotation',{
+      views:[{showGridLines:false}],
+      pageSetup:{paperSize:9,orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0,
+                 margins:{left:0.4,right:0.4,top:0.5,bottom:0.5,header:0.3,footer:0.3}},
+    });
+
+    const COLS=['Item','Drawing #','MNF P/N','Description','QTY','Units',
+                'Priority Price','Mouser Price','DigiKey Price','Part Cost','Labor Time (min)'];
+    const LAST=COLS.length;                 // 11 columns, A..K
+    const LASTL=String.fromCharCode(64+LAST);
+    ws.columns=[{width:6},{width:18},{width:24},{width:44},{width:9},{width:8},
+                {width:13},{width:13},{width:13},{width:12},{width:15}];
+
+    const merge=(r,c1,c2)=>ws.mergeCells(r,c1,r,c2);
+    const fill=(cell,argb)=>{cell.fill={type:'pattern',pattern:'solid',fgColor:{argb}};};
+
+    // ── Header band: logo + title ──────────────────────────────────────────
+    // Rows 1-4 are the brand band. The logo is floated over it via addImage,
+    // which sits above cells rather than inside one.
+    for(let r=1;r<=4;r++){
+      merge(r,1,LAST);
+      for(let c=1;c<=LAST;c++) fill(ws.getCell(r,c),_XL.brand);
+    }
+    ws.getRow(1).height=10; ws.getRow(4).height=8;
+    ws.getRow(2).height=26; ws.getRow(3).height=18;
+
+    const title=ws.getCell(2,1);
+    title.value='PRELIMINARY QUOTATION';
+    title.font={name:'Calibri',size:18,bold:true,color:{argb:'FFFFFFFF'}};
+    title.alignment={vertical:'middle',horizontal:'center'};
+
+    const sub=ws.getCell(3,1);
+    sub.value = dwgs.length ? `Drawing ${dwgs.join(' · ')}` : 'Cable assembly';
+    sub.font={name:'Calibri',size:11,color:{argb:'FFBFD4EA'}};
+    sub.alignment={vertical:'middle',horizontal:'center'};
+
+    // The same logo shown on the Home screen (companies/{id}.logo_b64).
+    if(companyLogoB64){
+      try{
+        const m=/^data:image\/(png|jpe?g|gif);base64,(.+)$/i.exec(companyLogoB64);
+        if(m){
+          const ext=m[1].toLowerCase().startsWith('jp')?'jpeg':m[1].toLowerCase();
+          const id=wb.addImage({base64:m[2], extension:ext});
+          // Anchored to the top-left of the band, sized to sit inside it.
+          ws.addImage(id,{tl:{col:0.25,row:0.6},ext:{width:150,height:44}});
+        }
+      }catch(e){ console.warn('[Export] logo could not be embedded:',e.message); }
+    }
+
+    // ── Meta block ────────────────────────────────────────────────────────
+    let row=6;
+    const meta=[
+      ['Date', new Date().toLocaleDateString()],
+      ['Prepared by', currentUserEmail||''],
+      ['Drawing(s)', dwgs.join(', ')||'—'],
+      ['Line items', String(sdItems.length)],
+    ];
+    meta.forEach(([k,v])=>{
+      const kc=ws.getCell(row,1); kc.value=k;
+      kc.font={bold:true,size:10,color:{argb:'FF334155'}};
+      fill(kc,_XL.brandLight);
+      merge(row,2,4);
+      const vc=ws.getCell(row,2); vc.value=v;
+      vc.font={size:10,color:{argb:'FF0F172A'}};
+      fill(vc,_XL.brandLight);
+      for(let c=1;c<=4;c++) ws.getCell(row,c).border=_xlBoxed;
+      row++;
+    });
+    row++;
+
+    // ── BOM section ───────────────────────────────────────────────────────
+    const secTitle=(text,argb)=>{
+      merge(row,1,LAST);
+      const c=ws.getCell(row,1);
+      c.value=text;
+      c.font={bold:true,size:11,color:{argb:'FFFFFFFF'}};
+      c.alignment={vertical:'middle',indent:1};
+      for(let i=1;i<=LAST;i++) fill(ws.getCell(row,i),argb);
+      ws.getRow(row).height=20;
+      row++;
+    };
+    secTitle('BILL OF MATERIALS','FF334155');
+
+    const headRow=row;
+    COLS.forEach((h,i)=>{
+      const c=ws.getCell(row,i+1);
+      c.value=h;
+      c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};
+      fill(c,_XL.bomHead);
+      c.alignment={vertical:'middle',horizontal:i>=4?'center':'left',wrapText:true};
+      c.border=_xlBoxed;
+    });
+    ws.getRow(row).height=24;
+    row++;
+
+    const firstBomRow=row;
+    sdItems.forEach((r,i)=>{
+      const isTool=_sdIsToolRow(r);
+      const vals=[i+1, r.drawing_number||'', r.part_number||'', r.description||'',
+                  parseFloat(r.qty)||0, r.unit||'',
+                  parseFloat(r.priority_price)||null,
+                  parseFloat(r.mouser_price)||null,
+                  parseFloat(r.digikey_price)||null,
+                  +(r.total||0), +(r.labor_total||0)];
+      vals.forEach((v,ci)=>{
+        const c=ws.getCell(row,ci+1);
+        c.value=v;
+        c.font={size:10, color:{argb:isTool?'FF92400E':'FF0F172A'}, italic:isTool};
+        c.border=_xlBoxed;
+        if(ci>=6&&ci<=9) c.numFmt='$#,##0.0000';
+        if(ci===10) c.numFmt='0.0';
+        if(ci===4)  c.numFmt='#,##0.###';
+        c.alignment={vertical:'middle',
+                     horizontal: ci===3?'left':(ci>=4?'right':'left'),
+                     wrapText: ci===3};
+        // TOOL rows are tinted; everything else gets quiet zebra striping.
+        if(isTool) fill(c,_XL.tool);
+        else if(i%2===1) fill(c,_XL.bomBand);
+      });
+      // Amber edge on the left of a tool row, mirroring the on-screen marker.
+      if(isTool){
+        ws.getCell(row,1).border={..._xlBoxed,left:{style:'medium',color:{argb:_XL.toolEdge}}};
+        const d=ws.getCell(row,4);
+        d.value=`${r.description||''}   [TOOL — not from customer BOM]`;
+      }
+      row++;
+    });
+    const lastBomRow=row-1;
+    if(lastBomRow>=firstBomRow){
+      ws.autoFilter={from:{row:headRow,column:1},to:{row:lastBomRow,column:LAST}};
+      ws.views=[{state:'frozen',ySplit:headRow,showGridLines:false}];
+    }
+    row++;
+
+    // ── Cost build-up ─────────────────────────────────────────────────────
+    secTitle('PRICE CALCULATION','FF334155');
+    const money=(label,val,opts={})=>{
+      merge(row,1,LAST-2);
+      const l=ws.getCell(row,1);
+      l.value=label;
+      l.font={bold:!!opts.bold,size:opts.size||10,color:{argb:opts.fg||'FF334155'}};
+      l.alignment={vertical:'middle',horizontal:'right',indent:1};
+      const v=ws.getCell(row,LAST-1);
+      v.value=val;
+      v.numFmt=opts.fmt||'$#,##0.00';
+      v.font={bold:opts.bold!==false,size:opts.size||10,color:{argb:opts.fg||'FF0F172A'}};
+      v.alignment={vertical:'middle',horizontal:'right'};
+      for(let c=1;c<=LAST;c++){
+        const cell=ws.getCell(row,c);
+        fill(cell,opts.bg||_XL.calc);
+        cell.border=_xlBoxed;
+      }
+      if(opts.height) ws.getRow(row).height=opts.height;
+      row++;
+    };
+    money('Parts Total',+partsTotal.toFixed(2));
+    money(`Labor  (${(+laborMinutes).toFixed(1)} min × $${_sdLaborRatePerMin()}/min)`,+laborCost.toFixed(2));
+    money('Subtotal',+subtotal.toFixed(2),{bold:true});
+    money(`Profit (${_sdProfitPct}%)`,+(final-subtotal).toFixed(2));
+    money('FINAL PRICE',+final.toFixed(2),
+          {bold:true,size:14,bg:_XL.final,fg:'FFFFFFFF',height:26});
+    row++;
+
+    // ── Tools, quoted separately ──────────────────────────────────────────
+    // Kept visually apart from the calculation above precisely BECAUSE it is
+    // not part of it — the whole risk with this figure is it being read as
+    // included.
+    if(missingToolRows.length){
+      merge(row,1,LAST);
+      const w=ws.getCell(row,1);
+      w.value='⚠  FINAL PRICE above does NOT include manufacturing tools';
+      w.font={bold:true,size:13,color:{argb:'FF92400E'}};
+      w.alignment={vertical:'middle',indent:1};
+      for(let c=1;c<=LAST;c++){
+        fill(ws.getCell(row,c),_XL.warn);
+        ws.getCell(row,c).border={top:{style:'medium',color:{argb:_XL.warnEdge}},
+                                  bottom:{style:'medium',color:{argb:_XL.warnEdge}}};
+      }
+      ws.getRow(row).height=24;
+      row++;
+
+      merge(row,1,LAST);
+      const note=ws.getCell(row,1);
+      note.value=`${missingToolRows.length} tool(s) are not in stock and must be purchased to build this cable. Quoted separately below.`;
+      note.font={size:10,color:{argb:'FF92400E'}};
+      note.alignment={vertical:'middle',indent:1};
+      for(let c=1;c<=LAST;c++) fill(ws.getCell(row,c),_XL.warn);
+      row++;
+
+      missingToolRows.forEach(r=>{
+        ws.getCell(row,2).value=r.part_number||'';
+        merge(row,3,LAST-2);
+        ws.getCell(row,3).value=r.description||'';
+        const v=ws.getCell(row,LAST-1);
+        v.value=+(r.total||0); v.numFmt='$#,##0.00';
+        v.alignment={horizontal:'right'};
+        for(let c=1;c<=LAST;c++){
+          const cell=ws.getCell(row,c);
+          fill(cell,_XL.tool); cell.border=_xlBoxed;
+          cell.font={size:10,color:{argb:'FF92400E'}};
+        }
+        row++;
+      });
+      money('TOOLS TOTAL (separate)',+toolsTotal.toFixed(2),
+            {bold:true,size:12,bg:_XL.warn,fg:'FF92400E',height:22});
+      row++;
+    }
+
+    // ── Footer ────────────────────────────────────────────────────────────
+    merge(row,1,LAST);
+    const foot=ws.getCell(row,1);
+    foot.value='Preliminary quotation — prices are indicative and subject to confirmation. '
+              +`Generated by SpecPrice v${APP_VER} on ${new Date().toLocaleString()}.`;
+    foot.font={size:9,italic:true,color:{argb:'FF64748B'}};
+    foot.alignment={vertical:'middle',indent:1};
+
+    // ── Save ──────────────────────────────────────────────────────────────
+    // Name carries the drawing number(s) and says plainly that it's preliminary,
+    // so the file is identifiable once it's sitting in someone's Downloads.
+    const dwgPart = dwgs.length ? _safeFileName(dwgs.slice(0,3).join(' ')) + ' ' : '';
+    const fname=`Preliminary Quotation ${dwgPart}${new Date().toISOString().slice(0,10)}.xlsx`
+                .replace(/\s+/g,' ');
+    const buf=await wb.xlsx.writeBuffer();
+    const url=URL.createObjectURL(new Blob([buf],
+      {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    const a=document.createElement('a');
+    a.href=url; a.download=fname; a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),4000);
+
+    toast('Quotation downloaded','success');
+    logSystemAudit('sales_desk_export',{rows:sdItems.length,drawings:dwgs.join(', '),file:fname},true);
+  }catch(e){
+    console.error('[Export]',e);
+    toast('Export failed: '+e.message,'error');
+    logSystemAudit('sales_desk_export',e.message,false);
+  }finally{
+    if(btn){ btn.disabled=false; btn.innerHTML=restore; }
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
