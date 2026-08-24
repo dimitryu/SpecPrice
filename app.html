@@ -424,7 +424,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.73';
+const APP_VER   = '1.8.74';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3392,9 +3392,13 @@ async function runFCCheckModal(items, mode){
     if(failures===total && total>0){
       stEl.innerHTML=`<span style="color:var(--red)">Price check failed for all ${total} part(s) — ${esc(lastError)}</span>`;
     }
-    // Surface API-side setup problems separately — "no API key configured" is
-    // a one-time fix, not a transient failure, and shouldn't hide behind a
-    // scraping error.
+    // Surface API-side problems separately — they're a one-time admin fix, not
+    // a transient failure, and shouldn't hide behind a scraping error.
+    // Deliberately NOT warned about: a vendor with no credentials at all.
+    // Running with only one of the two is a supported setup, and nagging about
+    // the other on every single price check would train the user to ignore
+    // this line entirely — including when it says something that matters.
+    for(const m of [...apiErrors]) if(/no (api key|credentials) configured/i.test(m)) apiErrors.delete(m);
     if(apiErrors.size){
       const note=document.createElement('div');
       note.style.cssText='margin-top:6px;font-size:11px;color:#92400e';
@@ -5429,7 +5433,7 @@ function renderAdminPage(){
 
     <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:520px">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🔌 Distributor Price APIs</h3>
-      <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Official Mouser and DigiKey APIs, used by CHECK PRICE to fill the Mouser Price and DigiKey Price columns.</p>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Official Mouser and DigiKey APIs, used by CHECK PRICE to fill the Mouser Price and DigiKey Price columns. Set up either one on its own — you don't need both.</p>
       <div id="adm-dist-status" style="font-size:11px;color:var(--muted);margin-bottom:14px">Loading current status…</div>
 
       <div class="form-field">
@@ -5523,12 +5527,19 @@ async function renderAdminDistributorApiSection(){
       const s=await _apiConfigCall('GET');
       // "Where did this come from" matters when debugging: a key set with the
       // CLI and one set here look identical until you need to change it.
-      const src=o=>o.source==='secret-manager'?'via CLI secret':(o.source==='ui'?'set here':'');
+      const src=o=>o.source==='env-var'?'via env var':(o.source==='ui'?'set here':'');
       const when=s.updatedAt?new Date(s.updatedAt).toLocaleString():'';
+      const row=(o,name,h)=>o.configured
+        ? `<div>${pill(true,name,[h,src(o)].filter(Boolean).join(' · '))}</div>`
+        : `<div><span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:#F1F5F9;color:#64748B">– ${name}</span> <span style="color:var(--muted);font-size:10px">not set up</span></div>`;
+      const none=!s.mouser.configured && !s.digikey.configured;
       statusEl.innerHTML=
         `<div style="display:flex;flex-direction:column;gap:6px">
-           <div>${pill(s.mouser.configured,'Mouser',[s.mouser.hint,src(s.mouser)].filter(Boolean).join(' · '))}</div>
-           <div>${pill(s.digikey.configured,'DigiKey',[s.digikey.clientIdHint,src(s.digikey)].filter(Boolean).join(' · '))}</div>
+           ${row(s.mouser,'Mouser',s.mouser.hint)}
+           ${row(s.digikey,'DigiKey',s.digikey.clientIdHint)}
+           <div style="color:var(--muted);font-size:10px">${none
+             ? 'Neither vendor is set up yet — add either one to start.'
+             : 'Each vendor works on its own — one is enough.'}</div>
            ${when?`<div style="color:var(--muted);font-size:10px">Last changed ${esc(when)}${s.updatedBy?' by '+esc(s.updatedBy):''}</div>`:''}
          </div>`;
     }catch(e){
@@ -5573,7 +5584,14 @@ async function renderAdminDistributorApiSection(){
     testEl.innerHTML='<span style="font-size:11px;color:var(--muted)">Querying both vendors…</span>';
     try{
       const r=await _apiConfigCall('POST',{action:'test'});
-      const line=(name,v)=>`<div style="margin-bottom:4px">${pill(v.ok,name)} <span style="font-size:11px">${esc(v.message)}</span></div>`;
+      // A vendor you haven't signed up for shows as a neutral dash, not a red
+      // ✕ — otherwise a perfectly healthy one-vendor setup looks like a fault.
+      const line=(name,v)=>{
+        const badge=v.skipped
+          ? `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:#F1F5F9;color:#64748B">– ${esc(name)}</span>`
+          : pill(v.ok,name);
+        return `<div style="margin-bottom:4px">${badge} <span style="font-size:11px;color:${v.skipped?'var(--muted)':'inherit'}">${esc(v.message)}</span></div>`;
+      };
       testEl.innerHTML=
         `<div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px">
            <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Test part: ${esc(r.pn)}</div>
