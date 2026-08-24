@@ -425,7 +425,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.78';
+const APP_VER   = '1.8.79';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -4185,6 +4185,103 @@ async function _sdAutoMatchLabor(){}
 // batch-production) total, and a separate reference figure for what a single
 // stand-alone cable would take. Also shows any general/unattributed step time
 // and a grand total across everything currently counted in the auto Labor Time.
+// ══════════════════════════════════════════════════════════════════════════════
+// Labor Time Breakdown — Hebrew translation
+// ------------------------------------------------------------------------------
+// The fixed labels are translated from a table (instant, free, always correct).
+// The operation sentences come from the AI per drawing, so they can't be — those
+// go through the AI once and are then cached, keyed by the exact English text.
+// Cache lives in localStorage: the same operations recur across drawings, and
+// re-paying for a translation the user has already seen would be wasteful and
+// slow. The chosen language is remembered the same way, per the request to
+// reopen in whatever language was last picked.
+// ══════════════════════════════════════════════════════════════════════════════
+const _LB_LANG_KEY='labor_breakdown_lang';
+const _LB_CACHE_KEY='labor_breakdown_he_cache';
+let _lbLang = localStorage.getItem(_LB_LANG_KEY)==='he' ? 'he' : 'en';
+let _lbCache = (()=>{ try{ return JSON.parse(localStorage.getItem(_LB_CACHE_KEY))||{}; }catch{ return {}; } })();
+function _lbSaveCache(){
+  try{ localStorage.setItem(_LB_CACHE_KEY, JSON.stringify(_lbCache)); }
+  catch(e){ console.warn('[Labor] translation cache not saved:', e.message); }
+}
+function _lbRTL(){ return _lbLang==='he'; }
+
+// Fixed UI strings. Kept as a table rather than sent to the AI so the chrome of
+// the dialog never depends on a network call.
+const _LB_LABELS_HE={
+  'Operation':'פעולה',
+  'Per op':'לפעולה',
+  '×Qty':'× כמות',
+  'Total':'סה"כ',
+  'min':'דק׳',
+  'Row-tied operations':'פעולות המשויכות לשורה',
+  '+ General assembly/inspection (not tied to one part)':'+ הרכבה/בדיקה כללית (לא משויך לפריט מסוים)',
+  '= Total (series, per unit)':'= סה"כ (סדרה, ליחידה)',
+  'Reference: single stand-alone cable':'להשוואה: כבל בודד עצמאי',
+  'Total Labor Time (auto)':'סה"כ זמן עבודה (אוטומטי)',
+};
+// Returns the Hebrew text when available, otherwise the English original.
+// Never blocks and never throws: an untranslated string is far better than a
+// broken dialog.
+function _lbTr(text){
+  if(_lbLang!=='he') return text;
+  const t=String(text||'');
+  return _LB_LABELS_HE[t] || _lbCache[t] || t;
+}
+
+// Translates the operation sentences that aren't already cached.
+// Batched into ONE request — a call per line would be slow and needlessly
+// expensive when a breakdown routinely has a dozen steps.
+async function _lbTranslateOperations(texts){
+  const todo=[...new Set(texts.map(t=>String(t||'').trim()).filter(t=>t && !_lbCache[t]))];
+  if(!todo.length) return true;
+  if(!anthKey && !geminiKey) throw new Error('No AI key configured — add one in Admin → AI API Keys');
+
+  const prompt='Translate each of these manufacturing operation descriptions from English to Hebrew.\n'
+    +'These are cable/harness assembly steps. Rules:\n'
+    +'- Keep part numbers, standards and units exactly as they are (do NOT translate or transliterate them).\n'
+    +'- Technical terms that Israeli engineers normally say in English (e.g. SMT, PCB, IDC, crimp) may stay in English.\n'
+    +'- Return ONLY a JSON array of the translated strings, same order, same length. No commentary.\n\n'
+    +JSON.stringify(todo, null, 0);
+
+  let raw='';
+  if(anthKey){
+    const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
+               'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
+      body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:2048,
+                           messages:[{role:'user',content:prompt}]})
+    });
+    if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
+      try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
+    raw=(await resp.json()).content[0].text;
+  } else {
+    const resp=await _fetchWithRetry(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+      {method:'POST',headers:{'content-type':'application/json'},
+       body:JSON.stringify({contents:[{parts:[{text:prompt}]}],
+                            generationConfig:{thinkingConfig:{thinkingBudget:0}}})});
+    if(!resp.ok){ let m=`Gemini error ${resp.status}`;
+      try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
+    const d=await resp.json();
+    raw=(d.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
+  }
+
+  const m=String(raw).match(/\[[\s\S]*\]/);
+  if(!m) throw new Error('Translation came back in an unexpected format');
+  const arr=JSON.parse(m[0]);
+  // A length mismatch means the lines no longer line up with their originals —
+  // caching them by position would attach the wrong Hebrew to the wrong step,
+  // which is worse than showing English.
+  if(!Array.isArray(arr) || arr.length!==todo.length){
+    throw new Error(`Translation returned ${Array.isArray(arr)?arr.length:'?'} lines for ${todo.length} operations`);
+  }
+  todo.forEach((t,i)=>{ const v=String(arr[i]||'').trim(); if(v) _lbCache[t]=v; });
+  _lbSaveCache();
+  return true;
+}
+
 function openLaborBreakdownModal(){
   const {autoLaborMinutes}=_sdComputeSummary();
   // Only show drawings that still have at least one row in Sales Desk —
@@ -4196,7 +4293,9 @@ function openLaborBreakdownModal(){
     showModal(`<div class="modal modal-sm">
       <div class="modal-head"><h3>📋 Labor Time Breakdown</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
       <div class="modal-body">
-        <p style="color:var(--muted);font-size:13px">No AI cable-process analysis for the parts currently in Sales Desk — import a drawing via "📎 New Drawing" to get a step-by-step manufacturing breakdown here.</p>
+        <p style="color:var(--muted);font-size:13px" dir="${_lbRTL()?'rtl':'ltr'}">${_lbLang==='he'
+          ? 'אין ניתוח תהליך של AI לפריטים שנמצאים כרגע ב-Sales Desk — ייבא סרטוט דרך "📎 New Drawing" כדי לקבל כאן פירוט שלבי ייצור.'
+          : 'No AI cable-process analysis for the parts currently in Sales Desk — import a drawing via "📎 New Drawing" to get a step-by-step manufacturing breakdown here.'}</p>
       </div>
       <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>
     </div>`);
@@ -4205,15 +4304,31 @@ function openLaborBreakdownModal(){
   const sections = activeBreakdowns.map(b=>`
     <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)">
       <div style="font-weight:700;margin-bottom:6px">${esc(b.drawingName||'(drawing)')}</div>
-      <table style="width:100%;font-size:12px;border-collapse:collapse">
-        <thead><tr style="text-align:left;color:var(--muted)">
-          <th style="padding:2px 4px">Operation</th>
-          <th style="padding:2px 4px;text-align:right;width:60px">Per op</th>
-          <th style="padding:2px 4px;text-align:center;width:30px">×Qty</th>
-          <th style="padding:2px 4px;text-align:right;width:60px">Total</th>
+      <!-- table-layout:fixed stops the long Operation text from stretching the
+           table past the modal and re-introducing the horizontal scrollbar. -->
+      <table style="width:100%;font-size:12px;border-collapse:collapse;table-layout:fixed">
+        <thead><tr style="text-align:${_lbRTL()?'right':'left'};color:var(--muted)">
+          <th style="padding:2px 4px">${_lbTr('Operation')}</th>
+          <th style="padding:2px 4px;text-align:right;width:58px">${_lbTr('Per op')}</th>
+          <th style="padding:2px 4px;text-align:center;width:44px">${_lbTr('×Qty')}</th>
+          <th style="padding:2px 4px;text-align:right;width:58px">${_lbTr('Total')}</th>
         </tr></thead>
         <tbody>
-          ${b.steps.map(s=>`<tr><td style="padding:2px 4px">${esc(s.operation||'')}</td><td style="padding:2px 4px;text-align:right;color:var(--muted)">${s.unitMinutes!=null?(parseFloat(s.unitMinutes)||0).toFixed(2):'—'}</td><td style="padding:2px 4px;text-align:center;color:var(--muted)">${s.qty!=null?s.qty:'—'}</td><td style="padding:2px 4px;text-align:right">${(parseFloat(s.minutes)||0).toFixed(1)}</td></tr>`).join('')}
+          ${b.steps.map(s=>{
+            const opEn=String(s.operation||'');
+            const op=_lbTr(opEn);
+            // Operation text is a full sentence and routinely longer than the
+            // column. It used to be clipped behind a horizontal scrollbar, so
+            // the end of every long step was simply unreadable. Wrap it over as
+            // many lines as it needs — vertical space is cheap here, and the
+            // whole point of this modal is to READ what the AI decided.
+            return `<tr style="vertical-align:top">
+              <td style="padding:4px;white-space:normal;word-break:break-word;line-height:1.45">${esc(op)}</td>
+              <td style="padding:4px;text-align:right;color:var(--muted);white-space:nowrap">${s.unitMinutes!=null?(parseFloat(s.unitMinutes)||0).toFixed(2):'—'}</td>
+              <td style="padding:4px;text-align:center;color:var(--muted);white-space:nowrap">${s.qty!=null?s.qty:'—'}</td>
+              <td style="padding:4px;text-align:right;white-space:nowrap">${(parseFloat(s.minutes)||0).toFixed(1)}</td>
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>
       ${b.generalMinutes ? (()=>{
@@ -4223,27 +4338,68 @@ function openLaborBreakdownModal(){
         // time is already counted INTO the total below, not sitting on top
         // of it as a separate add-on.
         return `<div style="margin-top:4px;font-size:11px;color:var(--muted)">
-          <div style="display:flex;justify-content:space-between"><span>Row-tied operations</span><span>${rowTied.toFixed(1)} min</span></div>
-          <div style="display:flex;justify-content:space-between"><span>+ General assembly/inspection (not tied to one part)</span><span>${b.generalMinutes.toFixed(1)} min</span></div>
+          <div style="display:flex;justify-content:space-between"><span>${_lbTr('Row-tied operations')}</span><span>${rowTied.toFixed(1)} ${_lbTr('min')}</span></div>
+          <div style="display:flex;justify-content:space-between"><span>${_lbTr('+ General assembly/inspection (not tied to one part)')}</span><span>${b.generalMinutes.toFixed(1)} ${_lbTr('min')}</span></div>
         </div>`;
       })() : ''}
       <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:12px">
-        <strong>= Total (series, per unit)</strong><strong>${b.seriesTotal.toFixed(1)} min</strong>
+        <strong>${_lbTr('= Total (series, per unit)')}</strong><strong>${b.seriesTotal.toFixed(1)} ${_lbTr('min')}</strong>
       </div>
       <div style="display:flex;justify-content:space-between;color:var(--muted);font-size:12px">
-        <span>Reference: single stand-alone cable</span><span>≈ ${b.singleUnitMinutes.toFixed(1)} min</span>
+        <span>${_lbTr('Reference: single stand-alone cable')}</span><span>≈ ${b.singleUnitMinutes.toFixed(1)} ${_lbTr('min')}</span>
       </div>
     </div>`).join('');
-  showModal(`<div class="modal" style="width:min(94vw,650px)">
-    <div class="modal-head"><h3>📋 Labor Time Breakdown</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
-    <div class="modal-body" style="max-height:70vh;overflow:auto">
+  showModal(`<div class="modal" style="width:min(94vw,680px)">
+    <div class="modal-head">
+      <h3>📋 ${_lbLang==='he'?'פירוט זמן עבודה':'Labor Time Breakdown'}</h3>
+      <button class="close-modal" onclick="closeModal()">✕</button>
+    </div>
+    <!-- overflow-x hidden, not auto: the whole point of the wrapping above is
+         that nothing should need horizontal scrolling to be read. -->
+    <div class="modal-body" style="max-height:70vh;overflow-y:auto;overflow-x:hidden"
+         dir="${_lbRTL()?'rtl':'ltr'}">
       ${sections}
       <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;padding-top:8px;border-top:2px solid var(--border)">
-        <span>Total Labor Time (auto)</span><span>${autoLaborMinutes.toFixed(1)} min</span>
+        <span>${_lbTr('Total Labor Time (auto)')}</span><span>${autoLaborMinutes.toFixed(1)} ${_lbTr('min')}</span>
       </div>
+      <div id="lb-tr-msg" style="margin-top:8px;font-size:11px"></div>
     </div>
-    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>
+    <div class="modal-foot" style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-ghost" id="btn-lb-lang" title="${_lbLang==='he'?'Show in English':'הצג בעברית'}">
+        🌐 ${_lbLang==='he'?'English':'עברית'}
+      </button>
+      <button class="btn btn-ghost" style="margin-left:auto" onclick="closeModal()">${_lbLang==='he'?'סגור':'Close'}</button>
+    </div>
   </div>`);
+
+  document.getElementById('btn-lb-lang')?.addEventListener('click',async()=>{
+    const btn=document.getElementById('btn-lb-lang');
+    const msg=document.getElementById('lb-tr-msg');
+    const goingHe = _lbLang!=='he';
+    if(goingHe){
+      // Only the AI-written operation sentences need a round-trip, and only the
+      // ones not already cached — so the second time this is opened it's instant.
+      const ops=activeBreakdowns.flatMap(b=>b.steps.map(st=>st.operation||''));
+      const missing=ops.filter(t=>t && !_lbCache[String(t).trim()]).length;
+      if(missing){
+        btn.disabled=true; btn.textContent='מתרגם…';
+        if(msg) msg.innerHTML='<span style="color:var(--muted)">Translating operation descriptions…</span>';
+        try{
+          await _lbTranslateOperations(ops);
+        }catch(e){
+          btn.disabled=false; btn.innerHTML='🌐 עברית';
+          if(msg) msg.innerHTML=`<span style="color:var(--red)">Translation failed — ${esc(e.message)}</span>`;
+          logSystemAudit('labor_breakdown_translate', e.message, false);
+          return;   // stay in English rather than switch to a half-translated view
+        }
+        logSystemAudit('labor_breakdown_translate', `${missing} operation(s) → he`, true);
+      }
+    }
+    _lbLang = goingHe ? 'he' : 'en';
+    localStorage.setItem(_LB_LANG_KEY,_lbLang);   // remembered for next time
+    closeModal();
+    openLaborBreakdownModal();                     // re-render in the new language
+  });
 }
 let _sdFilterQ='';
 // Independent sort state for the Sales Desk table (separate from Part Stock's
