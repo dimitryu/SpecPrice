@@ -230,48 +230,73 @@ const numFrom = v => {
   return parseFloat(norm) || 0;
 };
 
-// ── Mouser: single POST, API key in the query string ──────────────────────
-async function lookupMouser(pn, qty, apiKey) {
+/* Mouser lookup.
+ *
+ * Two passes, for the same reason DigiKey needs two: partSearchOptions 'Exact'
+ * only matches Mouser's own normalisation of the part number, so anything
+ * written with different punctuation is invisible to it. The keyword pass casts
+ * a wider net and our own matchPart() does the deciding — which keeps the
+ * safety property that we never quote a neighbouring part's price. */
+async function mouserPost(path, apiKey, body) {
   const resp = await fetch(
-    `https://api.mouser.com/api/v1/search/partnumber?apiKey=${encodeURIComponent(apiKey)}`,
+    `https://api.mouser.com/api/v1/${path}?apiKey=${encodeURIComponent(apiKey)}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({
-        SearchByPartRequest: { mouserPartNumber: pn, partSearchOptions: 'Exact' },
-      }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(20000),
     }
   );
+  if (resp.status === 429) throw new Error('Mouser rate limit reached (HTTP 429) — try again shortly');
+  if (resp.status === 401 || resp.status === 403) throw new Error(`Mouser auth failed (HTTP ${resp.status}) — check the API key`);
   if (!resp.ok) throw new Error(`Mouser HTTP ${resp.status}`);
   const data = await resp.json();
   if (data.Errors && data.Errors.length) {
     throw new Error('Mouser: ' + data.Errors.map(e => e.Message || e.Code).join('; '));
   }
-  const parts = (data.SearchResults && data.SearchResults.Parts) || [];
-  // Mouser's "Exact" option still returns close relatives, so we do our own
-  // matching rather than trusting the first row back.
-  const m = matchPart(parts, pn, p => p.ManufacturerPartNumber);
-  if (!m) return null;
-  const part = m.item;
+  return (data.SearchResults && data.SearchResults.Parts) || [];
+}
 
+function readMouserPart(part, qty, exact) {
   const breaks = (part.PriceBreaks || []).map(b => ({
     qty: parseInt(b.Quantity, 10) || 0,
     price: numFrom(b.Price),
     currency: b.Currency || 'USD',
   }));
   const best = pickNearestBreak(breaks, qty);
-  if (!best) return null;
+  // Availability is a free-text field ("143 In Stock", "None", "Non-Stocked").
+  // Pull the number out; absent or unparseable means zero on hand, which is
+  // information worth keeping rather than a reason to discard the part.
+  const stockNum = String(part.Availability || '').replace(/[^\d]/g, '');
   return {
-    price: best.price,
-    currency: best.currency,
-    breakQty: best.qty,
-    stock: String(part.Availability || '').replace(/\D+/g, '') || '',
+    price: best ? best.price : 0,
+    currency: best ? best.currency : 'USD',
+    breakQty: best ? best.qty : 0,
+    stock: String(stockNum ? parseInt(stockNum, 10) : 0),
     mpn: part.ManufacturerPartNumber || '',
-    exactMatch: m.exact,
+    exactMatch: exact,
     manufacturer: part.Manufacturer || '',
     url: part.ProductDetailUrl || '',
+    status: part.LifecycleStatus || '',
   };
+}
+
+async function lookupMouser(pn, qty, apiKey) {
+  // ── 1. Part-number search ──
+  let parts = await mouserPost('search/partnumber', apiKey, {
+    SearchByPartRequest: { mouserPartNumber: pn, partSearchOptions: 'Exact' },
+  });
+  let m = matchPart(parts, pn, p => p.ManufacturerPartNumber);
+
+  // ── 2. Keyword search fallback ──
+  if (!m) {
+    parts = await mouserPost('search/keyword', apiKey, {
+      SearchByKeywordRequest: { keyword: pn, records: 50, startingRecord: 0 },
+    });
+    m = matchPart(parts, pn, p => p.ManufacturerPartNumber);
+  }
+  if (!m) return null;
+  return readMouserPart(m.item, qty, m.exact);
 }
 
 // ── DigiKey: OAuth2 client-credentials, then a keyword search ─────────────
@@ -296,29 +321,10 @@ async function digikeyToken(clientId, clientSecret) {
   return _dkToken;
 }
 
-async function lookupDigiKey(pn, qty, clientId, clientSecret) {
-  const token = await digikeyToken(clientId, clientSecret);
-  const resp = await fetch('https://api.digikey.com/products/v4/search/keyword', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'X-DIGIKEY-Client-Id': clientId,
-      'X-DIGIKEY-Locale-Site': 'US',
-      'X-DIGIKEY-Locale-Language': 'en',
-      'X-DIGIKEY-Locale-Currency': 'USD',
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    body: JSON.stringify({ Keywords: pn, Limit: 10, Offset: 0 }),
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!resp.ok) throw new Error(`DigiKey HTTP ${resp.status}`);
-  const data = await resp.json();
-  const products = data.Products || [];
-  const m = matchPart(products, pn, p => p.ManufacturerProductNumber);
-  if (!m) return null;
-  const product = m.item;
-
+// Reads a DigiKey v4 product object into our normalised shape.
+// `qty` selects the price tier; a product with no pricing at all still comes
+// back (with price 0) rather than being dropped — see the note in lookupDigiKey.
+function readDigiKeyProduct(product, qty, exact) {
   // v4 puts pricing on each packaging variation (cut tape, reel, ...). Gather
   // every tier across all variations and let pickNearestBreak choose.
   const breaks = [];
@@ -330,18 +336,108 @@ async function lookupDigiKey(pn, qty, clientId, clientSecret) {
   for (const t of (product.StandardPricing || [])) {
     breaks.push({ qty: parseInt(t.BreakQuantity, 10) || 0, price: numFrom(t.UnitPrice) });
   }
-  const best = pickNearestBreak(breaks, qty);
-  if (!best) return null;
+  let best = pickNearestBreak(breaks, qty);
+  // Non-stocked and made-to-order parts often carry no price-break table but do
+  // have a headline UnitPrice. Use it rather than reporting the part missing.
+  if (!best && numFrom(product.UnitPrice) > 0) {
+    best = { qty: 1, price: numFrom(product.UnitPrice) };
+  }
+
+  // Stock lives on the product for stocked items and on the variations for
+  // parts sold in several packagings; take the largest we can see.
+  let stock = parseInt(product.QuantityAvailable, 10);
+  if (!(stock > 0)) {
+    for (const v of (product.ProductVariations || [])) {
+      const q = parseInt(v.QuantityAvailableforPackageType, 10);
+      if (q > 0 && (!(stock > 0) || q > stock)) stock = q;
+    }
+  }
+
   return {
-    price: best.price,
+    price: best ? best.price : 0,
     currency: 'USD',
-    breakQty: best.qty,
-    stock: String(product.QuantityAvailable ?? ''),
+    breakQty: best ? best.qty : 0,
+    stock: String(stock > 0 ? stock : 0),
     mpn: product.ManufacturerProductNumber || '',
-    exactMatch: m.exact,
+    exactMatch: exact,
     manufacturer: (product.Manufacturer && product.Manufacturer.Name) || '',
     url: product.ProductUrl || '',
+    status: (product.ProductStatus && product.ProductStatus.Status) || '',
   };
+}
+
+function digikeyHeaders(token, clientId) {
+  return {
+    'Authorization': `Bearer ${token}`,
+    'X-DIGIKEY-Client-Id': clientId,
+    'X-DIGIKEY-Locale-Site': 'US',
+    'X-DIGIKEY-Locale-Language': 'en',
+    'X-DIGIKEY-Locale-Currency': 'USD',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
+}
+
+/* DigiKey lookup, in order of precision.
+ *
+ * The first version of this used only KeywordSearch with Limit 10, and found
+ * 190 of 995 parts. KeywordSearch is a relevance-ranked *text* search: for
+ * connector/wire part numbers like "55A0121-20-0/9" or "382A023-25-0" the
+ * matching product is frequently outside the first 10 hits, or the query is
+ * tokenised in a way that doesn't surface it at all — so parts that are plainly
+ * on digikey.com came back "not found".
+ *
+ * ProductDetails is the endpoint built for this: it takes a manufacturer or
+ * DigiKey part number directly and returns the best match plus any equivalents.
+ * KeywordSearch stays as a fallback (with a much larger Limit) for the cases
+ * ProductDetails 404s on, e.g. a partial or slightly-off part number. */
+async function lookupDigiKey(pn, qty, clientId, clientSecret) {
+  const token = await digikeyToken(clientId, clientSecret);
+  const headers = digikeyHeaders(token, clientId);
+
+  // ── 1. Exact product lookup ──
+  try {
+    const resp = await fetch(
+      `https://api.digikey.com/products/v4/search/${encodeURIComponent(pn)}/productdetails`,
+      { method: 'GET', headers, signal: AbortSignal.timeout(20000) }
+    );
+    if (resp.ok) {
+      const data = await resp.json();
+      const product = data.Product || data.product;
+      if (product) {
+        const exact = String(product.ManufacturerProductNumber || '').trim().toUpperCase()
+                      === String(pn).trim().toUpperCase();
+        return readDigiKeyProduct(product, qty, exact);
+      }
+    } else if (resp.status !== 404) {
+      // 404 just means "no such part number" — anything else (401, 429, 5xx) is
+      // a real problem the user needs to see rather than have masked by the
+      // fallback silently returning nothing.
+      if (resp.status === 401 || resp.status === 403) throw new Error(`DigiKey auth failed (HTTP ${resp.status}) — check credentials/API access`);
+      if (resp.status === 429) throw new Error('DigiKey rate limit reached (HTTP 429) — try again shortly');
+    }
+  } catch (e) {
+    if (/auth failed|rate limit/.test(e.message)) throw e;
+    // Network hiccup on the precise path: fall through and try the search.
+  }
+
+  // ── 2. Keyword search fallback ──
+  const resp = await fetch('https://api.digikey.com/products/v4/search/keyword', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ Keywords: pn, Limit: 50, Offset: 0 }),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!resp.ok) {
+    if (resp.status === 429) throw new Error('DigiKey rate limit reached (HTTP 429) — try again shortly');
+    throw new Error(`DigiKey HTTP ${resp.status}`);
+  }
+  const data = await resp.json();
+  // v4 nests results under ExactMatches/Products depending on the query.
+  const products = [...(data.ExactMatches || []), ...(data.Products || [])];
+  const m = matchPart(products, pn, p => p.ManufacturerProductNumber);
+  if (!m) return null;
+  return readDigiKeyProduct(m.item, qty, m.exact);
 }
 
 exports.priceLookup = onRequest(
