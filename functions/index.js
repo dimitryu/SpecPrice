@@ -1,22 +1,23 @@
 /**
- * SpecPrice — price-check proxy (Cloud Function)
+ * SpecPrice — Cloud Functions
  * ---------------------------------------------------------------------------
- * WHY THIS EXISTS
- * findchips.com serves normal web pages, not an API, so it never sends the
- * `Access-Control-Allow-Origin` header. Browsers therefore refuse to hand the
- * response to our JavaScript (Same-Origin Policy) even though the server
- * answered perfectly well. Server-to-server calls have no such restriction —
- * so this function fetches the page for us and returns it WITH the CORS header
- * the browser wants.
+ *   priceLookup — part pricing from the Mouser and DigiKey APIs
+ *   apiConfig   — admin-managed storage for those API credentials
+ *   priceProxy  — a narrow CORS proxy, now only for currency-rate pages
  *
- * It replaces the free public CORS proxies the app used to depend on, which
- * kept dying (corsproxy.io started returning HTTP 403, the rest timed out) and
- * took every price check down with them.
+ * HISTORY, because it explains the shape of this file: pricing used to come
+ * from scraping findchips.com through priceProxy. That was abandoned — the
+ * site served a different page to datacenter IPs than to a browser, so lookups
+ * failed in a way no amount of parser work could fix. The vendors' own APIs
+ * replaced it: structured JSON, a documented contract, and nothing to block.
+ * priceProxy survives only because coinmill.com (currency rates for the
+ * Priority import) is a plain web page with no CORS header of its own.
  *
- * THIS IS NOT AN OPEN PROXY — deliberately:
- *   • only the hosts in ALLOWED_HOSTS can be fetched;
+ * NONE OF THESE ARE OPEN ENDPOINTS — deliberately:
+ *   • priceProxy fetches only the hosts in ALLOWED_HOSTS;
  *   • only our own web origins get a CORS grant;
- *   • a valid Firebase ID token is required (REQUIRE_AUTH).
+ *   • a valid Firebase ID token is required, and apiConfig also demands the
+ *     'admin' role.
  * An unrestricted proxy would let anyone on the internet route traffic through
  * your Google project, on your quota and under your IP's reputation.
  */
@@ -36,11 +37,10 @@ admin.initializeApp();
 // as a fallback for anyone who prefers configuring them outside the UI; unlike
 // declared secrets, an absent env var is simply undefined and blocks nothing.
 
-// Only these upstreams may be fetched. findchips = part pricing,
-// iw.coinmill.com = the currency-conversion rates the Priority import uses.
+// Only these upstreams may be fetched. FindChips scraping has been removed —
+// prices now come from the vendors' own APIs (see priceLookup) — leaving the
+// Priority import's currency-rate lookups as this proxy's only remaining job.
 const ALLOWED_HOSTS = new Set([
-  'www.findchips.com',
-  'findchips.com',
   'iw.coinmill.com',
 ]);
 
@@ -57,10 +57,8 @@ const ALLOWED_ORIGINS = [
 // in production means anyone who learns this URL can use your quota.
 const REQUIRE_AUTH = true;
 
-// findchips serves a bot-challenge page to anything that doesn't look like a
-// real browser, and a request from a Google datacenter IP is already suspect —
-// so send the FULL header set a current Chrome sends, not just a User-Agent.
-// Missing client hints (sec-ch-ua / sec-fetch-*) are a common tell.
+// Look like a real browser. Kept from the FindChips era because coinmill also
+// serves reduced content to obvious bots, and these headers cost nothing.
 const UPSTREAM_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
                 '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -78,19 +76,6 @@ const UPSTREAM_HEADERS = {
   'Sec-Fetch-Site': 'none',
   'Sec-Fetch-User': '?1',
 };
-
-// Signatures of an anti-bot interstitial. Such a page is a perfectly valid HTTP
-// 200 of decent length, so without this check it sails through and the app just
-// reports a baffling "Not found" — the part is fine, we were simply blocked.
-const BLOCK_SIGNATURES = [
-  /just a moment/i,
-  /checking your browser/i,
-  /cf-browser-verification|cf_chl_|challenge-platform/i,
-  /captcha/i,
-  /access denied|permission denied|forbidden/i,
-  /unusual traffic|automated (requests|queries)|are you a robot/i,
-  /enable javascript (and cookies )?to continue/i,
-];
 
 exports.priceProxy = onRequest(
   { region: 'us-central1', timeoutSeconds: 60, memory: '256MiB', cors: false },
@@ -147,11 +132,8 @@ exports.priceProxy = onRequest(
       });
       let body = await upstream.text();
 
-      // A FindChips results page is ~650 KB, and the great majority of that is
-      // inline <script>/<style> the app never looks at — it only reads the
-      // distributor tables. Dropping them before relaying typically cuts the
-      // payload by more than half, which is the difference between a snappy
-      // price check and one that trips the browser's timeout.
+      // Strip inline <script>/<style>, which the caller never reads. On a
+      // coinmill rate page this is most of the bytes.
       const before = body.length;
       body = body
         .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
@@ -159,25 +141,6 @@ exports.priceProxy = onRequest(
         .replace(/<!--[\s\S]*?-->/g, '');
       res.set('X-Original-Size', String(before));
       res.set('X-Stripped-Size', String(body.length));
-
-      // Distinguish "blocked" from "genuinely no results". Both arrive as a
-      // 200, but only one is a problem we can act on — and calling it out by
-      // name saves hours of chasing a parser bug that doesn't exist.
-      const looksBlocked = BLOCK_SIGNATURES.some(re => re.test(body));
-      const hasResults = /distributor-results/i.test(body);
-      if (looksBlocked || !hasResults) {
-        const which = BLOCK_SIGNATURES.find(re => re.test(body));
-        return void res.status(502).json({
-          error: looksBlocked
-            ? `FindChips served an anti-bot page to our server (matched ${which}). ` +
-              'The part number is fine — the request was blocked, not the parsing.'
-            : 'FindChips returned a page with no distributor results — most likely a ' +
-              'block or an empty search, not a parsing problem.',
-          upstreamStatus: upstream.status,
-          bytes: body.length,
-          snippet: body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300),
-        });
-      }
 
       // Identical part numbers get re-checked often; a short shared cache cuts
       // both latency and load on the upstream site.
@@ -227,6 +190,35 @@ function pickNearestBreak(breaks, targetQty) {
   return best;
 }
 
+/* Part-number matching.
+ * Distributors normalise manufacturer part numbers differently from how the
+ * manufacturer prints them on a drawing. Molex's "08-50-0031" is listed by
+ * DigiKey as "0008500031"; TE parts appear with and without dashes. Comparing
+ * the raw strings therefore reports "not found" for parts that are sitting in
+ * stock — which is exactly what we saw against the real catalogue.
+ *
+ * So: try an exact match first (unambiguous, always preferred), then fall back
+ * to a normalised comparison that ignores punctuation and zero-padding.
+ * Deliberately NOT a substring match — "07461" appearing inside "074613" is a
+ * different part, and quoting the wrong part's price is worse than no price. */
+function pnKey(s) {
+  return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^0+/, '');
+}
+// Picks the best entry from a candidate list: exact match wins, else normalised.
+// Returns { item, exact } or null.
+function matchPart(items, wantedPn, getPn) {
+  const wantRaw = String(wantedPn || '').trim().toUpperCase();
+  const wantKey = pnKey(wantedPn);
+  if (!wantKey) return null;
+  for (const it of items) {
+    if (String(getPn(it) || '').trim().toUpperCase() === wantRaw) return { item: it, exact: true };
+  }
+  for (const it of items) {
+    if (pnKey(getPn(it)) === wantKey) return { item: it, exact: false };
+  }
+  return null;
+}
+
 const numFrom = v => {
   if (typeof v === 'number') return v;
   // Mouser returns strings like "$0.104", "1.234,56 €" — strip everything but
@@ -257,11 +249,11 @@ async function lookupMouser(pn, qty, apiKey) {
     throw new Error('Mouser: ' + data.Errors.map(e => e.Message || e.Code).join('; '));
   }
   const parts = (data.SearchResults && data.SearchResults.Parts) || [];
-  // Exact manufacturer-part-number match only — Mouser's "Exact" option still
-  // returns close relatives, and a neighbouring part's price is worse than none.
-  const want = pn.trim().toUpperCase();
-  const part = parts.find(p => String(p.ManufacturerPartNumber || '').trim().toUpperCase() === want);
-  if (!part) return null;
+  // Mouser's "Exact" option still returns close relatives, so we do our own
+  // matching rather than trusting the first row back.
+  const m = matchPart(parts, pn, p => p.ManufacturerPartNumber);
+  if (!m) return null;
+  const part = m.item;
 
   const breaks = (part.PriceBreaks || []).map(b => ({
     qty: parseInt(b.Quantity, 10) || 0,
@@ -276,6 +268,7 @@ async function lookupMouser(pn, qty, apiKey) {
     breakQty: best.qty,
     stock: String(part.Availability || '').replace(/\D+/g, '') || '',
     mpn: part.ManufacturerPartNumber || '',
+    exactMatch: m.exact,
     manufacturer: part.Manufacturer || '',
     url: part.ProductDetailUrl || '',
   };
@@ -322,11 +315,9 @@ async function lookupDigiKey(pn, qty, clientId, clientSecret) {
   if (!resp.ok) throw new Error(`DigiKey HTTP ${resp.status}`);
   const data = await resp.json();
   const products = data.Products || [];
-  const want = pn.trim().toUpperCase();
-  const product = products.find(
-    p => String(p.ManufacturerProductNumber || '').trim().toUpperCase() === want
-  );
-  if (!product) return null;
+  const m = matchPart(products, pn, p => p.ManufacturerProductNumber);
+  if (!m) return null;
+  const product = m.item;
 
   // v4 puts pricing on each packaging variation (cut tape, reel, ...). Gather
   // every tier across all variations and let pickNearestBreak choose.
@@ -347,6 +338,7 @@ async function lookupDigiKey(pn, qty, clientId, clientSecret) {
     breakQty: best.qty,
     stock: String(product.QuantityAvailable ?? ''),
     mpn: product.ManufacturerProductNumber || '',
+    exactMatch: m.exact,
     manufacturer: (product.Manufacturer && product.Manufacturer.Name) || '',
     url: product.ProductUrl || '',
   };
