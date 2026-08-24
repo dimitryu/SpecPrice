@@ -212,6 +212,7 @@
     .toast-info    { background:var(--blue-dark); color:#fff; }
     .toast-success { background:#1F8B4C; color:#fff; }
     .toast-error   { background:#C0392B; color:#fff; }
+    .toast-warn    { background:#B45309; color:#fff; }
 
     /* ── Progress bar ── */
     .progress-bar { height:4px; background:var(--blue-light); border-radius:2px; overflow:hidden; margin-top:8px; }
@@ -423,7 +424,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.72';
+const APP_VER   = '1.8.73';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -5426,6 +5427,35 @@ function renderAdminPage(){
       <button class="btn btn-green" id="btn-adm-save-keys" style="margin-top:14px">💾 Save API Keys</button>
     </div>
 
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:520px">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🔌 Distributor Price APIs</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Official Mouser and DigiKey APIs, used by CHECK PRICE to fill the Mouser Price and DigiKey Price columns.</p>
+      <div id="adm-dist-status" style="font-size:11px;color:var(--muted);margin-bottom:14px">Loading current status…</div>
+
+      <div class="form-field">
+        <label>Mouser API Key</label>
+        <input class="form-input" id="adm-mouser-key" type="password" placeholder="leave blank to keep current" autocomplete="off">
+      </div>
+      <div class="form-field" style="margin-top:12px">
+        <label>DigiKey Client ID</label>
+        <input class="form-input" id="adm-dk-id" type="password" placeholder="leave blank to keep current" autocomplete="off">
+      </div>
+      <div class="form-field" style="margin-top:12px">
+        <label>DigiKey Client Secret</label>
+        <input class="form-input" id="adm-dk-secret" type="password" placeholder="leave blank to keep current" autocomplete="off">
+      </div>
+
+      <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:6px;padding:9px 11px;margin-top:12px;font-size:11px;color:#0C4A6E;line-height:1.5">
+        🔒 These are stored on the server, not in your browser, and cannot be read back — only replaced. Leave a field blank to keep its current value.
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+        <button class="btn btn-green" id="btn-adm-save-dist">💾 Save Credentials</button>
+        <button class="btn" id="btn-adm-test-dist">🧪 Test Connection</button>
+      </div>
+      <div id="adm-dist-test" style="margin-top:12px"></div>
+    </div>
+
     <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">${_SUPPORT_ICON_SVG} Support Tickets</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Requests and problem reports submitted via the Support button. Reply and set a status — the user sees your reply the next time they open Support.</p>
@@ -5452,9 +5482,110 @@ function renderAdminPage(){
     toast('API keys saved','success');
     logAudit('ai_keys_updated',{anthropic:!!anthKey,gemini:!!geminiKey},true);
   });
+  renderAdminDistributorApiSection();
   renderAdminTicketsSection();
   renderAdminLogsSection();
   renderAdminPromptsSection();
+}
+
+// ── Distributor API credentials (Mouser / DigiKey) ───────────────────────────
+// Unlike the Anthropic/Gemini keys above, these never live in the browser: they
+// are POSTed to the apiConfig Cloud Function, which stores them where no client
+// can read them back. The UI therefore shows status, never values.
+const API_CONFIG_URL='https://us-central1-specprice-236a2.cloudfunctions.net/apiConfig';
+async function _apiConfigCall(method, body){
+  if(!auth.currentUser) throw new Error('Not signed in');
+  const token=await auth.currentUser.getIdToken();
+  const init={method, headers:{Authorization:'Bearer '+token}, signal:AbortSignal.timeout(60000)};
+  if(body){ init.headers['Content-Type']='application/json'; init.body=JSON.stringify(body); }
+  const resp=await fetch(API_CONFIG_URL, init);
+  let data=null;
+  try{ data=await resp.json(); }catch{}
+  if(!resp.ok) throw new Error((data&&data.error)||`HTTP ${resp.status}`);
+  return data;
+}
+
+async function renderAdminDistributorApiSection(){
+  const statusEl=document.getElementById('adm-dist-status');
+  const saveBtn=document.getElementById('btn-adm-save-dist');
+  const testBtn=document.getElementById('btn-adm-test-dist');
+  const testEl=document.getElementById('adm-dist-test');
+  if(!statusEl||!saveBtn||!testBtn) return;
+
+  const pill=(ok,label,detail)=>
+    `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;`+
+    `background:${ok?'#DCFCE7':'#FEE2E2'};color:${ok?'#166534':'#991B1B'}">${ok?'✓':'✕'} ${esc(label)}</span>`+
+    (detail?` <span style="color:var(--muted);font-size:10px">${esc(detail)}</span>`:'');
+
+  async function refreshStatus(){
+    statusEl.innerHTML='Loading current status…';
+    try{
+      const s=await _apiConfigCall('GET');
+      // "Where did this come from" matters when debugging: a key set with the
+      // CLI and one set here look identical until you need to change it.
+      const src=o=>o.source==='secret-manager'?'via CLI secret':(o.source==='ui'?'set here':'');
+      const when=s.updatedAt?new Date(s.updatedAt).toLocaleString():'';
+      statusEl.innerHTML=
+        `<div style="display:flex;flex-direction:column;gap:6px">
+           <div>${pill(s.mouser.configured,'Mouser',[s.mouser.hint,src(s.mouser)].filter(Boolean).join(' · '))}</div>
+           <div>${pill(s.digikey.configured,'DigiKey',[s.digikey.clientIdHint,src(s.digikey)].filter(Boolean).join(' · '))}</div>
+           ${when?`<div style="color:var(--muted);font-size:10px">Last changed ${esc(when)}${s.updatedBy?' by '+esc(s.updatedBy):''}</div>`:''}
+         </div>`;
+    }catch(e){
+      // A 404 here almost always means the function hasn't been deployed yet —
+      // say so, rather than leaving the admin staring at a raw status code.
+      const notDeployed=/404|Failed to fetch|NetworkError/i.test(e.message);
+      statusEl.innerHTML=`<span style="color:var(--red)">${esc(notDeployed
+        ? 'Cannot reach the apiConfig function — run: firebase deploy --only functions'
+        : e.message)}</span>`;
+    }
+  }
+
+  saveBtn.addEventListener('click',async()=>{
+    const mk=document.getElementById('adm-mouser-key').value.trim();
+    const di=document.getElementById('adm-dk-id').value.trim();
+    const ds=document.getElementById('adm-dk-secret').value.trim();
+    // Only send the fields actually filled in — an omitted field means "keep",
+    // which is what lets the admin change one credential without re-typing all.
+    const body={};
+    if(mk) body.mouser_api_key=mk;
+    if(di) body.digikey_client_id=di;
+    if(ds) body.digikey_client_secret=ds;
+    if(!Object.keys(body).length){ toast('Nothing to save — fill in at least one field','warn'); return; }
+
+    saveBtn.disabled=true; saveBtn.textContent='Saving…';
+    try{
+      const r=await _apiConfigCall('POST',body);
+      // Clear the inputs immediately: there is no reason for a secret to sit in
+      // a DOM node after it's been stored.
+      ['adm-mouser-key','adm-dk-id','adm-dk-secret'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+      toast('Credentials saved','success');
+      logAudit('distributor_api_keys_updated',{fields:(r.updated||[]).join(', ')},true);
+      await refreshStatus();
+    }catch(e){
+      toast('Save failed: '+e.message,'error');
+      logAudit('distributor_api_keys_updated',e.message,false);
+    }finally{ saveBtn.disabled=false; saveBtn.textContent='💾 Save Credentials'; }
+  });
+
+  testBtn.addEventListener('click',async()=>{
+    testBtn.disabled=true; testBtn.textContent='Testing…';
+    testEl.innerHTML='<span style="font-size:11px;color:var(--muted)">Querying both vendors…</span>';
+    try{
+      const r=await _apiConfigCall('POST',{action:'test'});
+      const line=(name,v)=>`<div style="margin-bottom:4px">${pill(v.ok,name)} <span style="font-size:11px">${esc(v.message)}</span></div>`;
+      testEl.innerHTML=
+        `<div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px">
+           <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Test part: ${esc(r.pn)}</div>
+           ${line('Mouser',r.mouser)}${line('DigiKey',r.digikey)}
+         </div>`;
+      logAudit('distributor_api_test',`mouser=${r.mouser.ok} digikey=${r.digikey.ok}`,r.mouser.ok||r.digikey.ok);
+    }catch(e){
+      testEl.innerHTML=`<span style="color:var(--red);font-size:11px">${esc(e.message)}</span>`;
+    }finally{ testBtn.disabled=false; testBtn.textContent='🧪 Test Connection'; }
+  });
+
+  refreshStatus();
 }
 
 const _ADM_TICKET_CACHE={}; // ticketId -> ticket data (ALL fetched tickets, unfiltered) — used by openAdminReplyModal
