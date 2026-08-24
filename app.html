@@ -425,7 +425,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.79';
+const APP_VER   = '1.8.80';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -592,7 +592,6 @@ document.getElementById('btn-support-fab')?.addEventListener('click',()=>openSup
 // Delegated so it works for BOTH drop-zone modals (RFQ + Sales Desk), which
 // are built fresh each time they're opened.
 document.addEventListener('change',e=>{
-  if(e.target?.classList?.contains('xls-subassy-chk')) _xlsIncludeSubAssemblies=e.target.checked;
 });
 
 // ── Home screen ───────────────────────────────────────────────────────────────
@@ -1658,12 +1657,6 @@ function openAddDrawingModal(projectId, projectName){
         <span class="icon-big">📄</span>
         <strong>Drop PDF, Image or Excel here</strong>
         <p>or click to browse — you can select multiple files (PDF, PNG, JPG, JPEG, WEBP, BMP, XLSX, XLS, CSV). All selected files are extracted together and shown in one combined review.</p>
-        <label style="display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;color:var(--muted);margin-top:8px;cursor:pointer"
-               title="Excel only: also import sub-assembly / internal-document rows (SpecTdp, DocumentTdp). These have no manufacturer or price — off by default."
-               onclick="event.stopPropagation()">
-          <input type="checkbox" class="xls-subassy-chk" ${_xlsIncludeSubAssemblies?'checked':''} style="width:auto">
-          Excel: include sub-assembly / document rows
-        </label>
         <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.xlsx,.xlsm,.xls,.csv" multiple
                style="display:none">
       </div>
@@ -2189,7 +2182,13 @@ function _isSpreadsheetFile(file){
 // their Revisions) are imported alongside the real purchasable components.
 // Off by default: those rows have no manufacturer and no price, so they'd only
 // add noise to a quote — but some assemblies legitimately need them listed.
-let _xlsIncludeSubAssemblies=false;
+// Every row from the sheet is now imported, always. The old checkbox made the
+// user decide up-front whether sub-assembly/document rows mattered — a question
+// they couldn't answer before seeing the parts. Importing everything and letting
+// the cheapest-QVL-alternative logic price it is both simpler and safer: a row
+// that turns out to be irrelevant can be deleted in the review step, whereas a
+// row that was never imported is invisible.
+const _xlsIncludeSubAssemblies=true;
 
 // Column-name aliases for the deterministic spreadsheet parser below. Matched
 // case-insensitively against the detected header row.
@@ -4196,51 +4195,83 @@ async function _sdAutoMatchLabor(){}
 // slow. The chosen language is remembered the same way, per the request to
 // reopen in whatever language was last picked.
 // ══════════════════════════════════════════════════════════════════════════════
-const _LB_LANG_KEY='labor_breakdown_lang';
-const _LB_CACHE_KEY='labor_breakdown_he_cache';
-let _lbLang = localStorage.getItem(_LB_LANG_KEY)==='he' ? 'he' : 'en';
-let _lbCache = (()=>{ try{ return JSON.parse(localStorage.getItem(_LB_CACHE_KEY))||{}; }catch{ return {}; } })();
+const _LB_CACHE_KEY='labor_breakdown_tr_cache';
+// English ALWAYS on open. The language is a per-viewing choice, not a setting:
+// the underlying data is English, and quietly reopening in a translation the
+// user picked days ago hides that. They press a button when they want it.
+let _lbLang='en';
+// The TRANSLATIONS are still cached across sessions — that's a cost/latency
+// optimisation, invisible to the user, and unrelated to which language shows.
+// Shape: { he:{english:translated}, ru:{...} }
+let _lbCache = (()=>{
+  try{ const c=JSON.parse(localStorage.getItem(_LB_CACHE_KEY))||{}; return {he:c.he||{}, ru:c.ru||{}}; }
+  catch{ return {he:{}, ru:{}}; }
+})();
 function _lbSaveCache(){
   try{ localStorage.setItem(_LB_CACHE_KEY, JSON.stringify(_lbCache)); }
   catch(e){ console.warn('[Labor] translation cache not saved:', e.message); }
 }
+// Hebrew reads right-to-left; Russian does not.
 function _lbRTL(){ return _lbLang==='he'; }
+const _LB_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 
 // Fixed UI strings. Kept as a table rather than sent to the AI so the chrome of
 // the dialog never depends on a network call.
-const _LB_LABELS_HE={
-  'Operation':'פעולה',
-  'Per op':'לפעולה',
-  '×Qty':'× כמות',
-  'Total':'סה"כ',
-  'min':'דק׳',
-  'Row-tied operations':'פעולות המשויכות לשורה',
-  '+ General assembly/inspection (not tied to one part)':'+ הרכבה/בדיקה כללית (לא משויך לפריט מסוים)',
-  '= Total (series, per unit)':'= סה"כ (סדרה, ליחידה)',
-  'Reference: single stand-alone cable':'להשוואה: כבל בודד עצמאי',
-  'Total Labor Time (auto)':'סה"כ זמן עבודה (אוטומטי)',
+const _LB_LABELS={
+  he:{
+    'Operation':'פעולה',
+    'Per op':'לפעולה',
+    '×Qty':'× כמות',
+    'Total':'סה"כ',
+    'min':'דק׳',
+    'Row-tied operations':'פעולות המשויכות לשורה',
+    '+ General assembly/inspection (not tied to one part)':'+ הרכבה/בדיקה כללית (לא משויך לפריט מסוים)',
+    '= Total (series, per unit)':'= סה"כ (סדרה, ליחידה)',
+    'Reference: single stand-alone cable':'להשוואה: כבל בודד עצמאי',
+    'Total Labor Time (auto)':'סה"כ זמן עבודה (אוטומטי)',
+    'Labor Time Breakdown':'פירוט זמן עבודה',
+    'Close':'סגור',
+    'Translating…':'מתרגם…',
+  },
+  ru:{
+    'Operation':'Операция',
+    'Per op':'За опер.',
+    '×Qty':'× Кол-во',
+    'Total':'Итого',
+    'min':'мин',
+    'Row-tied operations':'Операции, привязанные к строке',
+    '+ General assembly/inspection (not tied to one part)':'+ Общая сборка/контроль (не привязано к детали)',
+    '= Total (series, per unit)':'= Итого (серия, на единицу)',
+    'Reference: single stand-alone cable':'Для сравнения: одиночный кабель',
+    'Total Labor Time (auto)':'Общее время работы (авто)',
+    'Labor Time Breakdown':'Детализация времени работы',
+    'Close':'Закрыть',
+    'Translating…':'Перевод…',
+  },
 };
 // Returns the Hebrew text when available, otherwise the English original.
 // Never blocks and never throws: an untranslated string is far better than a
 // broken dialog.
 function _lbTr(text){
-  if(_lbLang!=='he') return text;
+  if(_lbLang==='en') return text;
   const t=String(text||'');
-  return _LB_LABELS_HE[t] || _lbCache[t] || t;
+  return (_LB_LABELS[_lbLang]||{})[t] || (_lbCache[_lbLang]||{})[t] || t;
 }
 
 // Translates the operation sentences that aren't already cached.
 // Batched into ONE request — a call per line would be slow and needlessly
 // expensive when a breakdown routinely has a dozen steps.
-async function _lbTranslateOperations(texts){
-  const todo=[...new Set(texts.map(t=>String(t||'').trim()).filter(t=>t && !_lbCache[t]))];
+async function _lbTranslateOperations(texts, lang){
+  const bucket=_lbCache[lang] || (_lbCache[lang]={});
+  const todo=[...new Set(texts.map(t=>String(t||'').trim()).filter(t=>t && !bucket[t]))];
   if(!todo.length) return true;
   if(!anthKey && !geminiKey) throw new Error('No AI key configured — add one in Admin → AI API Keys');
 
-  const prompt='Translate each of these manufacturing operation descriptions from English to Hebrew.\n'
+  const langName = lang==='ru' ? 'Russian' : 'Hebrew';
+  const prompt=`Translate each of these manufacturing operation descriptions from English to ${langName}.\n`
     +'These are cable/harness assembly steps. Rules:\n'
     +'- Keep part numbers, standards and units exactly as they are (do NOT translate or transliterate them).\n'
-    +'- Technical terms that Israeli engineers normally say in English (e.g. SMT, PCB, IDC, crimp) may stay in English.\n'
+    +'- Technical terms engineers normally say in English (e.g. SMT, PCB, IDC, crimp) may stay in English.\n'
     +'- Return ONLY a JSON array of the translated strings, same order, same length. No commentary.\n\n'
     +JSON.stringify(todo, null, 0);
 
@@ -4277,7 +4308,7 @@ async function _lbTranslateOperations(texts){
   if(!Array.isArray(arr) || arr.length!==todo.length){
     throw new Error(`Translation returned ${Array.isArray(arr)?arr.length:'?'} lines for ${todo.length} operations`);
   }
-  todo.forEach((t,i)=>{ const v=String(arr[i]||'').trim(); if(v) _lbCache[t]=v; });
+  todo.forEach((t,i)=>{ const v=String(arr[i]||'').trim(); if(v) bucket[t]=v; });
   _lbSaveCache();
   return true;
 }
@@ -4293,9 +4324,7 @@ function openLaborBreakdownModal(){
     showModal(`<div class="modal modal-sm">
       <div class="modal-head"><h3>📋 Labor Time Breakdown</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
       <div class="modal-body">
-        <p style="color:var(--muted);font-size:13px" dir="${_lbRTL()?'rtl':'ltr'}">${_lbLang==='he'
-          ? 'אין ניתוח תהליך של AI לפריטים שנמצאים כרגע ב-Sales Desk — ייבא סרטוט דרך "📎 New Drawing" כדי לקבל כאן פירוט שלבי ייצור.'
-          : 'No AI cable-process analysis for the parts currently in Sales Desk — import a drawing via "📎 New Drawing" to get a step-by-step manufacturing breakdown here.'}</p>
+        <p style="color:var(--muted);font-size:13px">No AI cable-process analysis for the parts currently in Sales Desk — import a drawing via "📎 New Drawing" to get a step-by-step manufacturing breakdown here.</p>
       </div>
       <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>
     </div>`);
@@ -4308,10 +4337,10 @@ function openLaborBreakdownModal(){
            table past the modal and re-introducing the horizontal scrollbar. -->
       <table style="width:100%;font-size:12px;border-collapse:collapse;table-layout:fixed">
         <thead><tr style="text-align:${_lbRTL()?'right':'left'};color:var(--muted)">
-          <th style="padding:2px 4px">${_lbTr('Operation')}</th>
-          <th style="padding:2px 4px;text-align:right;width:58px">${_lbTr('Per op')}</th>
-          <th style="padding:2px 4px;text-align:center;width:44px">${_lbTr('×Qty')}</th>
-          <th style="padding:2px 4px;text-align:right;width:58px">${_lbTr('Total')}</th>
+          <th style="padding:4px 7px;border-bottom:2px solid var(--border)">${_lbTr('Operation')}</th>
+          <th style="padding:4px 7px;text-align:right;width:62px;border-bottom:2px solid var(--border);border-inline-start:1px solid var(--border)">${_lbTr('Per op')}</th>
+          <th style="padding:4px 7px;text-align:center;width:52px;border-bottom:2px solid var(--border);border-inline-start:1px solid var(--border)">${_lbTr('×Qty')}</th>
+          <th style="padding:4px 7px;text-align:right;width:62px;border-bottom:2px solid var(--border);border-inline-start:1px solid var(--border)">${_lbTr('Total')}</th>
         </tr></thead>
         <tbody>
           ${b.steps.map(s=>{
@@ -4323,10 +4352,10 @@ function openLaborBreakdownModal(){
             // many lines as it needs — vertical space is cheap here, and the
             // whole point of this modal is to READ what the AI decided.
             return `<tr style="vertical-align:top">
-              <td style="padding:4px;white-space:normal;word-break:break-word;line-height:1.45">${esc(op)}</td>
-              <td style="padding:4px;text-align:right;color:var(--muted);white-space:nowrap">${s.unitMinutes!=null?(parseFloat(s.unitMinutes)||0).toFixed(2):'—'}</td>
-              <td style="padding:4px;text-align:center;color:var(--muted);white-space:nowrap">${s.qty!=null?s.qty:'—'}</td>
-              <td style="padding:4px;text-align:right;white-space:nowrap">${(parseFloat(s.minutes)||0).toFixed(1)}</td>
+              <td style="padding:5px 7px;white-space:normal;word-break:break-word;line-height:1.45;border-bottom:1px solid var(--border)">${esc(op)}</td>
+              <td style="padding:5px 7px;text-align:right;color:var(--muted);white-space:nowrap;border-bottom:1px solid var(--border);border-inline-start:1px solid var(--border)">${s.unitMinutes!=null?(parseFloat(s.unitMinutes)||0).toFixed(2):'—'}</td>
+              <td style="padding:5px 7px;text-align:center;color:var(--muted);white-space:nowrap;border-bottom:1px solid var(--border);border-inline-start:1px solid var(--border)">${s.qty!=null?s.qty:'—'}</td>
+              <td style="padding:5px 7px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--border);border-inline-start:1px solid var(--border)">${(parseFloat(s.minutes)||0).toFixed(1)}</td>
             </tr>`;
           }).join('')}
         </tbody>
@@ -4351,7 +4380,7 @@ function openLaborBreakdownModal(){
     </div>`).join('');
   showModal(`<div class="modal" style="width:min(94vw,680px)">
     <div class="modal-head">
-      <h3>📋 ${_lbLang==='he'?'פירוט זמן עבודה':'Labor Time Breakdown'}</h3>
+      <h3>📋 ${_lbTr('Labor Time Breakdown')}</h3>
       <button class="close-modal" onclick="closeModal()">✕</button>
     </div>
     <!-- overflow-x hidden, not auto: the whole point of the wrapping above is
@@ -4364,41 +4393,48 @@ function openLaborBreakdownModal(){
       </div>
       <div id="lb-tr-msg" style="margin-top:8px;font-size:11px"></div>
     </div>
-    <div class="modal-foot" style="display:flex;gap:8px;align-items:center">
-      <button class="btn btn-ghost" id="btn-lb-lang" title="${_lbLang==='he'?'Show in English':'הצג בעברית'}">
-        🌐 ${_lbLang==='he'?'English':'עברית'}
-      </button>
-      <button class="btn btn-ghost" style="margin-left:auto" onclick="closeModal()">${_lbLang==='he'?'סגור':'Close'}</button>
+    <div class="modal-foot" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:11px;color:var(--muted)">🌐</span>
+      ${['en','he','ru'].map(L=>`<button class="btn ${_lbLang===L?'btn-blue':'btn-ghost'} btn-sm"
+          data-lb-lang="${L}" ${_lbLang===L?'disabled':''}
+          style="font-size:12px">${_LB_LANG_NAMES[L]}</button>`).join('')}
+      <button class="btn btn-ghost" style="margin-left:auto" onclick="closeModal()">${_lbTr('Close')}</button>
     </div>
   </div>`);
 
-  document.getElementById('btn-lb-lang')?.addEventListener('click',async()=>{
-    const btn=document.getElementById('btn-lb-lang');
-    const msg=document.getElementById('lb-tr-msg');
-    const goingHe = _lbLang!=='he';
-    if(goingHe){
-      // Only the AI-written operation sentences need a round-trip, and only the
-      // ones not already cached — so the second time this is opened it's instant.
-      const ops=activeBreakdowns.flatMap(b=>b.steps.map(st=>st.operation||''));
-      const missing=ops.filter(t=>t && !_lbCache[String(t).trim()]).length;
-      if(missing){
-        btn.disabled=true; btn.textContent='מתרגם…';
-        if(msg) msg.innerHTML='<span style="color:var(--muted)">Translating operation descriptions…</span>';
-        try{
-          await _lbTranslateOperations(ops);
-        }catch(e){
-          btn.disabled=false; btn.innerHTML='🌐 עברית';
-          if(msg) msg.innerHTML=`<span style="color:var(--red)">Translation failed — ${esc(e.message)}</span>`;
-          logSystemAudit('labor_breakdown_translate', e.message, false);
-          return;   // stay in English rather than switch to a half-translated view
+  document.querySelectorAll('[data-lb-lang]').forEach(btn=>{
+    btn.addEventListener('click',async()=>{
+      const lang=btn.dataset.lbLang;
+      if(lang===_lbLang) return;
+      const msg=document.getElementById('lb-tr-msg');
+
+      if(lang!=='en'){
+        // Only the AI-written operation sentences need a round-trip, and only
+        // the ones not already cached for THIS language — so switching back to
+        // a language already seen is instant.
+        const ops=activeBreakdowns.flatMap(b=>b.steps.map(st=>st.operation||''));
+        const bucket=_lbCache[lang]||{};
+        const missing=ops.filter(t=>t && !bucket[String(t).trim()]).length;
+        if(missing){
+          document.querySelectorAll('[data-lb-lang]').forEach(b=>b.disabled=true);
+          btn.textContent='…';
+          if(msg) msg.innerHTML='<span style="color:var(--muted)">Translating operation descriptions…</span>';
+          try{
+            await _lbTranslateOperations(ops, lang);
+          }catch(e){
+            document.querySelectorAll('[data-lb-lang]').forEach(b=>{ b.disabled=(b.dataset.lbLang===_lbLang); });
+            btn.textContent=_LB_LANG_NAMES[lang];
+            if(msg) msg.innerHTML=`<span style="color:var(--red)">Translation failed — ${esc(e.message)}</span>`;
+            logSystemAudit('labor_breakdown_translate', e.message, false);
+            return;   // stay put rather than switch to a half-translated view
+          }
+          logSystemAudit('labor_breakdown_translate', `${missing} operation(s) → ${lang}`, true);
         }
-        logSystemAudit('labor_breakdown_translate', `${missing} operation(s) → he`, true);
       }
-    }
-    _lbLang = goingHe ? 'he' : 'en';
-    localStorage.setItem(_LB_LANG_KEY,_lbLang);   // remembered for next time
-    closeModal();
-    openLaborBreakdownModal();                     // re-render in the new language
+      _lbLang=lang;           // deliberately NOT persisted — see _lbLang above
+      closeModal();
+      openLaborBreakdownModal();
+    });
   });
 }
 let _sdFilterQ='';
@@ -4702,7 +4738,10 @@ async function renderSalesDesk(){
         <div class="sd-panel">
           <div class="sd-panel-title">Cost Summary</div>
           <div style="padding:6px 0">
-            <div class="summary-row"><span>Parts Total</span><span id="sd-parts-total">$0.00</span></div>
+            <!-- Order is deliberate: Tools first (it's the line most often
+                 missed, and it sits OUTSIDE the price), then the two inputs the
+                 user actually edits, then the derived figures that build up to
+                 Subtotal. -->
             <div class="summary-row" style="color:var(--muted)">
               <span title="Cost of crimp/insertion tools that are NOT yet in Stock. Shown for information only — tools are never added into Subtotal or FINAL PRICE. Type your own number to override it, e.g. a vendor quote.">Tools <em style="font-size:10px;font-style:normal">(not in price)</em></span>
               <span style="display:flex;align-items:center;gap:2px">$<input type="number" id="sd-tools-total" min="0" step="any"
@@ -4716,6 +4755,7 @@ async function renderSalesDesk(){
               <input type="number" id="sd-labor-minutes" min="0" step="any"
                 style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
             </div>
+            <div class="summary-row"><span>Parts Total</span><span id="sd-parts-total">$0.00</span></div>
             <div class="summary-row"><span id="sd-labor-cost-label" title="Labor Time (min) above × rate per minute — set the rate in Settings">Labor Cost</span><span id="sd-labor-total">$0.00</span></div>
             <div class="summary-row"><span>Subtotal</span><span id="sd-subtotal">$0.00</span></div>
             <div class="summary-row">
@@ -4728,7 +4768,10 @@ async function renderSalesDesk(){
             <span>FINAL PRICE</span>
             <span id="sd-final">$0.00</span>
           </div>
-          <div id="sd-tools-note" style="display:none;font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:5px 8px;margin-top:6px;line-height:1.5"></div>
+          <!-- Doubled from 11px: this warning says the headline number is NOT
+               what the customer will actually pay. At footnote size it read as
+               a footnote, which is exactly the wrong impression. -->
+          <div id="sd-tools-note" style="display:none;font-size:22px;color:#92400e;background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;padding:10px 12px;margin-top:8px;line-height:1.45;font-weight:600"></div>
           <div id="sd-tools-stock-note" style="display:none;font-size:11px;color:#1F8B4C;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:4px;padding:5px 8px;margin-top:6px"></div>
         </div>
         <button class="btn btn-green" style="width:100%;padding:10px;justify-content:center" id="btn-sd-export">📊 Export to Excel</button>
@@ -4958,12 +5001,6 @@ function openSDFileModal(){
         <span class="icon-big">📄</span>
         <strong>Drop PDF, Image or Excel here</strong>
         <p>PDF / PNG / JPG / XLSX / XLS / CSV — parts will be added to Sales Desk. You can select multiple files, extracted together into one review.</p>
-        <label style="display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;color:var(--muted);margin-top:8px;cursor:pointer"
-               title="Excel only: also import sub-assembly / internal-document rows (SpecTdp, DocumentTdp). These have no manufacturer or price — off by default."
-               onclick="event.stopPropagation()">
-          <input type="checkbox" class="xls-subassy-chk" ${_xlsIncludeSubAssemblies?'checked':''} style="width:auto">
-          Excel: include sub-assembly / document rows
-        </label>
         <input type="file" id="sd-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.xlsx,.xlsm,.xls,.csv" multiple style="display:none">
       </div>
     </div>
