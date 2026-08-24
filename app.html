@@ -430,7 +430,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.8.88';
+const APP_VER   = '1.8.89';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -4355,14 +4355,16 @@ async function _sdAutoMatchLabor(){
     return {applied:0, minutes:0, reason:'No AI key configured — add one in Admin → AI API Keys'};
   }
 
-  // Only rows that have no labor yet. Re-analysing a row that already carries a
-  // drawing-derived total would replace a figure read from the actual drawing
-  // with a guess made without one — strictly worse.
-  const pending=sdItems
+  // ── Which rows may this estimate touch? ──
+  // Rows whose labor came from an actual DRAWING are off-limits: replacing a
+  // figure read from the drawing with a guess made without one is strictly
+  // worse. Rows a previous parts-only run produced (_laborFromParts) ARE
+  // eligible, because a re-estimate must be able to redo its own work.
+  const eligible=sdItems
     .map((r,i)=>({r,i}))
-    .filter(({r})=>!(parseFloat(r.labor_time)>0) && !(parseFloat(r.labor_total)>0)
-                   && !r._laborManualOverride && !_sdIsToolRow(r));
-  if(!pending.length){
+    .filter(({r})=>!r._laborManualOverride && !_sdIsToolRow(r)
+                   && (r._laborFromParts || !(parseFloat(r.labor_total)>0)));
+  if(!eligible.length){
     return {applied:0, minutes:0, reason:'Every row already has a Labor Time'};
   }
   let applied=0, minutesTotal=0, lastError='';
@@ -4371,13 +4373,28 @@ async function _sdAutoMatchLabor(){
   // single row become that drawing's generalMinutes, and the breakdown modal
   // finds a section by matching drawingName against rows in Sales Desk.
   const groups=new Map();
-  for(const item of pending){
+  for(const item of eligible){
     const key=String(item.r.drawing_number||'').trim();
     if(!groups.has(key)) groups.set(key,[]);
     groups.get(key).push(item);
   }
 
   for(const [dwg,members] of groups){
+    // ── Re-estimating must REPLACE, not accumulate ──
+    // Each run used to push a fresh breakdown and add to whatever minutes a row
+    // already had. Running it twice on one drawing therefore produced two
+    // sections in the modal AND double-counted that drawing's general minutes
+    // in Cost Summary (see _sdActiveGeneralLaborMinutes, which sums every
+    // matching breakdown) — quietly inflating the quote.
+    // Clearing this drawing's previous parts-only result first makes the whole
+    // operation idempotent: pressing the button twice gives the same answer.
+    _sdLaborBreakdowns=_sdLaborBreakdowns.filter(b=>!(b.fromPartsOnly && b.drawingName===dwg));
+    for(const {r} of members){
+      if(r._laborFromParts){
+        r.labor_time=''; r.labor_total=0;
+        delete r._laborFixedTotal; delete r._laborFromParts;
+      }
+    }
     // A breakdown whose drawingName matches nothing in sdItems would be
     // invisible in the modal and its general minutes uncounted. Rows with no
     // drawing number can't be represented that way, so their steps are all
@@ -4411,6 +4428,7 @@ async function _sdAutoMatchLabor(){
           // Already a total for one assembly — _sdRecalcLaborTotal must use it
           // as-is rather than multiplying it by the row's own qty again.
           row._laborFixedTotal=true;
+          row._laborFromParts=true;   // this run owns it, so a re-run may redo it
           _sdRecalcLaborTotal(row);
           rowTiedMinutes+=totalMins;
         } else if(canTrack){
@@ -4422,6 +4440,7 @@ async function _sdAutoMatchLabor(){
           if(first){
             first.labor_time=String((parseFloat(first.labor_time)||0)+totalMins);
             first._laborFixedTotal=true;
+            first._laborFromParts=true;
             _sdRecalcLaborTotal(first);
             rowTiedMinutes+=totalMins;
           }
@@ -4444,6 +4463,7 @@ async function _sdAutoMatchLabor(){
           fromPartsOnly:true,
         });
       }
+      for(const {r} of members) r._laborFromParts=true;
       applied+=members.length;
       minutesTotal+=rowTiedMinutes+generalMinutes;
       logSystemAudit('labor_estimate_from_parts',
