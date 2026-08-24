@@ -425,7 +425,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.82';
+const APP_VER   = '1.8.83';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -958,14 +958,34 @@ const _PS_DEFAULT_COLS=[
 // anything in between → uncoloured. A single price is left uncoloured, since
 // "cheapest" is meaningless with nothing to compare against.
 const _PRICE_FIELDS=['priority_price','mouser_price','digikey_price'];
+
+// WHAT IS COMPARED, and why it isn't the displayed number.
+// The cells show a per-unit price, but the sources don't quote on the same
+// basis: Priority prices cable per METRE while Mouser and DigiKey quote it per
+// FOOT. Ranking the raw numbers therefore gave the wrong answer on every mm
+// row — $2.00/m from Priority looked dearer than $0.65/ft from DigiKey, when
+// per metre DigiKey is actually $2.13. So the colours rank each source by what
+// the row would ACTUALLY COST (quantity included, units reconciled), which is
+// the question the colour is meant to answer.
+// On "pc" rows every source is already per piece, so multiplying by the row's
+// quantity changes nothing about the ordering — the colours there are the same
+// as before. This matters only where the units genuinely differ.
+function _priceRankValue(row, field){
+  return typeof _sdLineCost==='function' ? _sdLineCost(row, field)
+                                         : (parseFloat(row[field])||0);
+}
 function _priceCellHTML(row, field){
   const v=parseFloat(row[field])||0;
   if(!v) return '';
-  const all=_PRICE_FIELDS.map(f=>parseFloat(row[f])||0).filter(n=>n>0);
+  const mine=_priceRankValue(row, field);
+  const all=_PRICE_FIELDS.map(f=>_priceRankValue(row,f)).filter(n=>n>0);
   if(all.length<2) return fmtPrice(v);
   const lo=Math.min(...all), hi=Math.max(...all);
-  const cls = v<=lo ? 'price-green' : (v>=hi ? 'price-red' : '');
-  return `<span class="${cls}">${fmtPrice(v)}</span>`;
+  const cls = mine<=lo ? 'price-green' : (mine>=hi ? 'price-red' : '');
+  // The tooltip carries the real line cost, so a colour that looks surprising
+  // can be checked instead of just distrusted.
+  const title = mine>0 ? ` title="Line cost at QTY ${row.qty??1}${row.unit?' '+row.unit:''}: $${mine.toFixed(2)}"` : '';
+  return `<span class="${cls}"${title}>${fmtPrice(v)}</span>`;
 }
 
 // Renders the inner HTML for a single Part Stock cell, given a column key and part row
@@ -3118,6 +3138,7 @@ async function lookupPartPrices(partNumber, qty=0){
   // exist and where?", and dropping it was reporting real parts as missing.
   const norm=v=>v ? {
     price:+v.price||0, stock:v.stock||'0', url:v.url||'', mpn:v.mpn||'',
+    manufacturer:v.manufacturer||'',
     breakQty:v.breakQty||0, exact:v.exactMatch!==false, status:v.status||'',
   } : null;
   const mouser=norm(data.mouser), digikey=norm(data.digikey);
@@ -3155,13 +3176,15 @@ async function runFCCheckModal(items, mode){
       <div style="max-height:340px;overflow:auto;margin-top:12px">
         <table style="width:100%;font-size:12px" id="fc-res-table">
           <thead><tr style="position:sticky;top:0;background:#fff">
-            <th>MNF P/N</th><th>QTY</th><th>DigiKey</th><th>Mouser</th><th>Priority</th><th>Stock</th><th>Status</th>
+            <th>MNF P/N</th><th>Manufacturer</th><th>QTY</th><th>DigiKey</th><th>Mouser</th><th>Priority</th><th>Stock</th><th>Status</th>
           </tr></thead>
           <tbody id="fc-res-tbody">
             ${items.map((it,i)=>`<tr id="fc-row-${i}">
               <td id="fc-pn-${i}">${esc(it.part_number)}${(it.alt_mpns||[]).length>1
                 ? `<span style="margin-left:5px;padding:1px 5px;border-radius:8px;background:#EDE9FE;color:#5B21B6;font-size:9px;font-weight:700" title="${esc((it.alt_mpns||[]).map(a=>a.mpn).join('\n'))}">${(it.alt_mpns||[]).length} QVL</span>`
-                : ''}</td><td>${it.qty||1}</td>
+                : ''}</td>
+              <td id="fc-mf-${i}" style="color:var(--muted)">${esc(it.manufacturer||'')||'—'}</td>
+              <td>${it.qty||1}</td>
               <td id="fc-dk-${i}" style="color:var(--muted)">—</td>
               <td id="fc-mo-${i}" style="color:var(--muted)">—</td>
               <td id="fc-pr-${i}" style="color:var(--muted)">${money(parseFloat(it.priority_price)||0)||'—'}</td>
@@ -3333,6 +3356,18 @@ async function runFCCheckModal(items, mode){
       }
       setStatus(i, glyph, noPrice?'#B45309':'var(--green)', tip);
 
+      // The distributor knows the real manufacturer; our rows frequently don't
+      // (a PDF BOM often omits it). Fill it in ONLY when we have nothing —
+      // never overwrite a name that came from the customer's own QVL sheet,
+      // which is the authoritative source when it exists.
+      const vendorMfr=(r.best && r.best.manufacturer) || '';
+      const newMfr = (!String(it.manufacturer||'').trim() && vendorMfr) ? vendorMfr : '';
+      if(newMfr){
+        it.manufacturer=newMfr;
+        const mfEl=document.getElementById(`fc-mf-${i}`);
+        if(mfEl){ mfEl.textContent=newMfr; mfEl.style.color='var(--text)'; }
+      }
+
       const stock=String(stockNum);
       if(mode==='parts'){
         if(it._id){
@@ -3341,6 +3376,7 @@ async function runFCCheckModal(items, mode){
               mouser_price:moNum, digikey_price:dkNum,
               stock, updatedAt:serverTimestamp(), qty:1
             };
+            if(newMfr) patch.manufacturer=newMfr;
             // The cheapest approved alternative becomes the part we quote.
             if(candidates.length>1 && chosenPn && chosenPn!==it.part_number){
               patch.part_number=chosenPn;
@@ -3350,6 +3386,7 @@ async function runFCCheckModal(items, mode){
             const ap=allParts.find(p=>p._id===it._id);
             if(ap){
               ap.mouser_price=moNum; ap.digikey_price=dkNum; ap.stock=stock;
+              if(newMfr) ap.manufacturer=newMfr;
               if(patch.part_number){ ap.part_number=patch.part_number; ap.manufacturer=chosenMfr||ap.manufacturer; }
             }
           }catch(e){ console.warn('price save error:',e.message); }
@@ -3359,6 +3396,7 @@ async function runFCCheckModal(items, mode){
         if(sdIdx!==undefined&&sdItems[sdIdx]){
           sdItems[sdIdx].mouser_price=moNum;
           sdItems[sdIdx].digikey_price=dkNum;
+          if(newMfr) sdItems[sdIdx].manufacturer=newMfr;
           if(candidates.length>1 && chosenPn && chosenPn!==sdItems[sdIdx].part_number){
             sdItems[sdIdx].part_number=chosenPn;
             if(chosenMfr) sdItems[sdIdx].manufacturer=chosenMfr;
@@ -3371,15 +3409,18 @@ async function runFCCheckModal(items, mode){
           if(pn){
             const existing=allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
             if(existing){
-              await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),{
+              const sdPatch={
                 mouser_price:moNum, digikey_price:dkNum,
                 stock, updatedAt:serverTimestamp(), qty:1
-              });
+              };
+              if(newMfr) sdPatch.manufacturer=newMfr;
+              await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),sdPatch);
               existing.mouser_price=moNum; existing.digikey_price=dkNum; existing.stock=stock;
+              if(newMfr) existing.manufacturer=newMfr;
             } else {
               const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
               await setDoc(doc(db,'companies',companyId,'parts_cache',key),{
-                part_number:pn, description:'', drawing_number:'', manufacturer:'',
+                part_number:pn, description:'', drawing_number:'', manufacturer:newMfr||'',
                 unit:'', atlantium_pn:'', qty:1, stock,
                 mouser_price:moNum, digikey_price:dkNum,
                 price_description:'', updatedAt:serverTimestamp()
@@ -4008,6 +4049,7 @@ const _SD_DEFAULT_COLS=[
   {k:'part_number',    l:'MNF P/N',          w:'110px'},
   {k:'drawing_number', l:'Drawing #',       w:'100px'},
   {k:'description',    l:'Description',     w:'190px',wrap:true},
+  {k:'manufacturer',   l:'Manufacturer',    w:'120px'},
   {k:'qty',            l:'QTY',             w:'75px'},
   {k:'unit',           l:'Units',           w:'55px'},
   {k:'priority_price', l:'Priority Price',  w:'95px'},
@@ -4143,6 +4185,8 @@ function _sdCellHTML(k,r,i){
            _sdIsToolRow(r)?_TOOL_TAG:''}</span>`;
     case 'qty': return `<input type="number" class="sd-qty" data-i="${i}" value="${r.qty??''}" min="0.001" step="any"
            style="width:60px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
+    case 'manufacturer': return `<input type="text" class="sd-manufacturer" data-i="${i}" value="${esc(r.manufacturer||'')}"
+           placeholder="—" style="width:100%;min-width:100px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
     case 'unit': return `<select class="sd-unit" data-i="${i}" style="padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px">
            ${_SD_UNIT_OPTIONS.map(u=>`<option value="${u}" ${String(r.unit||'')===u?'selected':''}>${u||'—'}</option>`).join('')}
          </select>`;
@@ -4703,6 +4747,9 @@ async function renderSalesDesk(){
     }));
     document.querySelectorAll('.sd-description').forEach(inp=>inp.addEventListener('change',()=>{
       sdItems[+inp.dataset.i].description=inp.value.trim();
+    }));
+    document.querySelectorAll('.sd-manufacturer').forEach(inp=>inp.addEventListener('change',()=>{
+      sdItems[+inp.dataset.i].manufacturer=inp.value.trim();
     }));
     document.querySelectorAll('.sd-unit').forEach(sel=>sel.addEventListener('change',()=>{
       const i=+sel.dataset.i;
@@ -5493,11 +5540,10 @@ async function exportSalesDeskExcel(){
                  margins:{left:0.4,right:0.4,top:0.5,bottom:0.5,header:0.3,footer:0.3}},
     });
 
-    const COLS=['Item','Drawing #','MNF P/N','Description','QTY','Units',
+    const COLS=['Item','Drawing #','MNF P/N','Description','Manufacturer','QTY','Units',
                 'Priority Price','Mouser Price','DigiKey Price','Part Cost','Labor Time (min)'];
-    const LAST=COLS.length;                 // 11 columns, A..K
-    const LASTL=String.fromCharCode(64+LAST);
-    ws.columns=[{width:6},{width:18},{width:24},{width:44},{width:9},{width:8},
+    const LAST=COLS.length;                 // 12 columns, A..L
+    ws.columns=[{width:6},{width:18},{width:24},{width:42},{width:22},{width:9},{width:8},
                 {width:13},{width:13},{width:13},{width:12},{width:15}];
 
     const merge=(r,c1,c2)=>ws.mergeCells(r,c1,r,c2);
@@ -5576,7 +5622,7 @@ async function exportSalesDeskExcel(){
       c.value=h;
       c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};
       fill(c,_XL.bomHead);
-      c.alignment={vertical:'middle',horizontal:i>=4?'center':'left',wrapText:true};
+      c.alignment={vertical:'middle',horizontal:i>=5?'center':'left',wrapText:true};
       c.border=_xlBoxed;
     });
     ws.getRow(row).height=24;
@@ -5586,6 +5632,7 @@ async function exportSalesDeskExcel(){
     sdItems.forEach((r,i)=>{
       const isTool=_sdIsToolRow(r);
       const vals=[i+1, r.drawing_number||'', r.part_number||'', r.description||'',
+                  r.manufacturer||'',
                   parseFloat(r.qty)||0, r.unit||'',
                   parseFloat(r.priority_price)||null,
                   parseFloat(r.mouser_price)||null,
@@ -5596,11 +5643,11 @@ async function exportSalesDeskExcel(){
         c.value=v;
         c.font={size:10, color:{argb:isTool?'FF92400E':'FF0F172A'}, italic:isTool};
         c.border=_xlBoxed;
-        if(ci>=6&&ci<=9) c.numFmt='$#,##0.0000';
-        if(ci===10) c.numFmt='0.0';
-        if(ci===4)  c.numFmt='#,##0.###';
+        if(ci>=7&&ci<=10) c.numFmt='$#,##0.0000';
+        if(ci===11) c.numFmt='0.0';
+        if(ci===5)  c.numFmt='#,##0.###';
         c.alignment={vertical:'middle',
-                     horizontal: ci===3?'left':(ci>=4?'right':'left'),
+                     horizontal: (ci===3||ci===4)?'left':(ci>=5?'right':'left'),
                      wrapText: ci===3};
         // TOOL rows are tinted; everything else gets quiet zebra striping.
         if(isTool) fill(c,_XL.tool);
