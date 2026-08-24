@@ -1,0 +1,140 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function myCompanyId() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.company_id;
+    }
+
+    function myRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && myRole() == 'admin';
+    }
+
+    function isSameCompany(cid) {
+      return isSignedIn() && myCompanyId() == cid;
+    }
+
+    // ── users/{uid} ──────────────────────────────────────────────────────
+    // A user can always read/write their own profile (needed so the app can
+    // check role/company_id/disabled on login, and so admins can be looked
+    // up). Admins can read/write ANY user profile — required by
+    // Settings > Users (list all users, invite, edit role/company, disable,
+    // delete).
+    match /users/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+      allow read, write: if isAdmin();
+    }
+
+    // ── companies/{cid} ──────────────────────────────────────────────────
+    // Any signed-in user may read company docs — this is required for the
+    // first-login "pick your company" screen, which lists all companies by
+    // name before the user has a company_id yet.
+    // Only members of that company, or an admin, may write to it.
+    //
+    // CAVEAT: company docs currently also store anthropic_key, gemini_key
+    // and labor_rate_min. Because `read` is granted broadly above, those
+    // fields are technically readable by any signed-in user of ANY company,
+    // not just members of that company. If that's not acceptable, move
+    // those three fields into a locked-down subdocument, e.g.
+    // companies/{cid}/private/settings, readable only by isSameCompany(cid)
+    // — this requires an app.html change (initCompany / Settings save) to
+    // read/write that subdocument instead. Not done here since it wasn't
+    // explicitly requested and changes the data model.
+    match /companies/{cid} {
+      allow read: if isSignedIn();
+      allow update: if isSameCompany(cid) || isAdmin();
+      allow create, delete: if isAdmin();
+    }
+
+    // ── companies/{cid}/parts_cache/{id}  (Part Stock) ────────────────────
+    match /companies/{cid}/parts_cache/{docId} {
+      allow read, write: if isSameCompany(cid) || isAdmin();
+    }
+
+    // ── companies/{cid}/projects/{id}  (RFQs) + nested drawings (BOMs) ────
+    match /companies/{cid}/projects/{docId} {
+      allow read, write: if isSameCompany(cid) || isAdmin();
+
+      match /drawings/{drawingId} {
+        allow read, write: if isSameCompany(cid) || isAdmin();
+      }
+    }
+
+    // ── companies/{cid}/customers/{id} ─────────────────────────────────────
+    match /companies/{cid}/customers/{docId} {
+      allow read, write: if isSameCompany(cid) || isAdmin();
+    }
+
+    // ── companies/{cid}/support_tickets/{id}  (floating Support button) ────
+    // Any member of the company can create a ticket and read/update tickets
+    // (needed so the Support modal can show the submitting user their own
+    // past tickets + admin replies). Only admins actually use the Admin page
+    // to change status/reply, but write access isn't restricted to admin-only
+    // here since a user re-opening their own resolved ticket, etc. is
+    // reasonable — tighten to admin-only writes on status/reply fields later
+    // if that turns out to matter.
+    match /companies/{cid}/support_tickets/{docId} {
+      allow read, write: if isSameCompany(cid) || isAdmin();
+    }
+
+    // ── companies/{cid}/audit_logs/{id}  (Admin > Logs) ─────────────────────
+    // Any member of the company can CREATE a log entry (every screen open /
+    // login / action needs to write one) but only admins can READ the log —
+    // it's an audit trail, not something regular users should be able to
+    // browse. No update/delete for anyone — logs are append-only.
+    match /companies/{cid}/audit_logs/{docId} {
+      allow create: if isSameCompany(cid) || isAdmin();
+      allow read: if isAdmin();
+    }
+
+    // ── roles/{roleKey}  (Settings > Roles: per-role button visibility) ────
+    // Any signed-in user must be able to read this so the Home screen can
+    // gate which buttons THEY see based on their own role. Only admins may
+    // create/edit roles.
+    match /roles/{roleKey} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── secure_config/{docId}  (Mouser / DigiKey API credentials) ─────────
+    // Denied to EVERY client, including admins. That is intentional, not an
+    // oversight: these credentials are only ever used by the priceLookup Cloud
+    // Function, which talks to Firestore through the Admin SDK and therefore
+    // bypasses these rules entirely.
+    //
+    // Because no browser can read this path, a stolen session, an XSS bug, or
+    // a curious user poking at the SDK in devtools still cannot extract the
+    // keys. Admins manage them through the apiConfig function, which accepts
+    // new values and returns only a "configured / not configured" status.
+    //
+    // Do NOT relax this to `if isAdmin()` for convenience — that would put the
+    // credentials back within reach of anything running in an admin's browser.
+    match /secure_config/{docId} {
+      allow read, write: if false;
+    }
+
+    // ── Legacy root-level collections (pre-company-namespace data) ────────
+    // Only touched by the admin "Clean Legacy Data" maintenance action in
+    // Settings > Companies. Locked to admins only.
+    match /customers/{docId} {
+      allow read, write: if isAdmin();
+    }
+    match /projects/{docId} {
+      allow read, write: if isAdmin();
+      match /drawings/{drawingId} {
+        allow read, write: if isAdmin();
+      }
+    }
+    match /parts_cache/{docId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
