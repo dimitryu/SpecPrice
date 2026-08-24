@@ -425,7 +425,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.76';
+const APP_VER   = '1.8.77';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -3124,6 +3124,23 @@ async function runFCCheckModal(items, mode){
             </tr>`).join('')}
           </tbody>
         </table>
+      </div>
+      <!-- Legend. The status glyphs and the price colours both carry meaning
+           that isn't guessable, and this modal is exactly where a user meets
+           them for the first time. Kept on one compact block so it explains
+           without competing with the results above. -->
+      <div style="margin-top:10px;padding:9px 11px;background:var(--bg,#F8FAFC);border:1px solid var(--border);border-radius:6px;font-size:11px;line-height:1.9;color:var(--muted)">
+        <div style="display:flex;flex-wrap:wrap;gap:6px 18px">
+          <span><strong style="color:var(--green)">✓</strong> found, with a price</span>
+          <span><strong style="color:var(--green)">✓ ≈</strong> found under a differently formatted part number — hover to see which</span>
+          <span><strong style="color:#B45309">◑</strong> in the catalogue, but no published price (non-stocked / quote-only)</span>
+          <span><strong>Not found</strong> neither vendor lists this part number</span>
+          <span><strong style="color:var(--red)">red text</strong> the lookup failed — hover for the reason</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:4px;border-top:1px dashed var(--border);padding-top:5px">
+          <span>Prices: <strong style="color:var(--green)">green</strong> = cheapest of the three, <strong style="color:var(--red)">red</strong> = dearest</span>
+          <span><strong>Stock 0</strong> = the vendor carries it but has none on hand</span>
+        </div>
       </div>
     </div>
     <div class="modal-foot">
