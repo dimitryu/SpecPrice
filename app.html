@@ -425,7 +425,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = '';
-const APP_VER   = '1.8.77';
+const APP_VER   = '1.8.78';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -982,6 +982,15 @@ function _psCellHTML(k,p){
     case 'unit': return esc(p.unit||p.units||'');
     case 'rfq_names': return esc((p.rfq_names||[]).join(', '));
     case 'updatedAt': return fmtDate(p.updatedAt);
+    // A part with QVL alternatives shows how many were (or will be) compared;
+    // otherwise the fact that the shown part number is a CHOICE is invisible.
+    case 'part_number': {
+      const alts=(p.alt_mpns||[]).filter(a=>a&&a.mpn);
+      if(alts.length<2) return esc(p.part_number);
+      const tip='Customer-approved alternatives (QVL) — Check Price quotes the cheapest:\n\n'
+                +alts.map(a=>'• '+a.mpn+(a.manufacturer?`  [${a.manufacturer}]`:'')).join('\n');
+      return `${esc(p.part_number)} <span style="padding:1px 5px;border-radius:8px;background:#EDE9FE;color:#5B21B6;font-size:9px;font-weight:700;cursor:help" title="${esc(tip)}">${alts.length} QVL</span>`;
+    }
     case '_fc': return p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px" title="Open this part on findchips.com">🔍 View</a>`:'';
     // Whether WE physically stock/own this part (distinct from `stock`, which
     // is a distributor inventory count) — auto-checked for items
@@ -1886,6 +1895,10 @@ function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
       // even though it's not one of the contenteditable cells.
       const origIdx=+tr.dataset.i;
       if(rows[origIdx] && rows[origIdx].price) row.price=rows[origIdx].price;
+      // QVL alternatives likewise aren't an editable column, but losing them
+      // here would silently reduce the part to whichever alternative happened
+      // to be listed first — the exact behaviour we're replacing.
+      if(rows[origIdx] && (rows[origIdx].alt_mpns||[]).length) row.alt_mpns=rows[origIdx].alt_mpns;
       if(Object.values(row).some(v=>v)) updatedRows.push(row);
     });
     if(!updatedRows.length){ toast('No rows to save','error'); return; }
@@ -2033,6 +2046,9 @@ async function saveBOMToPartStock(rows, rfqName=''){
         if(r.unit && !d.unit) patch.unit=_dbNormalizeUnit(r.unit);
         if(r.atlantium_pn && !d.atlantium_pn) patch.atlantium_pn=r.atlantium_pn;
         if(r.pin_count && !d.pin_count) patch.pin_count=r.pin_count;
+        // Refresh the approved-alternatives list whenever an import supplies
+        // one — a newer QVL may have added or withdrawn a manufacturer.
+        if((r.alt_mpns||[]).length>1) patch.alt_mpns=r.alt_mpns;
         // r.price only ever arrives set on a synthesized crimp-tool BOM row (see
         // _BOM_TEXT_PROMPT/_BOM_VISION_PROMPT rule 5). It's an AI ESTIMATE, not a
         // distributor quote, so it goes in its own field rather than sitting in a
@@ -2048,6 +2064,7 @@ async function saveBOMToPartStock(rows, rfqName=''){
           drawing_number:r.drawing_number||'', drawing_name:r.drawing_name||'', manufacturer:r.manufacturer||'',
           unit:_dbNormalizeUnit(r.unit)||'', atlantium_pn:r.atlantium_pn||'', qty:1,
           pin_count:r.pin_count||'',
+          alt_mpns:(r.alt_mpns||[]).length>1?r.alt_mpns:[],
           est_price:r.price?(parseFloat(r.price)||''):'', stock:'', price_description:'',
           rfq_names: rfqName ? [rfqName] : [],
           updatedAt:serverTimestamp()
@@ -2282,18 +2299,37 @@ function _parseStructuredBOMSheet(rows){
     const desc=cell(row,'description');
     const kind=_xlsClassifyType(type);
 
-    // ── Vendor / QVL child row: not its own BOM line. Supplies the
-    //    manufacturer PN + name for the component above it. FIRST one wins.
-    //    MNF P/N deliberately takes the MFPN (a real manufacturer number like
+    // ── Vendor / QVL child row: not its own BOM line. Supplies a manufacturer
+    //    PN + name for the component above it.
+    //
+    //    A QVL (Qualified Vendor List) deliberately names SEVERAL approved
+    //    manufacturers for one customer part — they are interchangeable by the
+    //    customer's own engineering approval, so the right one to buy is simply
+    //    the cheapest available. We therefore collect them ALL into alt_mpns
+    //    instead of taking the first and discarding the rest; Check Price prices
+    //    every alternative and keeps the cheapest (see checkOne).
+    //
+    //    MNF P/N takes the MFPN (a real manufacturer number like
     //    "GRM426X7R103K50") rather than the customer's internal catalog number
-    //    — that's the value FindChips can actually price. The internal number
-    //    stays in Customer PN. See the no-vendor-row fallback below for the
-    //    case where a component has no MFPN at all.
+    //    — that's the value a distributor can actually price. The internal
+    //    number stays in Customer PN. See the no-vendor-row fallback below for
+    //    the case where a component has no MFPN at all.
     if(kind==='vendor'){
-      if(current && !current._hasVendorRow){
-        current.part_number = cell(row,'mfpn');
-        current.manufacturer = cell(row,'vendor');
-        current._hasVendorRow = true;
+      if(current){
+        const mfpn=cell(row,'mfpn');
+        if(mfpn){
+          current.alt_mpns = current.alt_mpns || [];
+          // Some exports restate the same approved part on several lines.
+          if(!current.alt_mpns.some(a=>a.mpn.toLowerCase()===mfpn.toLowerCase())){
+            current.alt_mpns.push({mpn:mfpn, manufacturer:cell(row,'vendor')});
+          }
+          // First one is the provisional pick, so the row is usable before any
+          // price check has run.
+          if(!current.part_number){
+            current.part_number = mfpn;
+            current.manufacturer = cell(row,'vendor');
+          }
+        }
       }
       continue;
     }
@@ -2323,6 +2359,7 @@ function _parseStructuredBOMSheet(rows){
       // empty so the caller fills it from the FILE NAME (same as PDF imports).
       drawing_number:reportPN, drawing_name:'',
       pin_count:'', price:'',
+      alt_mpns:[],                       // every approved manufacturer PN (QVL)
       _isSubAssembly:!!isSub,
     };
     out.push(rec); byKey.set(key,rec); current=rec;
@@ -2337,6 +2374,9 @@ function _parseStructuredBOMSheet(rows){
       r.part_number = r.atlantium_pn;
       r.atlantium_pn = '';
     }
+    // A single alternative is not a choice — drop the list so downstream code
+    // only ever sees alt_mpns when there's genuinely something to compare.
+    if((r.alt_mpns||[]).length<2) r.alt_mpns=[];
     delete r._hasVendorRow;
   }
   return out.length?out:null;
@@ -3115,7 +3155,9 @@ async function runFCCheckModal(items, mode){
           </tr></thead>
           <tbody id="fc-res-tbody">
             ${items.map((it,i)=>`<tr id="fc-row-${i}">
-              <td>${esc(it.part_number)}</td><td>${it.qty||1}</td>
+              <td id="fc-pn-${i}">${esc(it.part_number)}${(it.alt_mpns||[]).length>1
+                ? `<span style="margin-left:5px;padding:1px 5px;border-radius:8px;background:#EDE9FE;color:#5B21B6;font-size:9px;font-weight:700" title="${esc((it.alt_mpns||[]).map(a=>a.mpn).join('\n'))}">${(it.alt_mpns||[]).length} QVL</span>`
+                : ''}</td><td>${it.qty||1}</td>
               <td id="fc-dk-${i}" style="color:var(--muted)">—</td>
               <td id="fc-mo-${i}" style="color:var(--muted)">—</td>
               <td id="fc-pr-${i}" style="color:var(--muted)">${money(parseFloat(it.priority_price)||0)||'—'}</td>
@@ -3201,8 +3243,57 @@ async function runFCCheckModal(items, mode){
         setStatus(i,'✓ nominal','var(--muted)','Labels/markers use a fixed $0.2 price');
         return;
       }
-      const r=await lookupPartPrices(it.part_number, _priceTargetQty(it.qty, it.unit));
-      for(const m of (r.errors||[])) apiErrors.add(m);
+      const targetQty=_priceTargetQty(it.qty, it.unit);
+
+      // ── Qualified Vendor List: price every approved alternative ──
+      // A QVL names several manufacturer part numbers that the CUSTOMER has
+      // already approved as interchangeable for one of their part numbers.
+      // Since any of them may be bought, the correct quote is the cheapest —
+      // pricing only the first (as this used to) could quote a part that costs
+      // several times what an equally-approved alternative does.
+      const alts=(it.alt_mpns||[]).filter(a=>a&&a.mpn);
+      const candidates = alts.length>1 ? alts.map(a=>a.mpn) : [it.part_number];
+
+      let pick=null;              // {res, pn, price, listed}
+      const compared=[];          // for the tooltip: what was checked, and what it cost
+      for(const cpn of candidates){
+        if(stopped) return;
+        let c=null;
+        try{
+          c=await lookupPartPrices(cpn, targetQty);
+        }catch(e){
+          compared.push({pn:cpn, error:e.message});
+          // With one candidate there's nothing to fall back to, so the row
+          // fails as before. With several, a single dead alternative must not
+          // discard the others.
+          if(candidates.length===1) throw e;
+          continue;
+        }
+        for(const m of (c.errors||[])) apiErrors.add(m);
+        const price = (c.best && c.best.price>0) ? c.best.price : 0;
+        compared.push({pn:cpn, price, found:!!c.best});
+        const cand={res:c, pn:cpn, price, listed:!!c.best};
+        if(!pick) pick=cand;
+        else if(cand.price>0 && (pick.price===0 || cand.price<pick.price)) pick=cand;   // cheaper wins
+        else if(pick.price===0 && !pick.listed && cand.listed) pick=cand;               // listed beats missing
+      }
+
+      const r = pick ? pick.res : {mouser:null, digikey:null, best:null, listed:[], errors:[]};
+      const chosenPn = pick ? pick.pn : it.part_number;
+      const chosenMfr = (alts.find(a=>a.mpn===chosenPn)||{}).manufacturer || '';
+      const priced=compared.filter(c=>c.price>0);
+      const savedVs = priced.length>1 ? Math.max(...priced.map(c=>c.price)) : 0;
+
+      // Show the winner in place of the provisional first pick.
+      if(candidates.length>1){
+        const pnEl=document.getElementById(`fc-pn-${i}`);
+        if(pnEl){
+          const lines=compared.map(c=>
+            `${c.pn} — ${c.error?('error: '+c.error):(c.price>0?money(c.price):(c.found?'listed, no price':'not found'))}`
+          ).join('\n');
+          pnEl.innerHTML=`${esc(chosenPn)}<span style="margin-left:5px;padding:1px 5px;border-radius:8px;background:#DCFCE7;color:#166534;font-size:9px;font-weight:700;cursor:help" title="${esc('Cheapest of '+candidates.length+' QVL-approved alternatives:\n\n'+lines)}">best of ${candidates.length}</span>`;
+        }
+      }
 
       const dkNum = r.digikey ? r.digikey.price : '';
       const moNum = r.mouser  ? r.mouser.price  : '';
@@ -3230,21 +3321,33 @@ async function runFCCheckModal(items, mode){
       //   ◑   listed but no price quoted (non-stocked / quote-only)
       const noPrice = !(r.best.price>0);
       const glyph = noPrice ? '◑' : (r.best.exact?'✓':'✓ ≈');
-      const tip = noPrice
+      let tip = noPrice
         ? `Listed by ${r.best.name} as "${r.best.mpn}"${r.best.status?` (${r.best.status})`:''} but no price is published — usually non-stocked or quote-only.`
         : (r.best.exact ? '' : `Matched ${r.best.name} part "${r.best.mpn}" — punctuation/zero-padding differs from "${it.part_number}"`);
+      if(savedVs>pick.price){
+        tip=(tip?tip+'\n\n':'')+`Cheapest QVL alternative: ${money(pick.price)} vs ${money(savedVs)} for the dearest approved option.`;
+      }
       setStatus(i, glyph, noPrice?'#B45309':'var(--green)', tip);
 
       const stock=String(stockNum);
       if(mode==='parts'){
         if(it._id){
           try{
-            await updateDoc(doc(db,'companies',companyId,'parts_cache',it._id),{
+            const patch={
               mouser_price:moNum, digikey_price:dkNum,
               stock, updatedAt:serverTimestamp(), qty:1
-            });
+            };
+            // The cheapest approved alternative becomes the part we quote.
+            if(candidates.length>1 && chosenPn && chosenPn!==it.part_number){
+              patch.part_number=chosenPn;
+              if(chosenMfr) patch.manufacturer=chosenMfr;
+            }
+            await updateDoc(doc(db,'companies',companyId,'parts_cache',it._id),patch);
             const ap=allParts.find(p=>p._id===it._id);
-            if(ap){ ap.mouser_price=moNum; ap.digikey_price=dkNum; ap.stock=stock; }
+            if(ap){
+              ap.mouser_price=moNum; ap.digikey_price=dkNum; ap.stock=stock;
+              if(patch.part_number){ ap.part_number=patch.part_number; ap.manufacturer=chosenMfr||ap.manufacturer; }
+            }
           }catch(e){ console.warn('price save error:',e.message); }
         }
       } else if(mode==='sd'){
@@ -3252,6 +3355,10 @@ async function runFCCheckModal(items, mode){
         if(sdIdx!==undefined&&sdItems[sdIdx]){
           sdItems[sdIdx].mouser_price=moNum;
           sdItems[sdIdx].digikey_price=dkNum;
+          if(candidates.length>1 && chosenPn && chosenPn!==sdItems[sdIdx].part_number){
+            sdItems[sdIdx].part_number=chosenPn;
+            if(chosenMfr) sdItems[sdIdx].manufacturer=chosenMfr;
+          }
           _sdRecalcTotal(sdItems[sdIdx]);
         }
         // Mirror into the Database so the next quote starts from a known price.
@@ -4992,6 +5099,7 @@ async function handleSDFiles(files){
           // so the tool's estimate shows up immediately instead of appearing as
           // $0.00 until the next Database refresh.
           est_price:r.price?(parseFloat(r.price)||0):(match?parseFloat(match.est_price)||0:0),
+          alt_mpns:(r.alt_mpns||[]).length>1?r.alt_mpns:((match&&match.alt_mpns)||[]),
           priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
           mouser_price:match?parseFloat(match.mouser_price)||'':'',
           digikey_price:match?parseFloat(match.digikey_price)||'':'',
