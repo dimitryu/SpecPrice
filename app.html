@@ -430,7 +430,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.8.94';
+const APP_VER   = '1.8.95';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -994,9 +994,9 @@ function _priceRankValue(row, field){
 // there is no "similar part" case to warn about.
 const _MATCH_FOR={
   mouser_price:{code:'mouser_match', mpn:'mouser_mpn', name:'Mouser',
-                mfr:'mouser_mfr', alts:'mouser_alts', desc:'mouser_desc', cands:'mouser_cands'},
+                mfr:'mouser_mfr', alts:'mouser_alts', desc:'mouser_desc', cands:'mouser_cands', by:'mouser_by'},
   digikey_price:{code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey',
-                 mfr:'digikey_mfr', alts:'digikey_alts', desc:'digikey_desc', cands:'digikey_cands'}};
+                 mfr:'digikey_mfr', alts:'digikey_alts', desc:'digikey_desc', cands:'digikey_cands', by:'digikey_by'}};
 
 // Tells the reader whether this price is for THE part or merely a close one.
 // Same three symbols as the Check Price modal, now attached to the number
@@ -1018,18 +1018,25 @@ function _matchMarkerHTML(row, field){
     // List everything that was compared, with the score each got. If the scores
     // are all 0 the descriptions couldn't be read and the pick was arbitrary —
     // which is exactly what you need to see, not something to hide.
+    const by=row[cfg.by]||'';
+    const money=v=>v>0?('$'+(+v).toFixed(2)):'—';
     const lines = cands.length
-      ? cands.map(c=>`  ${c.mfr||'?'} — ${c.desc||'(no description)'}   [match ${c.score}]`).join('\n')
+      ? cands.map(c=>`  ${money(c.price)}  ${c.mfr||'?'} — ${c.desc||'(no description)'}   [match ${c.score}]`).join('\n')
       : `  (candidate details unavailable — re-run Check Price)`;
-    const allZero = cands.length>1 && cands.every(c=>!c.score);
     const tip=`${alts} products on ${cfg.name} share the part number "${row.part_number||''}".\n\n`
             + `Your BOM says:\n  ${row.description||'(no description)'}\n\n`
             + `Compared:\n${lines}\n\n`
-            + `Chosen: ${mfr||'?'} — ${vdesc||'(no description)'}\n\n`
-            + (allZero
-                ? `WARNING: none of them matched your description, so this pick was arbitrary. Different manufacturers of the same spec number can differ hugely in price — verify before quoting.`
-                : `Different manufacturers of the same spec number can differ hugely in price — check this is the right one.`);
-    return `<span title="${esc(tip)}" style="margin-inline-start:4px;color:${allZero?'var(--red)':'#7C3AED'};font-weight:700;cursor:help">${allZero?'⚠':'✓'}${alts}</span>`;
+            + `Chosen: ${mfr||'?'} — ${vdesc||'(no description)'}\n`
+            + (by==='price'
+                ? `Reason: none of the descriptions matched better than the others, so the CHEAPEST was taken.`
+                : by==='description'
+                  ? `Reason: best description match.`
+                  : `Reason: only candidate with a price.`)
+            + `\n\nSame spec number, different manufacturers — check this is the right one.`;
+    // Purple when the description decided it; amber when price broke the tie —
+    // the amber ones are the rows worth a human glance.
+    const byPrice = by==='price';
+    return `<span title="${esc(tip)}" style="margin-inline-start:4px;color:${byPrice?'#B45309':'#7C3AED'};font-weight:700;cursor:help">${byPrice?'≈$':'✓'}${alts}</span>`;
   }
   if(code==='exact'){
     return `<span title="${esc(`Exact match — ${cfg.name} lists this part number${mfr?` (${mfr})`:''}`)}" style="margin-inline-start:4px;color:var(--green);font-weight:700">✓</span>`;
@@ -3295,6 +3302,7 @@ async function lookupPartPrices(partNumber, qty=0, desc=''){
     // description matched ours. considered>1 means a choice was made.
     considered:v.considered||1, descScore:v.descScore||0, desc:v.desc||'',
     candidates:Array.isArray(v.candidates)?v.candidates:[],
+    chosenBy:v.chosenBy||'',
   } : null;
   const mouser=norm(data.mouser), digikey=norm(data.digikey);
   const listed=[mouser&&{...mouser,name:'Mouser'}, digikey&&{...digikey,name:'DigiKey'}].filter(Boolean);
@@ -3565,17 +3573,21 @@ async function runFCCheckModal(items, mode){
         mouser_desc:   r.mouser  ? String(r.mouser.desc||'').slice(0,160) : '',
         // What was compared, so the tooltip can show the actual choice instead
         // of just asserting one was made. Capped for Firestore's document size.
+        mouser_by:     r.mouser  ? (r.mouser.chosenBy||'') : '',
         mouser_cands:  r.mouser  ? (r.mouser.candidates||[]).slice(0,6).map(c=>({
                          pn:String(c.pn||'').slice(0,60), mfr:String(c.mfr||'').slice(0,40),
-                         desc:String(c.desc||'').slice(0,90), score:c.score||0})) : [],
+                         desc:String(c.desc||'').slice(0,90), score:c.score||0,
+                         price:+c.price||0})) : [],
         digikey_match: matchCode(r.digikey),
         digikey_mpn:   r.digikey ? (r.digikey.mpn||'') : '',
         digikey_mfr:   r.digikey ? (r.digikey.manufacturer||'') : '',
         digikey_alts:  r.digikey ? (r.digikey.considered||1) : 0,
         digikey_desc:  r.digikey ? String(r.digikey.desc||'').slice(0,160) : '',
+        digikey_by:    r.digikey ? (r.digikey.chosenBy||'') : '',
         digikey_cands: r.digikey ? (r.digikey.candidates||[]).slice(0,6).map(c=>({
                          pn:String(c.pn||'').slice(0,60), mfr:String(c.mfr||'').slice(0,40),
-                         desc:String(c.desc||'').slice(0,90), score:c.score||0})) : [],
+                         desc:String(c.desc||'').slice(0,90), score:c.score||0,
+                         price:+c.price||0})) : [],
       };
 
       const stock=String(stockNum);
@@ -5216,7 +5228,8 @@ async function renderSalesDesk(){
           <span><strong style="color:var(--green)">✓</strong> exact part number</span>
           <span><strong style="color:#B45309">✓ ≈</strong> matched under a differently formatted part number — hover to see which</span>
           <span><strong style="color:#B45309">◑</strong> listed, but no published price</span>
-          <span><strong style="color:#7C3AED">✓n</strong> n manufacturers share this part number — one was chosen by description; hover to check it</span>
+          <span><strong style="color:#7C3AED">✓n</strong> n manufacturers share this part number — chosen by description match</span>
+          <span><strong style="color:#B45309">≈$n</strong> descriptions didn't separate them — cheapest taken; hover to see all n</span>
         </div>
         <div id="sd-notes-panel" style="display:none;padding:11px;border-top:1px solid var(--border)"></div>
         <!-- Labor estimation is a 5-15 second AI call. Without this the table
