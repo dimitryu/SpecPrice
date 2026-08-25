@@ -430,7 +430,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.8.90';
+const APP_VER   = '1.8.92';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -989,18 +989,50 @@ function _priceRankValue(row, field){
 // off a datasheet or paste into a PO, just not the one you compare on.
 // In the Database every row has QTY 1, so cost and unit price coincide there
 // and nothing about that screen changes.
+// Which vendor a price column belongs to, for the match marker below.
+// Priority has no marker: it's our own ERP, keyed on the exact part number, so
+// there is no "similar part" case to warn about.
+const _MATCH_FOR={mouser_price:{code:'mouser_match', mpn:'mouser_mpn', name:'Mouser'},
+                  digikey_price:{code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey'}};
+
+// Tells the reader whether this price is for THE part or merely a close one.
+// Same three symbols as the Check Price modal, now attached to the number
+// itself so the distinction survives long after that modal was closed —
+// including for whoever reads the quote instead of running the check.
+function _matchMarkerHTML(row, field){
+  const cfg=_MATCH_FOR[field];
+  if(!cfg) return '';
+  const code=row[cfg.code]||'';
+  const mpn=row[cfg.mpn]||'';
+  if(code==='exact'){
+    return `<span title="${esc(`Exact match — ${cfg.name} lists this part number`)}" style="margin-inline-start:4px;color:var(--green);font-weight:700">✓</span>`;
+  }
+  if(code==='approx'){
+    return `<span title="${esc(`Matched as "${mpn}" on ${cfg.name} — same part, different punctuation/zero-padding to "${row.part_number||''}". Verify before quoting.`)}" style="margin-inline-start:4px;color:#B45309;font-weight:700;cursor:help">✓ ≈</span>`;
+  }
+  if(code==='noprice'){
+    return `<span title="${esc(`${cfg.name} lists this part${mpn?` as "${mpn}"`:''} but publishes no price — usually non-stocked or quote-only.`)}" style="margin-inline-start:4px;color:#B45309;font-weight:700;cursor:help">◑</span>`;
+  }
+  return '';
+}
+
 function _priceCellHTML(row, field){
   const unit=parseFloat(row[field])||0;
-  if(!unit) return '';
-  const mine=_priceRankValue(row, field);
-  if(!(mine>0)) return '';
+  const mine=unit ? _priceRankValue(row, field) : 0;
+  if(!(mine>0)){
+    // No price, but the vendor DOES list the part — say so instead of leaving
+    // an empty cell that reads as "never checked".
+    const marker=_matchMarkerHTML(row, field);
+    return (row[(_MATCH_FOR[field]||{}).code]==='noprice') ? marker : '';
+  }
   const qty=parseFloat(row.qty)||1;
   const all=_PRICE_FIELDS.map(f=>_priceRankValue(row,f)).filter(n=>n>0);
   const cls = all.length<2 ? ''
             : (mine<=Math.min(...all) ? 'price-green'
             : (mine>=Math.max(...all) ? 'price-red' : ''));
   const title=`Unit price ${fmtPrice(unit)} × QTY ${qty}${row.unit?' '+row.unit:''} = $${mine.toFixed(2)}`;
-  return `<span class="${cls}" title="${esc(title)}">$${mine.toFixed(2)}</span>`;
+  return `<span class="${cls}" title="${esc(title)}">$${mine.toFixed(2)}</span>`
+       + _matchMarkerHTML(row, field);
 }
 
 // Renders the inner HTML for a single Part Stock cell, given a column key and part row
@@ -3478,12 +3510,29 @@ async function runFCCheckModal(items, mode){
         if(mfEl){ mfEl.textContent=newMfr; mfEl.style.color='var(--text)'; }
       }
 
+      // Match quality, per vendor, recorded on the row. Until now this lived
+      // only in the Check Price modal's status column and vanished the moment
+      // it was closed — so whoever later read the price had no way to tell a
+      // quote for the EXACT part from one matched under a differently
+      // formatted part number. On a quote that difference matters.
+      //   'exact'   — priced, part number matched exactly
+      //   'approx'  — priced, matched ignoring punctuation/zero-padding
+      //   'noprice' — vendor lists the part but publishes no price
+      //   ''        — vendor doesn't list it
+      const matchCode=v=>!v ? '' : (!(v.price>0) ? 'noprice' : (v.exact ? 'exact' : 'approx'));
+      const matchFields={
+        mouser_match:  matchCode(r.mouser),
+        mouser_mpn:    r.mouser  ? (r.mouser.mpn||'')  : '',
+        digikey_match: matchCode(r.digikey),
+        digikey_mpn:   r.digikey ? (r.digikey.mpn||'') : '',
+      };
+
       const stock=String(stockNum);
       if(mode==='parts'){
         if(it._id){
           try{
             const patch={
-              mouser_price:moNum, digikey_price:dkNum,
+              mouser_price:moNum, digikey_price:dkNum, ...matchFields,
               stock, updatedAt:serverTimestamp(), qty:1
             };
             if(newMfr) patch.manufacturer=newMfr;
@@ -3496,6 +3545,7 @@ async function runFCCheckModal(items, mode){
             const ap=allParts.find(p=>p._id===it._id);
             if(ap){
               ap.mouser_price=moNum; ap.digikey_price=dkNum; ap.stock=stock;
+              Object.assign(ap, matchFields);
               if(newMfr) ap.manufacturer=newMfr;
               if(patch.part_number){ ap.part_number=patch.part_number; ap.manufacturer=chosenMfr||ap.manufacturer; }
             }
@@ -3506,6 +3556,7 @@ async function runFCCheckModal(items, mode){
         if(sdIdx!==undefined&&sdItems[sdIdx]){
           sdItems[sdIdx].mouser_price=moNum;
           sdItems[sdIdx].digikey_price=dkNum;
+          Object.assign(sdItems[sdIdx], matchFields);
           if(newMfr) sdItems[sdIdx].manufacturer=newMfr;
           if(candidates.length>1 && chosenPn && chosenPn!==sdItems[sdIdx].part_number){
             sdItems[sdIdx].part_number=chosenPn;
@@ -3520,18 +3571,19 @@ async function runFCCheckModal(items, mode){
             const existing=allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
             if(existing){
               const sdPatch={
-                mouser_price:moNum, digikey_price:dkNum,
+                mouser_price:moNum, digikey_price:dkNum, ...matchFields,
                 stock, updatedAt:serverTimestamp(), qty:1
               };
               if(newMfr) sdPatch.manufacturer=newMfr;
               await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),sdPatch);
               existing.mouser_price=moNum; existing.digikey_price=dkNum; existing.stock=stock;
+              Object.assign(existing, matchFields);
               if(newMfr) existing.manufacturer=newMfr;
             } else {
               const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
               await setDoc(doc(db,'companies',companyId,'parts_cache',key),{
                 part_number:pn, description:'', drawing_number:'', manufacturer:newMfr||'',
-                unit:'', atlantium_pn:'', qty:1, stock,
+                unit:'', atlantium_pn:'', qty:1, stock, ...matchFields,
                 mouser_price:moNum, digikey_price:dkNum,
                 price_description:'', updatedAt:serverTimestamp()
               },{merge:true});
@@ -5107,6 +5159,13 @@ async function renderSalesDesk(){
             <tbody id="sd-tbody"></tbody>
           </table>
         </div>
+        <div style="padding:7px 12px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);
+             display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center">
+          <span>Mouser / DigiKey price:</span>
+          <span><strong style="color:var(--green)">✓</strong> exact part number</span>
+          <span><strong style="color:#B45309">✓ ≈</strong> matched under a differently formatted part number — hover to see which</span>
+          <span><strong style="color:#B45309">◑</strong> listed, but no published price</span>
+        </div>
         <div id="sd-notes-panel" style="display:none;padding:11px;border-top:1px solid var(--border)"></div>
         <!-- Labor estimation is a 5-15 second AI call. Without this the table
              just sits there and the button looks dead — the user has no way to
@@ -5981,13 +6040,34 @@ async function exportSalesDeskExcel(){
         c.font={size:10, color:{argb:isTool?'FF92400E':'FF0F172A'}, italic:isTool};
         c.border=_xlBoxed;
         if(ci>=7&&ci<=10) c.numFmt='$#,##0.00';
+        // Carry the match quality into the file. A printed quote has no
+        // tooltips, so an approximate match would otherwise be indistinguishable
+        // from an exact one — an amber cell and a cell note make it visible.
+        let matchFlagged=false;
+        if(ci===8||ci===9){
+          const cfg = ci===8 ? {code:'mouser_match', mpn:'mouser_mpn', name:'Mouser'}
+                             : {code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey'};
+          const code=r[cfg.code]||'';
+          if(code==='approx'){
+            c.font={...c.font, color:{argb:'FF92400E'}};
+            matchFlagged=true;
+            c.note=`Matched as "${r[cfg.mpn]||''}" on ${cfg.name} — different punctuation/zero-padding to "${r.part_number||''}". Verify before quoting.`;
+          } else if(code==='noprice'){
+            c.value=null;
+            matchFlagged=true;
+            c.note=`${cfg.name} lists this part but publishes no price (non-stocked / quote-only).`;
+          }
+        }
         if(ci===11) c.numFmt='0.0';
         if(ci===5)  c.numFmt='#,##0.###';
         c.alignment={vertical:'middle',
                      horizontal: (ci===3||ci===4)?'left':(ci>=5?'right':'left'),
                      wrapText: ci===3};
-        // TOOL rows are tinted; everything else gets quiet zebra striping.
-        if(isTool) fill(c,_XL.tool);
+        // Fills, applied LAST and in priority order. The amber match flag has to
+        // win: the zebra band used to be written afterwards and silently painted
+        // over it, so an approximate match looked like every other row.
+        if(matchFlagged) fill(c,'FFFFFBEB');
+        else if(isTool) fill(c,_XL.tool);
         else if(i%2===1) fill(c,_XL.bomBand);
       });
       // Amber edge on the left of a tool row, mirroring the on-screen marker.
