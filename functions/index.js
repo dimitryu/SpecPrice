@@ -244,10 +244,11 @@ function descScore(wanted, candidate) {
   return score;
 }
 
-// Returns { item, exact, considered, score } or null.
-// `getDesc` is optional; without it, or without a wanted description, this
-// behaves exactly as before (first exact match wins).
-function matchPart(items, wantedPn, getPn, wantedDesc, getDesc) {
+// Returns { item, exact, considered, score, candidates } or null.
+// `candidates` lists what was compared (part number, manufacturer, description,
+// score) so the UI can SHOW the choice rather than assert it — without that,
+// a wrong pick is indistinguishable from a right one.
+function matchPart(items, wantedPn, getPn, wantedDesc, getDesc, getMfr) {
   const wantRaw = String(wantedPn || '').trim().toUpperCase();
   const wantKey = pnKey(wantedPn);
   if (!wantKey) return null;
@@ -256,18 +257,35 @@ function matchPart(items, wantedPn, getPn, wantedDesc, getDesc) {
   const near  = items.filter(it => pnKey(getPn(it)) === wantKey && !exact.includes(it));
   // Exact matches are always preferred as a GROUP; description only chooses
   // within the best group, never promotes a near match over an exact one.
-  const pool = exact.length ? exact : near;
+  let pool = exact.length ? exact : near;
   if (!pool.length) return null;
 
+  // DigiKey's keyword response repeats the same products across ExactMatches
+  // and Products, so two real products arrived as four candidates and the count
+  // shown to the user ("4 similar") didn't match what the distributor's own
+  // site shows. Deduplicate on manufacturer + part number.
+  if (pool.length > 1) {
+    const seen = new Set();
+    pool = pool.filter(it => {
+      const k = `${String(getMfr ? getMfr(it) : '').trim().toUpperCase()}|${String(getPn(it) || '').trim().toUpperCase()}`;
+      if (seen.has(k)) return false;
+      seen.add(k); return true;
+    });
+  }
+
   let best = pool[0], bestScore = -1;
-  if (pool.length > 1 && getDesc && String(wantedDesc || '').trim()) {
-    for (const it of pool) {
-      const sc = descScore(wantedDesc, getDesc(it));
-      if (sc > bestScore) { best = it; bestScore = sc; }
-    }
+  const candidates = [];
+  const canScore = getDesc && String(wantedDesc || '').trim();
+  for (const it of pool) {
+    const d = getDesc ? getDesc(it) : '';
+    const sc = canScore ? descScore(wantedDesc, d) : 0;
+    candidates.push({ pn: String(getPn(it) || ''), mfr: getMfr ? String(getMfr(it) || '') : '',
+                      desc: String(d || '').slice(0, 120), score: sc });
+    if (pool.length > 1 && canScore && sc > bestScore) { best = it; bestScore = sc; }
   }
   return { item: best, exact: exact.length > 0, considered: pool.length,
-           score: bestScore < 0 ? 0 : bestScore };
+           score: bestScore < 0 ? 0 : bestScore,
+           candidates: candidates.slice(0, 8) };
 }
 
 const numFrom = v => {
@@ -333,23 +351,24 @@ function readMouserPart(part, qty, exact) {
 }
 
 async function lookupMouser(pn, qty, apiKey, desc) {
-  const getDesc = p => p.Description || '';
+  const getDesc = mouserDesc;
   // ── 1. Part-number search ──
   let parts = await mouserPost('search/partnumber', apiKey, {
     SearchByPartRequest: { mouserPartNumber: pn, partSearchOptions: 'Exact' },
   });
-  let m = matchPart(parts, pn, p => p.ManufacturerPartNumber, desc, getDesc);
+  let m = matchPart(parts, pn, p => p.ManufacturerPartNumber, desc, getDesc, p => p.Manufacturer);
 
   // ── 2. Keyword search fallback ──
   if (!m) {
     parts = await mouserPost('search/keyword', apiKey, {
       SearchByKeywordRequest: { keyword: pn, records: 50, startingRecord: 0 },
     });
-    m = matchPart(parts, pn, p => p.ManufacturerPartNumber, desc, getDesc);
+    m = matchPart(parts, pn, p => p.ManufacturerPartNumber, desc, getDesc, p => p.Manufacturer);
   }
   if (!m) return null;
   return { ...readMouserPart(m.item, qty, m.exact),
-           considered: m.considered, descScore: m.score, desc: getDesc(m.item) };
+           considered: m.considered, descScore: m.score, desc: getDesc(m.item),
+           candidates: m.candidates };
 }
 
 // ── DigiKey: OAuth2 client-credentials, then a keyword search ─────────────
@@ -444,10 +463,27 @@ function digikeyHeaders(token, clientId) {
  * DigiKey part number directly and returns the best match plus any equivalents.
  * KeywordSearch stays as a fallback (with a much larger Limit) for the cases
  * ProductDetails 404s on, e.g. a partial or slightly-off part number. */
-// v4 nests the human-readable text under Description.
+// DigiKey has moved this field around between API versions and endpoints:
+// sometimes Description is an object, sometimes a plain string, and
+// ProductDetails uses different keys again. Reading only one shape meant every
+// candidate scored 0 — and with all scores equal the FIRST one wins, which is
+// exactly the arbitrary pick this was meant to remove. Try them all.
 function digikeyDesc(p) {
-  const d = p.Description || {};
-  return [d.ProductDescription, d.DetailedDescription].filter(Boolean).join(' ') || '';
+  if (!p) return '';
+  const d = p.Description;
+  const parts = [];
+  if (typeof d === 'string') parts.push(d);
+  else if (d && typeof d === 'object') parts.push(d.ProductDescription, d.DetailedDescription, d.Value);
+  parts.push(p.ProductDescription, p.DetailedDescription, p.ProductTitle);
+  return parts.filter(Boolean).join(' ').trim();
+}
+function digikeyMfr(p) {
+  const m = p && p.Manufacturer;
+  return (typeof m === 'string' ? m : (m && (m.Name || m.Value))) || '';
+}
+function mouserDesc(p) {
+  return [p && p.Description, p && p.ProductDetailUrl ? '' : '', p && p.Category]
+    .filter(Boolean).join(' ').trim();
 }
 
 async function lookupDigiKey(pn, qty, clientId, clientSecret, desc) {
@@ -472,9 +508,10 @@ async function lookupDigiKey(pn, qty, clientId, clientSecret, desc) {
         const siblings = Array.isArray(product.MatchingProducts) && product.MatchingProducts.length
           ? product.MatchingProducts : null;
         if (siblings) {
-          const m = matchPart(siblings, pn, p => p.ManufacturerProductNumber, desc, digikeyDesc);
+          const m = matchPart(siblings, pn, p => p.ManufacturerProductNumber, desc, digikeyDesc, digikeyMfr);
           if (m) return { ...readDigiKeyProduct(m.item, qty, m.exact),
-                          considered: m.considered, descScore: m.score, desc: digikeyDesc(m.item) };
+                          considered: m.considered, descScore: m.score, desc: digikeyDesc(m.item),
+                          candidates: m.candidates };
         }
         return { ...readDigiKeyProduct(product, qty, exact),
                  considered: 1, descScore: 0, desc: digikeyDesc(product) };
@@ -505,10 +542,11 @@ async function lookupDigiKey(pn, qty, clientId, clientSecret, desc) {
   const data = await resp.json();
   // v4 nests results under ExactMatches/Products depending on the query.
   const products = [...(data.ExactMatches || []), ...(data.Products || [])];
-  const m = matchPart(products, pn, p => p.ManufacturerProductNumber, desc, digikeyDesc);
+  const m = matchPart(products, pn, p => p.ManufacturerProductNumber, desc, digikeyDesc, digikeyMfr);
   if (!m) return null;
   return { ...readDigiKeyProduct(m.item, qty, m.exact),
-           considered: m.considered, descScore: m.score, desc: digikeyDesc(m.item) };
+           considered: m.considered, descScore: m.score, desc: digikeyDesc(m.item),
+           candidates: m.candidates };
 }
 
 exports.priceLookup = onRequest(
