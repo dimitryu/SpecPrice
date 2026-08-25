@@ -430,7 +430,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.8.92';
+const APP_VER   = '1.8.93';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -992,8 +992,11 @@ function _priceRankValue(row, field){
 // Which vendor a price column belongs to, for the match marker below.
 // Priority has no marker: it's our own ERP, keyed on the exact part number, so
 // there is no "similar part" case to warn about.
-const _MATCH_FOR={mouser_price:{code:'mouser_match', mpn:'mouser_mpn', name:'Mouser'},
-                  digikey_price:{code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey'}};
+const _MATCH_FOR={
+  mouser_price:{code:'mouser_match', mpn:'mouser_mpn', name:'Mouser',
+                mfr:'mouser_mfr', alts:'mouser_alts', desc:'mouser_desc'},
+  digikey_price:{code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey',
+                 mfr:'digikey_mfr', alts:'digikey_alts', desc:'digikey_desc'}};
 
 // Tells the reader whether this price is for THE part or merely a close one.
 // Same three symbols as the Check Price modal, now attached to the number
@@ -1004,8 +1007,21 @@ function _matchMarkerHTML(row, field){
   if(!cfg) return '';
   const code=row[cfg.code]||'';
   const mpn=row[cfg.mpn]||'';
+  const alts=parseInt(row[cfg.alts],10)||1;
+  const mfr=row[cfg.mfr]||'';
+  const vdesc=row[cfg.desc]||'';
+  // Several manufacturers sell this same part number and one had to be picked.
+  // That choice changes the price by orders of magnitude on spec parts, so it
+  // gets its own marker rather than hiding inside a plain ✓.
+  if(alts>1 && (code==='exact'||code==='approx')){
+    const tip=`${alts} products on ${cfg.name} share the part number "${row.part_number||''}".\n`
+            + `Chosen by description match:\n  ${mfr?mfr+' — ':''}${vdesc||'(no description)'}\n`
+            + `Your BOM says:\n  ${row.description||'(no description)'}\n\n`
+            + `Different manufacturers of the same spec number can differ hugely in price — check this is the right one.`;
+    return `<span title="${esc(tip)}" style="margin-inline-start:4px;color:#7C3AED;font-weight:700;cursor:help">✓${alts}</span>`;
+  }
   if(code==='exact'){
-    return `<span title="${esc(`Exact match — ${cfg.name} lists this part number`)}" style="margin-inline-start:4px;color:var(--green);font-weight:700">✓</span>`;
+    return `<span title="${esc(`Exact match — ${cfg.name} lists this part number${mfr?` (${mfr})`:''}`)}" style="margin-inline-start:4px;color:var(--green);font-weight:700">✓</span>`;
   }
   if(code==='approx'){
     return `<span title="${esc(`Matched as "${mpn}" on ${cfg.name} — same part, different punctuation/zero-padding to "${row.part_number||''}". Verify before quoting.`)}" style="margin-inline-start:4px;color:#B45309;font-weight:700;cursor:help">✓ ≈</span>`;
@@ -3043,10 +3059,16 @@ const RATE_PROXY_FALLBACK = 'https://api.allorigins.win/raw?url=';
 // source — no HTML parsing and nothing to block — so it's the primary source
 // for the Mouser/DigiKey columns and keeps working when scraping doesn't.
 const PRICE_API_URL = 'https://us-central1-specprice-236a2.cloudfunctions.net/priceLookup';
-async function _apiPriceLookup(pn, qty){
+async function _apiPriceLookup(pn, qty, desc){
   if(!pn || !auth.currentUser) return null;
   const token=await auth.currentUser.getIdToken();
-  const resp=await fetch(`${PRICE_API_URL}?pn=${encodeURIComponent(pn)}&qty=${encodeURIComponent(qty||1)}`,
+  // The description is sent as a TIE-BREAKER only. Spec numbers like
+  // M81824/1-2 are made by several qualified manufacturers, all "exact"
+  // matches on the part number and wildly different in price — the BOM's own
+  // wording is what says which one is meant.
+  const q=`pn=${encodeURIComponent(pn)}&qty=${encodeURIComponent(qty||1)}`
+        + (desc?`&desc=${encodeURIComponent(String(desc).slice(0,300))}`:'');
+  const resp=await fetch(`${PRICE_API_URL}?${q}`,
     {headers:{Authorization:'Bearer '+token}, signal:AbortSignal.timeout(45000)});
   if(!resp.ok){
     let msg=`HTTP ${resp.status}`;
@@ -3248,8 +3270,8 @@ function _fcPrettyDistributor(haystack){
 // into the shape the rest of the app expects. Returns per-vendor entries plus
 // `best` (the cheaper of the two) — never throws for "not found", which is a
 // legitimate answer, only for an actual transport/credential failure.
-async function lookupPartPrices(partNumber, qty=0){
-  const data=await _apiPriceLookup(partNumber, qty||1);
+async function lookupPartPrices(partNumber, qty=0, desc=''){
+  const data=await _apiPriceLookup(partNumber, qty||1, desc);
   if(!data) return {mouser:null, digikey:null, best:null, errors:[]};
   // Keep an entry whenever the vendor LISTS the part, even at price 0.
   // A non-stocked or quote-only part still answers the question "does this
@@ -3258,6 +3280,9 @@ async function lookupPartPrices(partNumber, qty=0){
     price:+v.price||0, stock:v.stock||'0', url:v.url||'', mpn:v.mpn||'',
     manufacturer:v.manufacturer||'',
     breakQty:v.breakQty||0, exact:v.exactMatch!==false, status:v.status||'',
+    // How many products shared this part number, and how well the winner's
+    // description matched ours. considered>1 means a choice was made.
+    considered:v.considered||1, descScore:v.descScore||0, desc:v.desc||'',
   } : null;
   const mouser=norm(data.mouser), digikey=norm(data.digikey);
   const listed=[mouser&&{...mouser,name:'Mouser'}, digikey&&{...digikey,name:'DigiKey'}].filter(Boolean);
@@ -3424,7 +3449,7 @@ async function runFCCheckModal(items, mode){
         if(stopped) return;
         let c=null;
         try{
-          c=await lookupPartPrices(cpn, targetQty);
+          c=await lookupPartPrices(cpn, targetQty, it.description||'');
         }catch(e){
           compared.push({pn:cpn, error:e.message});
           // With one candidate there's nothing to fall back to, so the row
@@ -3523,8 +3548,14 @@ async function runFCCheckModal(items, mode){
       const matchFields={
         mouser_match:  matchCode(r.mouser),
         mouser_mpn:    r.mouser  ? (r.mouser.mpn||'')  : '',
+        mouser_mfr:    r.mouser  ? (r.mouser.manufacturer||'') : '',
+        mouser_alts:   r.mouser  ? (r.mouser.considered||1) : 0,
+        mouser_desc:   r.mouser  ? String(r.mouser.desc||'').slice(0,160) : '',
         digikey_match: matchCode(r.digikey),
         digikey_mpn:   r.digikey ? (r.digikey.mpn||'') : '',
+        digikey_mfr:   r.digikey ? (r.digikey.manufacturer||'') : '',
+        digikey_alts:  r.digikey ? (r.digikey.considered||1) : 0,
+        digikey_desc:  r.digikey ? String(r.digikey.desc||'').slice(0,160) : '',
       };
 
       const stock=String(stockNum);
@@ -5165,6 +5196,7 @@ async function renderSalesDesk(){
           <span><strong style="color:var(--green)">✓</strong> exact part number</span>
           <span><strong style="color:#B45309">✓ ≈</strong> matched under a differently formatted part number — hover to see which</span>
           <span><strong style="color:#B45309">◑</strong> listed, but no published price</span>
+          <span><strong style="color:#7C3AED">✓n</strong> n manufacturers share this part number — one was chosen by description; hover to check it</span>
         </div>
         <div id="sd-notes-panel" style="display:none;padding:11px;border-top:1px solid var(--border)"></div>
         <!-- Labor estimation is a 5-15 second AI call. Without this the table
