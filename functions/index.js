@@ -273,19 +273,51 @@ function matchPart(items, wantedPn, getPn, wantedDesc, getDesc, getMfr) {
     });
   }
 
-  let best = pool[0], bestScore = -1;
-  const candidates = [];
+  // Scoring happens here, but CHOOSING doesn't: the tie-break needs each
+  // candidate's price, which only the vendor-specific reader can produce.
   const canScore = getDesc && String(wantedDesc || '').trim();
-  for (const it of pool) {
-    const d = getDesc ? getDesc(it) : '';
-    const sc = canScore ? descScore(wantedDesc, d) : 0;
-    candidates.push({ pn: String(getPn(it) || ''), mfr: getMfr ? String(getMfr(it) || '') : '',
-                      desc: String(d || '').slice(0, 120), score: sc });
-    if (pool.length > 1 && canScore && sc > bestScore) { best = it; bestScore = sc; }
+  const scored = pool.map(it => ({
+    item: it,
+    pn:   String(getPn(it) || ''),
+    mfr:  getMfr ? String(getMfr(it) || '') : '',
+    desc: String((getDesc ? getDesc(it) : '') || '').slice(0, 120),
+    score: canScore ? descScore(wantedDesc, getDesc(it)) : 0,
+  }));
+  return { pool: scored, exact: exact.length > 0, considered: pool.length };
+}
+
+/* Picks one candidate, and says why.
+ *
+ * 1. Best description match wins — that's the only signal that can tell two
+ *    genuinely different products apart.
+ * 2. Among equally-matching candidates, the CHEAPEST wins.
+ *
+ * Rule 2 is the operator's call and it's right for the case that drives this:
+ * spec numbers like M81824/1-2 are QPL items, so every qualified manufacturer's
+ * version meets the same specification and is interchangeable — paying $179.93
+ * when $3.98 buys a conforming part is simply an error. It also rescues the
+ * situation where descriptions can't be read at all (an API returning the field
+ * in an unexpected shape): every score is then 0, everything ties, and the
+ * cheapest conforming part is a far better default than whichever the
+ * distributor happened to list first.
+ *
+ * Note the ordering: price NEVER overrides a better description match. A
+ * cheaper but wrong part still loses to a dearer, correct one.
+ */
+function chooseCandidate(scoredPool, read) {
+  const withPrice = scoredPool.map(c => ({ ...c, info: read(c.item) }));
+  const maxScore = Math.max(...withPrice.map(c => c.score));
+  const top = withPrice.filter(c => c.score === maxScore);
+
+  const priced = top.filter(c => c.info && c.info.price > 0);
+  if (priced.length) {
+    priced.sort((a, b) => a.info.price - b.info.price);
+    return { ...priced[0],
+             // 'price' only when the tie-break actually decided something.
+             chosenBy: (top.length > 1 && priced.length > 1) ? 'price'
+                     : (maxScore > 0 && scoredPool.length > 1 ? 'description' : 'only') };
   }
-  return { item: best, exact: exact.length > 0, considered: pool.length,
-           score: bestScore < 0 ? 0 : bestScore,
-           candidates: candidates.slice(0, 8) };
+  return { ...top[0], chosenBy: 'only' };
 }
 
 const numFrom = v => {
@@ -366,9 +398,12 @@ async function lookupMouser(pn, qty, apiKey, desc) {
     m = matchPart(parts, pn, p => p.ManufacturerPartNumber, desc, getDesc, p => p.Manufacturer);
   }
   if (!m) return null;
-  return { ...readMouserPart(m.item, qty, m.exact),
-           considered: m.considered, descScore: m.score, desc: getDesc(m.item),
-           candidates: m.candidates };
+  const pick = chooseCandidate(m.pool, it => readMouserPart(it, qty, m.exact));
+  return { ...pick.info,
+           considered: m.considered, descScore: pick.score, desc: pick.desc,
+           chosenBy: pick.chosenBy,
+           candidates: m.pool.map(c => ({ pn: c.pn, mfr: c.mfr, desc: c.desc, score: c.score,
+                                          price: (readMouserPart(c.item, qty, m.exact) || {}).price || 0 })).slice(0, 8) };
 }
 
 // ── DigiKey: OAuth2 client-credentials, then a keyword search ─────────────
@@ -509,9 +544,14 @@ async function lookupDigiKey(pn, qty, clientId, clientSecret, desc) {
           ? product.MatchingProducts : null;
         if (siblings) {
           const m = matchPart(siblings, pn, p => p.ManufacturerProductNumber, desc, digikeyDesc, digikeyMfr);
-          if (m) return { ...readDigiKeyProduct(m.item, qty, m.exact),
-                          considered: m.considered, descScore: m.score, desc: digikeyDesc(m.item),
-                          candidates: m.candidates };
+          if (m) {
+            const pick = chooseCandidate(m.pool, it => readDigiKeyProduct(it, qty, m.exact));
+            return { ...pick.info,
+                     considered: m.considered, descScore: pick.score, desc: pick.desc,
+                     chosenBy: pick.chosenBy,
+                     candidates: m.pool.map(c => ({ pn: c.pn, mfr: c.mfr, desc: c.desc, score: c.score,
+                                                    price: (readDigiKeyProduct(c.item, qty, m.exact) || {}).price || 0 })).slice(0, 8) };
+          }
         }
         return { ...readDigiKeyProduct(product, qty, exact),
                  considered: 1, descScore: 0, desc: digikeyDesc(product) };
@@ -544,9 +584,12 @@ async function lookupDigiKey(pn, qty, clientId, clientSecret, desc) {
   const products = [...(data.ExactMatches || []), ...(data.Products || [])];
   const m = matchPart(products, pn, p => p.ManufacturerProductNumber, desc, digikeyDesc, digikeyMfr);
   if (!m) return null;
-  return { ...readDigiKeyProduct(m.item, qty, m.exact),
-           considered: m.considered, descScore: m.score, desc: digikeyDesc(m.item),
-           candidates: m.candidates };
+  const pick = chooseCandidate(m.pool, it => readDigiKeyProduct(it, qty, m.exact));
+  return { ...pick.info,
+           considered: m.considered, descScore: pick.score, desc: pick.desc,
+           chosenBy: pick.chosenBy,
+           candidates: m.pool.map(c => ({ pn: c.pn, mfr: c.mfr, desc: c.desc, score: c.score,
+                                          price: (readDigiKeyProduct(c.item, qty, m.exact) || {}).price || 0 })).slice(0, 8) };
 }
 
 exports.priceLookup = onRequest(
