@@ -430,7 +430,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.8.93';
+const APP_VER   = '1.8.94';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -994,9 +994,9 @@ function _priceRankValue(row, field){
 // there is no "similar part" case to warn about.
 const _MATCH_FOR={
   mouser_price:{code:'mouser_match', mpn:'mouser_mpn', name:'Mouser',
-                mfr:'mouser_mfr', alts:'mouser_alts', desc:'mouser_desc'},
+                mfr:'mouser_mfr', alts:'mouser_alts', desc:'mouser_desc', cands:'mouser_cands'},
   digikey_price:{code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey',
-                 mfr:'digikey_mfr', alts:'digikey_alts', desc:'digikey_desc'}};
+                 mfr:'digikey_mfr', alts:'digikey_alts', desc:'digikey_desc', cands:'digikey_cands'}};
 
 // Tells the reader whether this price is for THE part or merely a close one.
 // Same three symbols as the Check Price modal, now attached to the number
@@ -1014,11 +1014,22 @@ function _matchMarkerHTML(row, field){
   // That choice changes the price by orders of magnitude on spec parts, so it
   // gets its own marker rather than hiding inside a plain ✓.
   if(alts>1 && (code==='exact'||code==='approx')){
-    const tip=`${alts} products on ${cfg.name} share the part number "${row.part_number||''}".\n`
-            + `Chosen by description match:\n  ${mfr?mfr+' — ':''}${vdesc||'(no description)'}\n`
+    const cands=Array.isArray(row[cfg.cands])?row[cfg.cands]:[];
+    // List everything that was compared, with the score each got. If the scores
+    // are all 0 the descriptions couldn't be read and the pick was arbitrary —
+    // which is exactly what you need to see, not something to hide.
+    const lines = cands.length
+      ? cands.map(c=>`  ${c.mfr||'?'} — ${c.desc||'(no description)'}   [match ${c.score}]`).join('\n')
+      : `  (candidate details unavailable — re-run Check Price)`;
+    const allZero = cands.length>1 && cands.every(c=>!c.score);
+    const tip=`${alts} products on ${cfg.name} share the part number "${row.part_number||''}".\n\n`
             + `Your BOM says:\n  ${row.description||'(no description)'}\n\n`
-            + `Different manufacturers of the same spec number can differ hugely in price — check this is the right one.`;
-    return `<span title="${esc(tip)}" style="margin-inline-start:4px;color:#7C3AED;font-weight:700;cursor:help">✓${alts}</span>`;
+            + `Compared:\n${lines}\n\n`
+            + `Chosen: ${mfr||'?'} — ${vdesc||'(no description)'}\n\n`
+            + (allZero
+                ? `WARNING: none of them matched your description, so this pick was arbitrary. Different manufacturers of the same spec number can differ hugely in price — verify before quoting.`
+                : `Different manufacturers of the same spec number can differ hugely in price — check this is the right one.`);
+    return `<span title="${esc(tip)}" style="margin-inline-start:4px;color:${allZero?'var(--red)':'#7C3AED'};font-weight:700;cursor:help">${allZero?'⚠':'✓'}${alts}</span>`;
   }
   if(code==='exact'){
     return `<span title="${esc(`Exact match — ${cfg.name} lists this part number${mfr?` (${mfr})`:''}`)}" style="margin-inline-start:4px;color:var(--green);font-weight:700">✓</span>`;
@@ -3283,6 +3294,7 @@ async function lookupPartPrices(partNumber, qty=0, desc=''){
     // How many products shared this part number, and how well the winner's
     // description matched ours. considered>1 means a choice was made.
     considered:v.considered||1, descScore:v.descScore||0, desc:v.desc||'',
+    candidates:Array.isArray(v.candidates)?v.candidates:[],
   } : null;
   const mouser=norm(data.mouser), digikey=norm(data.digikey);
   const listed=[mouser&&{...mouser,name:'Mouser'}, digikey&&{...digikey,name:'DigiKey'}].filter(Boolean);
@@ -3551,11 +3563,19 @@ async function runFCCheckModal(items, mode){
         mouser_mfr:    r.mouser  ? (r.mouser.manufacturer||'') : '',
         mouser_alts:   r.mouser  ? (r.mouser.considered||1) : 0,
         mouser_desc:   r.mouser  ? String(r.mouser.desc||'').slice(0,160) : '',
+        // What was compared, so the tooltip can show the actual choice instead
+        // of just asserting one was made. Capped for Firestore's document size.
+        mouser_cands:  r.mouser  ? (r.mouser.candidates||[]).slice(0,6).map(c=>({
+                         pn:String(c.pn||'').slice(0,60), mfr:String(c.mfr||'').slice(0,40),
+                         desc:String(c.desc||'').slice(0,90), score:c.score||0})) : [],
         digikey_match: matchCode(r.digikey),
         digikey_mpn:   r.digikey ? (r.digikey.mpn||'') : '',
         digikey_mfr:   r.digikey ? (r.digikey.manufacturer||'') : '',
         digikey_alts:  r.digikey ? (r.digikey.considered||1) : 0,
         digikey_desc:  r.digikey ? String(r.digikey.desc||'').slice(0,160) : '',
+        digikey_cands: r.digikey ? (r.digikey.candidates||[]).slice(0,6).map(c=>({
+                         pn:String(c.pn||'').slice(0,60), mfr:String(c.mfr||'').slice(0,40),
+                         desc:String(c.desc||'').slice(0,90), score:c.score||0})) : [],
       };
 
       const stock=String(stockNum);
