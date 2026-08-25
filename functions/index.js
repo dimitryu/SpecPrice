@@ -206,17 +206,68 @@ function pnKey(s) {
 }
 // Picks the best entry from a candidate list: exact match wins, else normalised.
 // Returns { item, exact } or null.
-function matchPart(items, wantedPn, getPn) {
+/* Description matching — the tie-breaker when one part number isn't one part.
+ *
+ * Military and industry SPEC numbers (M81824/1-2, M23053/5, MS3106...) are not
+ * unique products: every qualified manufacturer sells its own part under the
+ * same number. A distributor legitimately returns several "exact matches", and
+ * they are NOT interchangeable in price — the real case that prompted this had
+ * Glenair at $179.93 and Milnec at $3.98 for M81824/1-2, a 45x spread. Taking
+ * whichever came back first was effectively picking at random.
+ *
+ * The BOM description is what disambiguates them: "SPLICE CRIMP STYLE 20-16AWG
+ * BLUE COLOR" matches "Butt splice 20-16 AWG blue" far better than "Terminal
+ * Splice". So when more than one candidate matches the part number, score them
+ * on description overlap and take the best.
+ *
+ * Deliberately NOT tie-broken on price. Choosing the cheapest of several
+ * different products because they share a spec number is how you quote the
+ * wrong part; cheapness has to be a consequence of matching, never the reason.
+ */
+const _DESC_STOP = new Set(['THE','AND','FOR','WITH','OF','TO','A','AN','TYPE','STYLE','COLOR','COLOUR','PART','NEW']);
+function descTokens(s) {
+  return String(s || '').toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .split(' ')
+    .filter(t => t && t.length > 1 && !_DESC_STOP.has(t));
+}
+// Tokens carrying a digit (gauge ranges, sizes, pin counts) are the ones that
+// actually separate two similar products, so they count double.
+function descScore(wanted, candidate) {
+  const want = descTokens(wanted);
+  if (!want.length) return 0;
+  const have = new Set(descTokens(candidate));
+  let score = 0;
+  for (const t of new Set(want)) {
+    if (have.has(t)) score += /\d/.test(t) ? 2 : 1;
+  }
+  return score;
+}
+
+// Returns { item, exact, considered, score } or null.
+// `getDesc` is optional; without it, or without a wanted description, this
+// behaves exactly as before (first exact match wins).
+function matchPart(items, wantedPn, getPn, wantedDesc, getDesc) {
   const wantRaw = String(wantedPn || '').trim().toUpperCase();
   const wantKey = pnKey(wantedPn);
   if (!wantKey) return null;
-  for (const it of items) {
-    if (String(getPn(it) || '').trim().toUpperCase() === wantRaw) return { item: it, exact: true };
+
+  const exact = items.filter(it => String(getPn(it) || '').trim().toUpperCase() === wantRaw);
+  const near  = items.filter(it => pnKey(getPn(it)) === wantKey && !exact.includes(it));
+  // Exact matches are always preferred as a GROUP; description only chooses
+  // within the best group, never promotes a near match over an exact one.
+  const pool = exact.length ? exact : near;
+  if (!pool.length) return null;
+
+  let best = pool[0], bestScore = -1;
+  if (pool.length > 1 && getDesc && String(wantedDesc || '').trim()) {
+    for (const it of pool) {
+      const sc = descScore(wantedDesc, getDesc(it));
+      if (sc > bestScore) { best = it; bestScore = sc; }
+    }
   }
-  for (const it of items) {
-    if (pnKey(getPn(it)) === wantKey) return { item: it, exact: false };
-  }
-  return null;
+  return { item: best, exact: exact.length > 0, considered: pool.length,
+           score: bestScore < 0 ? 0 : bestScore };
 }
 
 const numFrom = v => {
@@ -281,22 +332,24 @@ function readMouserPart(part, qty, exact) {
   };
 }
 
-async function lookupMouser(pn, qty, apiKey) {
+async function lookupMouser(pn, qty, apiKey, desc) {
+  const getDesc = p => p.Description || '';
   // ── 1. Part-number search ──
   let parts = await mouserPost('search/partnumber', apiKey, {
     SearchByPartRequest: { mouserPartNumber: pn, partSearchOptions: 'Exact' },
   });
-  let m = matchPart(parts, pn, p => p.ManufacturerPartNumber);
+  let m = matchPart(parts, pn, p => p.ManufacturerPartNumber, desc, getDesc);
 
   // ── 2. Keyword search fallback ──
   if (!m) {
     parts = await mouserPost('search/keyword', apiKey, {
       SearchByKeywordRequest: { keyword: pn, records: 50, startingRecord: 0 },
     });
-    m = matchPart(parts, pn, p => p.ManufacturerPartNumber);
+    m = matchPart(parts, pn, p => p.ManufacturerPartNumber, desc, getDesc);
   }
   if (!m) return null;
-  return readMouserPart(m.item, qty, m.exact);
+  return { ...readMouserPart(m.item, qty, m.exact),
+           considered: m.considered, descScore: m.score, desc: getDesc(m.item) };
 }
 
 // ── DigiKey: OAuth2 client-credentials, then a keyword search ─────────────
@@ -391,7 +444,13 @@ function digikeyHeaders(token, clientId) {
  * DigiKey part number directly and returns the best match plus any equivalents.
  * KeywordSearch stays as a fallback (with a much larger Limit) for the cases
  * ProductDetails 404s on, e.g. a partial or slightly-off part number. */
-async function lookupDigiKey(pn, qty, clientId, clientSecret) {
+// v4 nests the human-readable text under Description.
+function digikeyDesc(p) {
+  const d = p.Description || {};
+  return [d.ProductDescription, d.DetailedDescription].filter(Boolean).join(' ') || '';
+}
+
+async function lookupDigiKey(pn, qty, clientId, clientSecret, desc) {
   const token = await digikeyToken(clientId, clientSecret);
   const headers = digikeyHeaders(token, clientId);
 
@@ -407,7 +466,18 @@ async function lookupDigiKey(pn, qty, clientId, clientSecret) {
       if (product) {
         const exact = String(product.ManufacturerProductNumber || '').trim().toUpperCase()
                       === String(pn).trim().toUpperCase();
-        return readDigiKeyProduct(product, qty, exact);
+        // ProductDetails may itself report several manufacturers selling the
+        // same spec number — that's the M81824/1-2 case. Score them all rather
+        // than accepting whichever DigiKey happened to lead with.
+        const siblings = Array.isArray(product.MatchingProducts) && product.MatchingProducts.length
+          ? product.MatchingProducts : null;
+        if (siblings) {
+          const m = matchPart(siblings, pn, p => p.ManufacturerProductNumber, desc, digikeyDesc);
+          if (m) return { ...readDigiKeyProduct(m.item, qty, m.exact),
+                          considered: m.considered, descScore: m.score, desc: digikeyDesc(m.item) };
+        }
+        return { ...readDigiKeyProduct(product, qty, exact),
+                 considered: 1, descScore: 0, desc: digikeyDesc(product) };
       }
     } else if (resp.status !== 404) {
       // 404 just means "no such part number" — anything else (401, 429, 5xx) is
@@ -435,9 +505,10 @@ async function lookupDigiKey(pn, qty, clientId, clientSecret) {
   const data = await resp.json();
   // v4 nests results under ExactMatches/Products depending on the query.
   const products = [...(data.ExactMatches || []), ...(data.Products || [])];
-  const m = matchPart(products, pn, p => p.ManufacturerProductNumber);
+  const m = matchPart(products, pn, p => p.ManufacturerProductNumber, desc, digikeyDesc);
   if (!m) return null;
-  return readDigiKeyProduct(m.item, qty, m.exact);
+  return { ...readDigiKeyProduct(m.item, qty, m.exact),
+           considered: m.considered, descScore: m.score, desc: digikeyDesc(m.item) };
 }
 
 exports.priceLookup = onRequest(
@@ -469,6 +540,10 @@ exports.priceLookup = onRequest(
 
     const pn = String(req.query.pn || '').trim();
     const qty = parseInt(req.query.qty, 10) || 1;
+    // The BOM description, used only to choose between several products that
+    // share this part number (see matchPart). Capped: it's a tie-breaker, not
+    // a search query.
+    const desc = String(req.query.desc || '').slice(0, 300);
     if (!pn) return void res.status(400).json({ error: 'Missing ?pn=' });
 
     const out = { pn, qty, mouser: null, digikey: null, errors: [] };
@@ -483,12 +558,12 @@ exports.priceLookup = onRequest(
     await Promise.all([
       (async () => {
         if (!mouserKey) { out.errors.push('Mouser: no API key configured'); return; }
-        try { out.mouser = await lookupMouser(pn, qty, mouserKey); }
+        try { out.mouser = await lookupMouser(pn, qty, mouserKey, desc); }
         catch (e) { out.errors.push(e.message || 'Mouser lookup failed'); }
       })(),
       (async () => {
         if (!dkId || !dkSecret) { out.errors.push('DigiKey: no credentials configured'); return; }
-        try { out.digikey = await lookupDigiKey(pn, qty, dkId, dkSecret); }
+        try { out.digikey = await lookupDigiKey(pn, qty, dkId, dkSecret, desc); }
         catch (e) { out.errors.push(e.message || 'DigiKey lookup failed'); }
       })(),
     ]);
