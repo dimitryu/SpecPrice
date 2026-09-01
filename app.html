@@ -430,7 +430,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.8.96';
+const APP_VER   = '1.8.97';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -777,7 +777,18 @@ function loadColOrder(storageKey, defaultCols){
     if(Array.isArray(saved) && saved.length){
       const byKey=Object.fromEntries(defaultCols.map(c=>[c.k,c]));
       const ordered=saved.filter(k=>byKey[k]).map(k=>byKey[k]);
-      defaultCols.forEach(c=>{ if(!saved.includes(c.k)) ordered.push(c); });
+      // A column added since the user last dragged their layout used to be
+      // appended at the far RIGHT. That silently broke pairings that only make
+      // sense side by side — Mouser Stock ended up nowhere near Mouser Price.
+      // Insert each new column after the neighbour it follows by default, so a
+      // saved layout keeps the user's choices AND stays coherent.
+      defaultCols.forEach((c,di)=>{
+        if(saved.includes(c.k)) return;
+        const prev = di>0 ? defaultCols[di-1].k : null;
+        const at = prev ? ordered.findIndex(o=>o.k===prev) : -1;
+        if(at>=0) ordered.splice(at+1, 0, c);
+        else ordered.splice(Math.min(di, ordered.length), 0, c);
+      });
       if(ordered.length===defaultCols.length) return ordered;
     }
   }catch{}
@@ -4531,7 +4542,11 @@ function _sdCellHTML(k,r,i){
 // path, so "no labor appeared" was indistinguishable from "no AI key", "the
 // model returned no steps" and "the request failed" — which is precisely why
 // this took two attempts to diagnose.
-async function _sdAutoMatchLabor(onProgress){
+// Above this many drawings the estimate stops being a background convenience:
+// it's minutes of waiting and a real number of API calls, so the user decides.
+const SD_LABOR_AUTO_LIMIT = 20;
+
+async function _sdAutoMatchLabor(onProgress, opts={}){
   if(!anthKey && !geminiKey){
     return {applied:0, minutes:0, reason:'No AI key configured — add one in Admin → AI API Keys'};
   }
@@ -4558,6 +4573,13 @@ async function _sdAutoMatchLabor(onProgress){
     const key=String(item.r.drawing_number||'').trim();
     if(!groups.has(key)) groups.set(key,[]);
     groups.get(key).push(item);
+  }
+
+  // Auto-running 200 analyses would be several minutes and 200 AI calls that
+  // the user never asked for. Report back instead and let the caller confirm.
+  if(!opts.force && groups.size > SD_LABOR_AUTO_LIMIT){
+    return {applied:0, minutes:0, needsConfirm:groups.size,
+            reason:`${groups.size} drawings — that's ${groups.size} AI calls (roughly ${Math.ceil(groups.size*8/60)} min)`};
   }
 
   let groupNo=0;
@@ -4801,13 +4823,17 @@ async function _lbTranslateOperations(texts, lang){
   return true;
 }
 
-function openLaborBreakdownModal(){
+function openLaborBreakdownModal(onlyDwg){
   const {autoLaborMinutes}=_sdComputeSummary();
   // Only show drawings that still have at least one row in Sales Desk —
   // once every row from a drawing is deleted, its breakdown no longer
   // contributes to the total, so it's dropped from this view too (see
   // _sdActiveGeneralLaborMinutes for the same rule applied to the total).
-  const activeBreakdowns = _sdLaborBreakdowns.filter(b=>sdItems.some(r=>String(r.drawing_number||'')===b.drawingName));
+  // onlyDwg limits the modal to one drawing — the per-drawing 📋 button passes
+  // it, so a 200-drawing quote doesn't dump every breakdown into one dialog.
+  const activeBreakdowns = _sdLaborBreakdowns
+    .filter(b=>sdItems.some(r=>String(r.drawing_number||'')===b.drawingName))
+    .filter(b=>!onlyDwg || b.drawingName===onlyDwg);
   if(!activeBreakdowns.length){
     showModal(`<div class="modal modal-sm">
       <div class="modal-head"><h3>📋 Labor Time Breakdown</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
@@ -5059,25 +5085,96 @@ function _sdIsToolOwned(r){
 //                         of Subtotal/FINAL PRICE.
 // toolsTotal below is therefore an informational figure only; it is never added
 // into subtotal.
-function _sdComputeSummary(){
-  let partsTotal=0, autoToolsTotal=0, autoLaborMinutes=0;
-  const ownedToolRows=[];   // in Stock — already owned, nothing to buy
-  const missingToolRows=[]; // NOT in Stock — must be purchased, quoted separately
-  for(const r of sdItems){
-    if(_sdIsToolRow(r)){
-      if(_sdIsToolOwned(r)) ownedToolRows.push(r);
-      else { missingToolRows.push(r); autoToolsTotal+=r.total||0; }
-    } else partsTotal+=r.total||0;
-    autoLaborMinutes+=r.labor_total||0;
+// ══════════════════════════════════════════════════════════════════════════════
+// PER-DRAWING COSTING
+// ------------------------------------------------------------------------------
+// A quote covering several drawings is several quotes. Summing everything into
+// one FINAL PRICE hides which assembly costs what, and makes a per-drawing
+// margin impossible — so the unit of costing is the DRAWING, and the grand
+// total is the sum of those, never computed independently.
+//
+// Each drawing carries its own profit %, labor rate and overrides; anything not
+// set falls back to the global defaults, so a single-drawing quote behaves
+// exactly as it always did.
+// ══════════════════════════════════════════════════════════════════════════════
+let _sdDwgSettings={};   // { [drawingNumber]: {profitPct, laborRateMin, laborMinutes, toolsTotal} }
+// Which drawing groups are collapsed in the BOM table. Kept separate from the
+// Cost Summary's own collapse state — you often want the parts hidden while the
+// prices stay open, and vice versa.
+let _sdCollapsedRows=new Set();
+const _SD_NO_DWG='(no drawing #)';
+function _sdDwgKey(r){ return String(r.drawing_number||'').trim() || _SD_NO_DWG; }
+function _sdDwgSet(dwg){
+  return _sdDwgSettings[dwg] || (_sdDwgSettings[dwg]={});
+}
+function _sdDwgProfit(dwg){
+  const v=_sdDwgSet(dwg).profitPct;
+  return v==null||v==='' ? _sdProfitPct : (parseFloat(v)||0);
+}
+function _sdDwgRate(dwg){
+  const v=_sdDwgSet(dwg).laborRateMin;
+  return v==null||v==='' ? _sdLaborRatePerMin() : (parseFloat(v)||0);
+}
+
+// General (not row-tied) labor minutes belonging to ONE drawing.
+function _sdGeneralMinutesFor(dwg){
+  let total=0;
+  for(const b of _sdLaborBreakdowns){
+    if(!b.generalMinutes) continue;
+    if(String(b.drawingName||'')===dwg) total+=b.generalMinutes;
   }
-  autoLaborMinutes += _sdActiveGeneralLaborMinutes();
-  const laborMinutes = _sdLaborMinutesOverride!=null ? _sdLaborMinutesOverride : autoLaborMinutes;
-  const laborCost=laborMinutes*_sdLaborRatePerMin();
-  const toolsTotal = _sdToolsTotalOverride!=null ? _sdToolsTotalOverride : autoToolsTotal;
-  const subtotal=partsTotal+laborCost; // tools excluded by design — see comment above
-  const final=subtotal*(1+_sdProfitPct/100);
-  return {partsTotal, toolsTotal, autoToolsTotal, laborMinutes, autoLaborMinutes, laborCost,
-          subtotal, final, ownedToolRows, missingToolRows};
+  return total;
+}
+
+// One costed group per drawing, in first-seen order so the quote reads in the
+// order the drawings were imported.
+function _sdComputeGroups(){
+  const order=[]; const byDwg=new Map();
+  for(const r of sdItems){
+    const k=_sdDwgKey(r);
+    if(!byDwg.has(k)){ byDwg.set(k,[]); order.push(k); }
+    byDwg.get(k).push(r);
+  }
+  return order.map(dwg=>{
+    const rows=byDwg.get(dwg);
+    let partsTotal=0, autoToolsTotal=0, autoLaborMinutes=0;
+    const ownedToolRows=[], missingToolRows=[];
+    for(const r of rows){
+      if(_sdIsToolRow(r)){
+        if(_sdIsToolOwned(r)) ownedToolRows.push(r);
+        else { missingToolRows.push(r); autoToolsTotal+=r.total||0; }
+      } else partsTotal+=r.total||0;
+      autoLaborMinutes+=r.labor_total||0;
+    }
+    autoLaborMinutes += _sdGeneralMinutesFor(dwg);
+    const st=_sdDwgSet(dwg);
+    const laborMinutes = st.laborMinutes!=null && st.laborMinutes!=='' ? (parseFloat(st.laborMinutes)||0) : autoLaborMinutes;
+    const rate=_sdDwgRate(dwg);
+    const laborCost=laborMinutes*rate;
+    const toolsTotal = st.toolsTotal!=null && st.toolsTotal!=='' ? (parseFloat(st.toolsTotal)||0) : autoToolsTotal;
+    const subtotal=partsTotal+laborCost;   // tools excluded by design
+    const profitPct=_sdDwgProfit(dwg);
+    const final=subtotal*(1+profitPct/100);
+    return {dwg, rows, partsTotal, autoToolsTotal, toolsTotal, autoLaborMinutes, laborMinutes,
+            rate, laborCost, subtotal, profitPct, profit:final-subtotal, final,
+            ownedToolRows, missingToolRows};
+  });
+}
+
+// Grand totals are the SUM of the per-drawing figures — never recomputed from
+// the flat row list. If the two could drift apart, the quote would contradict
+// its own breakdown.
+function _sdComputeSummary(){
+  const groups=_sdComputeGroups();
+  const sum=k=>groups.reduce((a,g)=>a+(g[k]||0),0);
+  const partsTotal=sum('partsTotal'), laborCost=sum('laborCost'),
+        subtotal=sum('subtotal'), final=sum('final'),
+        toolsTotal=sum('toolsTotal'), autoToolsTotal=sum('autoToolsTotal'),
+        laborMinutes=sum('laborMinutes'), autoLaborMinutes=sum('autoLaborMinutes');
+  return {groups, partsTotal, toolsTotal, autoToolsTotal, laborMinutes, autoLaborMinutes,
+          laborCost, subtotal, final,
+          ownedToolRows: groups.flatMap(g=>g.ownedToolRows),
+          missingToolRows: groups.flatMap(g=>g.missingToolRows)};
 }
 
 async function renderSalesDesk(){
@@ -5101,14 +5198,32 @@ async function renderSalesDesk(){
   };
   // Wraps the estimate with the banner, the progress text and the result
   // message, so the picker and the button behave identically.
-  const _sdRunLaborEstimate=async()=>{
+  const _sdRunLaborEstimate=async(force=false)=>{
     _sdLaborBusy('Estimating labor time with AI — this usually takes 5–15 seconds…');
+    const onProg=({done,total,drawing,rows})=>{
+      _sdLaborBusy(total>1
+        ? `Estimating labor time — drawing ${done} of ${total} (${drawing||'no drawing #'}, ${rows} rows)… `
+          + `${Math.round(100*done/total)}%`
+        : `Estimating labor time for ${rows} row(s)${drawing?' — '+drawing:''}…`);
+    };
     try{
-      const res=await _sdAutoMatchLabor(({done,total,drawing,rows})=>{
-        _sdLaborBusy(total>1
-          ? `Estimating labor time — drawing ${done} of ${total} (${drawing||'no drawing #'}, ${rows} rows)…`
-          : `Estimating labor time for ${rows} row(s)${drawing?' — '+drawing:''}…`);
-      });
+      let res=await _sdAutoMatchLabor(onProg,{force});
+      // Too many drawings to run unasked — put the cost in front of the user
+      // rather than either silently spending it or silently skipping.
+      if(res && res.needsConfirm){
+        _sdLaborBusy('');
+        const go=confirm(
+          `${res.needsConfirm} drawings are loaded.\n\n`+
+          `Estimating labor runs one AI analysis per drawing — about `+
+          `${Math.ceil(res.needsConfirm*8/60)} minute(s) and ${res.needsConfirm} API calls.\n\n`+
+          `Run it now for all of them?`);
+        if(!go){
+          toast('Labor estimate skipped — use ⏱ Estimate Labor when you want it','warn');
+          return null;
+        }
+        _sdLaborBusy('Estimating labor time…');
+        res=await _sdAutoMatchLabor(onProg,{force:true});
+      }
       renderSalesDesk();
       if(res && res.applied){
         toast(`Labor estimated — ${res.minutes.toFixed(1)} min across ${res.applied} row(s)`,'success');
@@ -5124,52 +5239,131 @@ async function renderSalesDesk(){
     }
   };
 
-  const _sdUpdateSummaryUI=()=>{
-    const {partsTotal,toolsTotal,laborMinutes,laborCost,subtotal,final,ownedToolRows,missingToolRows}=_sdComputeSummary();
-    const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent='$'+v.toFixed(2); };
-    set('sd-parts-total',partsTotal);
-    set('sd-labor-total',laborCost);
-    set('sd-subtotal',subtotal);
-    set('sd-final',final);
-    // Only sync these inputs while they're tracking the auto-sum — once the
-    // user has typed their own value (override set), leave the field alone so
-    // it doesn't get overwritten mid-edit or reset by an unrelated row change
-    // elsewhere in the BOM.
-    const toolsInp=document.getElementById('sd-tools-total');
-    if(toolsInp && _sdToolsTotalOverride==null) toolsInp.value = toolsTotal ? +toolsTotal.toFixed(2) : '';
-    const ltInp=document.getElementById('sd-labor-minutes');
-    if(ltInp && _sdLaborMinutesOverride==null) ltInp.value = laborMinutes ? +laborMinutes.toFixed(2) : '';
-    // Tools are never included in FINAL PRICE (see _sdComputeSummary). When one
-    // is missing from Stock the user still has to buy it before this cable can
-    // be built, so say so explicitly and quote the amount separately — a silent
-    // exclusion would read as "no tooling needed" and under-quote the job.
-    const toolsNote=document.getElementById('sd-tools-note');
-    if(toolsNote){
-      if(missingToolRows.length){
-        const names=missingToolRows.map(r=>r.part_number||r.description||'tool').join(', ');
-        toolsNote.style.display='block';
-        toolsNote.innerHTML=`⚠ <strong>Final price does NOT include manufacturing tools.</strong><br>
-          ${missingToolRows.length} tool${missingToolRows.length>1?'s are':' is'} not in Stock and must be purchased to build this cable —
-          estimated <strong>$${toolsTotal.toFixed(2)}</strong>: ${esc(names)}`;
-      } else {
-        toolsNote.style.display='none';
-      }
+  // ── Cost Summary, rendered per drawing ──────────────────────────────────
+  // Every drawing gets its own complete costing block (tools, labor, parts,
+  // subtotal, profit, final) and the grand total is the sum of those blocks.
+  // With many drawings the blocks collapse to a one-line "DWG — $X" so a
+  // 200-drawing quote is still readable; the one being worked on can be opened.
+  const _sdCollapsed = window._sdCollapsedDwgs || (window._sdCollapsedDwgs=new Set());
+
+  const _sdRenderSummary=()=>{
+    const host=document.getElementById('sd-summary-host');
+    if(!host) return;
+    const {groups, partsTotal, laborCost, subtotal, final, toolsTotal,
+           ownedToolRows, missingToolRows} = _sdComputeSummary();
+    const $=v=>'$'+(+v||0).toFixed(2);
+
+    // Default: collapse everything once there are enough drawings that an
+    // expanded list would bury the grand total.
+    if(groups.length>3 && !window._sdCollapseInit){
+      window._sdCollapseInit=true;
+      groups.forEach(g=>_sdCollapsed.add(g.dwg));
     }
-    // Inline (not a popup) note listing which TOOL rows are currently excluded
-    // from the price because they're marked in Stock in the Database — lives
-    // right here in Cost Summary and recomputes on every render, so toggling
-    // a part's Stock checkbox is reflected immediately without re-importing.
-    const stockNote=document.getElementById('sd-tools-stock-note');
-    if(stockNote){
-      if(ownedToolRows.length){
-        const names=ownedToolRows.map(r=>r.part_number||r.description||'tool').join(', ');
-        stockNote.style.display='block';
-        stockNote.innerHTML=`✓ ${ownedToolRows.length} tool${ownedToolRows.length>1?'s':''} excluded from price — already in Stock: <strong>${esc(names)}</strong>`;
-      } else {
-        stockNote.style.display='none';
-      }
-    }
+
+    const block=(g)=>{
+      const open=!_sdCollapsed.has(g.dwg);
+      const miss=g.missingToolRows, owned=g.ownedToolRows;
+      return `
+      <div class="sd-panel" data-dwg="${esc(g.dwg)}">
+        <div class="sd-panel-title" style="display:flex;align-items:center;gap:7px;cursor:pointer" data-toggle="${esc(g.dwg)}">
+          <span style="font-size:11px;width:10px;display:inline-block">${open?'▾':'▸'}</span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(g.dwg)}</span>
+          <span style="font-size:11px;color:var(--muted);font-weight:400">${g.rows.length} row${g.rows.length===1?'':'s'}</span>
+          <strong style="color:var(--green)">${$(g.final)}</strong>
+        </div>
+        ${open?`
+        <div style="padding:6px 0">
+          <div class="summary-row" style="color:var(--muted)">
+            <span title="Crimp/insertion tools not yet in Stock. Never added into Subtotal or FINAL PRICE — type your own number to override.">Tools <em style="font-size:10px;font-style:normal">(not in price)</em></span>
+            <span style="display:flex;align-items:center;gap:2px">$<input type="number" class="sd-in-tools" data-dwg="${esc(g.dwg)}" min="0" step="any"
+              value="${g.toolsTotal?+g.toolsTotal.toFixed(2):''}"
+              style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right"></span>
+          </div>
+          <div class="summary-row">
+            <span title="Sum of this drawing's row Labor Totals — type your own number to override" style="display:flex;align-items:center;gap:5px">
+              Labor Time (min)
+              <button type="button" class="btn btn-ghost btn-sm sd-btn-breakdown" data-dwg="${esc(g.dwg)}" title="Manufacturing-step breakdown behind this number" style="padding:1px 6px;font-size:11px">📋</button>
+            </span>
+            <input type="number" class="sd-in-minutes" data-dwg="${esc(g.dwg)}" min="0" step="any"
+              value="${g.laborMinutes?+g.laborMinutes.toFixed(2):''}"
+              style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
+          </div>
+          <div class="summary-row"><span>Parts Total</span><span>${$(g.partsTotal)}</span></div>
+          <div class="summary-row">
+            <span title="Labor Time × rate per minute for this drawing">Labor Cost</span>
+            <span style="display:flex;align-items:center;gap:4px">
+              <input type="number" class="sd-in-rate" data-dwg="${esc(g.dwg)}" min="0" step="any" value="${g.rate}"
+                title="Rate per minute for this drawing" style="width:54px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:11px;text-align:right">
+              <span>${$(g.laborCost)}</span>
+            </span>
+          </div>
+          <div class="summary-row"><span>Subtotal</span><span>${$(g.subtotal)}</span></div>
+          <div class="summary-row">
+            <span>Profit %</span>
+            <input type="number" class="sd-in-profit" data-dwg="${esc(g.dwg)}" min="0" step="any" value="${g.profitPct}"
+              style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
+          </div>
+        </div>
+        <div class="summary-total"><span>FINAL PRICE</span><span>${$(g.final)}</span></div>
+        ${miss.length?`<div style="font-size:13px;color:#92400e;background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;padding:8px 10px;margin-top:8px;line-height:1.4;font-weight:600">
+            ⚠ Final price does NOT include manufacturing tools.<br>
+            ${miss.length} tool${miss.length>1?'s':''} not in Stock — estimated <strong>${$(g.toolsTotal)}</strong>: ${esc(miss.map(r=>r.part_number||r.description||'tool').join(', '))}
+          </div>`:''}
+        ${owned.length?`<div style="font-size:11px;color:#1F8B4C;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:4px;padding:5px 8px;margin-top:6px">
+            ✓ ${owned.length} tool${owned.length>1?'s':''} excluded — already in Stock: <strong>${esc(owned.map(r=>r.part_number||r.description||'tool').join(', '))}</strong>
+          </div>`:''}
+        `:''}
+      </div>`;
+    };
+
+    const grand = groups.length>1 ? `
+      <div class="sd-panel" style="border:2px solid var(--blue-dark)">
+        <div class="sd-panel-title">Grand Total — ${groups.length} drawings</div>
+        <div style="padding:6px 0">
+          <div class="summary-row"><span>Parts Total</span><span>${$(partsTotal)}</span></div>
+          <div class="summary-row"><span>Labor Cost</span><span>${$(laborCost)}</span></div>
+          <div class="summary-row"><span>Subtotal</span><span>${$(subtotal)}</span></div>
+          <div class="summary-row" style="color:var(--muted)"><span>Tools (not in price)</span><span>${$(toolsTotal)}</span></div>
+        </div>
+        <div class="summary-total" style="font-size:15px"><span>TOTAL FINAL PRICE</span><span>${$(final)}</span></div>
+        ${missingToolRows.length?`<div style="font-size:13px;color:#92400e;background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;padding:8px 10px;margin-top:8px;font-weight:600">
+          ⚠ Total does NOT include ${missingToolRows.length} manufacturing tool${missingToolRows.length>1?'s':''} — ${$(toolsTotal)} quoted separately.
+        </div>`:''}
+      </div>` : '';
+
+    host.innerHTML = groups.length
+      ? (groups.length>1
+          ? `<div style="display:flex;gap:6px;align-items:center;font-size:11px">
+               <button class="btn btn-ghost btn-sm" id="sd-exp-all">Expand all</button>
+               <button class="btn btn-ghost btn-sm" id="sd-col-all">Collapse all</button>
+             </div>` : '')
+        + groups.map(block).join('') + grand
+      : `<div class="sd-panel"><div class="sd-panel-title">Cost Summary</div>
+           <div style="padding:14px;color:var(--muted);font-size:12px">No parts yet.</div></div>`;
+
+    // ── wiring ──
+    host.querySelectorAll('[data-toggle]').forEach(el=>el.addEventListener('click',()=>{
+      const d=el.dataset.toggle;
+      if(_sdCollapsed.has(d)) _sdCollapsed.delete(d); else _sdCollapsed.add(d);
+      _sdRenderSummary();
+    }));
+    document.getElementById('sd-exp-all')?.addEventListener('click',()=>{_sdCollapsed.clear();_sdRenderSummary();});
+    document.getElementById('sd-col-all')?.addEventListener('click',()=>{
+      groups.forEach(g=>_sdCollapsed.add(g.dwg)); _sdRenderSummary();});
+    const bind=(sel,key)=>host.querySelectorAll(sel).forEach(inp=>inp.addEventListener('change',()=>{
+      const st=_sdDwgSet(inp.dataset.dwg);
+      st[key] = inp.value==='' ? null : (parseFloat(inp.value)||0);
+      _sdRenderSummary();
+    }));
+    bind('.sd-in-tools','toolsTotal');
+    bind('.sd-in-minutes','laborMinutes');
+    bind('.sd-in-rate','laborRateMin');
+    bind('.sd-in-profit','profitPct');
+    host.querySelectorAll('.sd-btn-breakdown').forEach(b=>
+      b.addEventListener('click',()=>openLaborBreakdownModal(b.dataset.dwg)));
   };
+
+  const _sdUpdateSummaryUI=()=>_sdRenderSummary();
 
   const renderSD=()=>{
     const predicate=parseBoolQuery(_sdFilterQ);
@@ -5186,9 +5380,30 @@ async function renderSalesDesk(){
         return _sdSortAsc?(va<vb?-1:va>vb?1:0):(va<vb?1:va>vb?-1:0);
       });
     }
+    // Grouped by drawing, with a header row carrying that drawing's subtotal.
+    // A flat list of 200 drawings' parts is unreadable and gives no sense of
+    // what any one assembly costs — which is the question being asked.
+    const _groups=_sdComputeGroups();
+    const _finalFor={}; _groups.forEach(g=>{_finalFor[g.dwg]=g;});
+    const _seen=new Set();
     const tbody=visibleIdx.map(i=>{
       const r=sdItems[i];
-      return `<tr data-i="${i}"${_toolRowAttrs(r)}>
+      const dwg=_sdDwgKey(r);
+      let head='';
+      if(!_seen.has(dwg)){
+        _seen.add(dwg);
+        const g=_finalFor[dwg];
+        const hidden=_sdCollapsedRows.has(dwg);
+        head=`<tr class="sd-group-head" data-dwg="${esc(dwg)}" style="background:#EEF2F7;cursor:pointer">
+          <td colspan="${SD_COLS.length+2}" style="padding:6px 10px;font-weight:700;color:var(--blue-dark)">
+            <span style="display:inline-block;width:12px">${hidden?'▸':'▾'}</span>
+            ${esc(dwg)}
+            <span style="font-weight:400;color:var(--muted);font-size:11px;margin-inline-start:8px">${g?g.rows.length:0} rows</span>
+            ${g?`<span style="float:inline-end;color:var(--green)">$${g.final.toFixed(2)}</span>`:''}
+          </td></tr>`;
+      }
+      if(_sdCollapsedRows.has(dwg)) return head;
+      return head+`<tr data-i="${i}"${_toolRowAttrs(r)}>
       <td style="text-align:center"><input type="checkbox" class="sd-check" data-i="${i}"></td>
       ${SD_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${_sdCellHTML(c.k,r,i)}</td>`).join('')}
       <td><button class="btn btn-red btn-sm" data-i="${i}">✕</button></td>
@@ -5197,6 +5412,11 @@ async function renderSalesDesk(){
 
     document.getElementById('sd-tbody').innerHTML=tbody||
       `<tr class="empty-row"><td colspan="${SD_COLS.length+2}">No parts added yet</td></tr>`;
+    document.querySelectorAll('.sd-group-head').forEach(tr=>tr.addEventListener('click',()=>{
+      const d=tr.dataset.dwg;
+      if(_sdCollapsedRows.has(d)) _sdCollapsedRows.delete(d); else _sdCollapsedRows.add(d);
+      renderSD();
+    }));
     const cEl=document.getElementById('sd-count'); if(cEl) cEl.textContent=sdItems.length;
     const fEl=document.getElementById('sd-flt-count');
     if(fEl) fEl.textContent = _sdFilterQ.trim() ? `${visibleIdx.length}/${sdItems.length} parts` : `${sdItems.length} parts`;
@@ -5293,45 +5513,10 @@ async function renderSalesDesk(){
       </div>
 
       <div style="display:flex;flex-direction:column;gap:12px">
-        <div class="sd-panel">
-          <div class="sd-panel-title">Cost Summary</div>
-          <div style="padding:6px 0">
-            <!-- Order is deliberate: Tools first (it's the line most often
-                 missed, and it sits OUTSIDE the price), then the two inputs the
-                 user actually edits, then the derived figures that build up to
-                 Subtotal. -->
-            <div class="summary-row" style="color:var(--muted)">
-              <span title="Cost of crimp/insertion tools that are NOT yet in Stock. Shown for information only — tools are never added into Subtotal or FINAL PRICE. Type your own number to override it, e.g. a vendor quote.">Tools <em style="font-size:10px;font-style:normal">(not in price)</em></span>
-              <span style="display:flex;align-items:center;gap:2px">$<input type="number" id="sd-tools-total" min="0" step="any"
-                style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right"></span>
-            </div>
-            <div class="summary-row">
-              <span title="Defaults to the sum of every row's Labor Total — type your own number to override it" style="display:flex;align-items:center;gap:5px">
-                Labor Time (min)
-                <button type="button" class="btn btn-ghost btn-sm" id="btn-sd-labor-breakdown" title="Show the manufacturing-step breakdown behind this number" style="padding:1px 6px;font-size:11px">📋</button>
-              </span>
-              <input type="number" id="sd-labor-minutes" min="0" step="any"
-                style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
-            </div>
-            <div class="summary-row"><span>Parts Total</span><span id="sd-parts-total">$0.00</span></div>
-            <div class="summary-row"><span id="sd-labor-cost-label" title="Labor Time (min) above × rate per minute — set the rate in Settings">Labor Cost</span><span id="sd-labor-total">$0.00</span></div>
-            <div class="summary-row"><span>Subtotal</span><span id="sd-subtotal">$0.00</span></div>
-            <div class="summary-row">
-              <span>Profit %</span>
-              <input type="number" id="sd-profit-pct" value="${_sdProfitPct}" min="0" step="any"
-                style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
-            </div>
-          </div>
-          <div class="summary-total">
-            <span>FINAL PRICE</span>
-            <span id="sd-final">$0.00</span>
-          </div>
-          <!-- Raised from 11px: this warning says the headline number is NOT
-               what the customer will actually pay. At footnote size it read as
-               a footnote, which is exactly the wrong impression. -->
-          <div id="sd-tools-note" style="display:none;font-size:16px;color:#92400e;background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;padding:9px 11px;margin-top:8px;line-height:1.45;font-weight:600"></div>
-          <div id="sd-tools-stock-note" style="display:none;font-size:11px;color:#1F8B4C;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:4px;padding:5px 8px;margin-top:6px"></div>
-        </div>
+        <!-- Rendered by _sdRenderSummary(). Costing is per DRAWING now, so
+             the panel can't be static markup with fixed ids: the number of
+             blocks depends on how many drawings are loaded. -->
+        <div id="sd-summary-host" style="display:flex;flex-direction:column;gap:10px"></div>
         <button class="btn btn-green" style="width:100%;padding:10px;justify-content:center" id="btn-sd-export">📊 Export to Excel</button>
       </div>
     </div>`);
@@ -5357,24 +5542,9 @@ async function renderSalesDesk(){
     renderSD();
   },200));
 
-  document.getElementById('sd-labor-minutes').addEventListener('input',debounce(e=>{
-    const v=e.target.value.trim();
-    _sdLaborMinutesOverride = v==='' ? null : (parseFloat(v)||0);
-    _sdUpdateSummaryUI();
-  },150));
-
-  document.getElementById('sd-tools-total').addEventListener('input',debounce(e=>{
-    const v=e.target.value.trim();
-    _sdToolsTotalOverride = v==='' ? null : (parseFloat(v)||0);
-    _sdUpdateSummaryUI();
-  },150));
-
-  document.getElementById('btn-sd-labor-breakdown')?.addEventListener('click',openLaborBreakdownModal);
-
-  document.getElementById('sd-profit-pct').addEventListener('input',debounce(e=>{
-    _sdProfitPct=parseFloat(e.target.value)||0;
-    _sdUpdateSummaryUI();
-  },150));
+  // Tools / Labor Time / Profit are per-drawing inputs now, created and wired
+  // inside _sdRenderSummary(). The old global handlers pointed at ids that no
+  // longer exist and would throw on every Sales Desk render.
 
   document.getElementById('btn-sd-addpick').addEventListener('click',()=>{
     openPartPickerModal(async(parts,qtyOverride,hadSelection)=>{
@@ -5410,6 +5580,8 @@ async function renderSalesDesk(){
 
   document.getElementById('btn-sd-clear').addEventListener('click',()=>{
     sdItems=[];_sdFilterQ='';_sdLaborMinutesOverride=null;_sdToolsTotalOverride=null;
+    _sdDwgSettings={}; _sdCollapsedRows=new Set();   // per-drawing state must not carry over
+    window._sdCollapsedDwgs=new Set(); window._sdCollapseInit=false;
     _sdLaborBreakdowns=[];_sdPendingLaborByKey={};_sdDrawingNotes=[];
     renderSD();
   });
@@ -5420,7 +5592,7 @@ async function renderSalesDesk(){
   });
   document.getElementById('btn-sd-labor')?.addEventListener('click',async()=>{
     if(!sdItems.length){ toast('No parts in Sales Desk','error'); return; }
-    await _sdRunLaborEstimate();
+    await _sdRunLaborEstimate(true);   // pressing the button IS the confirmation
   });
 
   document.getElementById('btn-sd-export').addEventListener('click',()=>exportSalesDeskExcel());
@@ -5910,7 +6082,7 @@ async function handleSDFiles(files){
       await _sdAutoMatchLabor();
       document.getElementById('sd-tbody')&&renderSalesDesk();
       // No popup here anymore — whether any TOOL row is excluded because it's
-      // already in Stock is shown inline in Cost Summary (see sd-tools-stock-note
+      // already in Stock is shown inline in each drawing’s Cost Summary block
       // in _sdUpdateSummaryUI, driven by _sdIsToolOwned), which the renderSalesDesk()
       // call above already refreshes.
     }
@@ -6036,7 +6208,7 @@ async function exportSalesDeskExcel(){
 
   try{
     const ExcelJS=await loadExcelJS();
-    const {partsTotal,laborCost,subtotal,final,toolsTotal,laborMinutes,missingToolRows}=_sdComputeSummary();
+    const {groups,partsTotal,laborCost,subtotal,final,toolsTotal,laborMinutes,missingToolRows}=_sdComputeSummary();
     const dwgs=_sdDrawingNumbers();
 
     const wb=new ExcelJS.Workbook();
@@ -6097,6 +6269,7 @@ async function exportSalesDeskExcel(){
       ['Prepared by', currentUserEmail||''],
       ['Drawing(s)', dwgs.join(', ')||'—'],
       ['Line items', String(sdItems.length)],
+      ['Drawings', String(groups.length)],
     ];
     meta.forEach(([k,v])=>{
       const kc=ws.getCell(row,1); kc.value=k;
@@ -6111,101 +6284,21 @@ async function exportSalesDeskExcel(){
     });
     row++;
 
-    // ── BOM section ───────────────────────────────────────────────────────
+    // ══ Per-drawing quotation ══════════════════════════════════════════════
+    // A quote covering several drawings is several quotes. Each drawing gets
+    // its own BOM block and its own price build-up; the grand total is the sum
+    // of those blocks and is never computed separately, so the summary can't
+    // disagree with the detail.
     const secTitle=(text,argb)=>{
       merge(row,1,LAST);
       const c=ws.getCell(row,1);
       c.value=text;
       c.font={bold:true,size:11,color:{argb:'FFFFFFFF'}};
       c.alignment={vertical:'middle',indent:1};
-      for(let i=1;i<=LAST;i++) fill(ws.getCell(row,i),argb);
+      for(let i2=1;i2<=LAST;i2++) fill(ws.getCell(row,i2),argb);
       ws.getRow(row).height=20;
       row++;
     };
-    secTitle('BILL OF MATERIALS','FF334155');
-
-    const headRow=row;
-    COLS.forEach((h,i)=>{
-      const c=ws.getCell(row,i+1);
-      c.value=h;
-      c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};
-      fill(c,_XL.bomHead);
-      c.alignment={vertical:'middle',horizontal:i>=5?'center':'left',wrapText:true};
-      c.border=_xlBoxed;
-    });
-    ws.getRow(row).height=24;
-    row++;
-
-    const firstBomRow=row;
-    sdItems.forEach((r,i)=>{
-      const isTool=_sdIsToolRow(r);
-      const stockVal=v=>{ const x=r[v]; return (x===undefined||x===null||x==='') ? null : (parseInt(x,10)||0); };
-      const vals=[i+1, r.drawing_number||'', r.part_number||'', r.description||'',
-                  r.manufacturer||'',
-                  parseFloat(r.qty)||0, r.unit||'',
-                  // Line costs for the row's quantity — the same figures shown
-                  // on screen. Writing per-unit prices here while the Sales Desk
-                  // shows costs would have the quote disagree with the app it
-                  // came from.
-                  _sdLineCost(r,'mouser_price')||null,  stockVal('mouser_stock'),
-                  _sdLineCost(r,'digikey_price')||null, stockVal('digikey_stock'),
-                  _sdLineCost(r,'priority_price')||null,
-                  +(r.total||0), +(r.labor_total||0)];
-      vals.forEach((v,ci)=>{
-        const c=ws.getCell(row,ci+1);
-        c.value=v;
-        c.font={size:10, color:{argb:isTool?'FF92400E':'FF0F172A'}, italic:isTool};
-        c.border=_xlBoxed;
-        if(ci===7||ci===9||ci===11) c.numFmt='$#,##0.00';   // Mouser / DigiKey / Priority
-        if(ci===12) c.numFmt='$#,##0.00';                    // Part Cost
-        if(ci===8||ci===10) c.numFmt='#,##0';                // stock counts
-        // Carry the match quality into the file. A printed quote has no
-        // tooltips, so an approximate match would otherwise be indistinguishable
-        // from an exact one — an amber cell and a cell note make it visible.
-        let matchFlagged=false;
-        if(ci===7||ci===9){
-          const cfg = ci===7 ? {code:'mouser_match', mpn:'mouser_mpn', name:'Mouser'}
-                             : {code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey'};
-          const code=r[cfg.code]||'';
-          if(code==='approx'){
-            c.font={...c.font, color:{argb:'FF92400E'}};
-            matchFlagged=true;
-            c.note=`Matched as "${r[cfg.mpn]||''}" on ${cfg.name} — different punctuation/zero-padding to "${r.part_number||''}". Verify before quoting.`;
-          } else if(code==='noprice'){
-            c.value=null;
-            matchFlagged=true;
-            c.note=`${cfg.name} lists this part but publishes no price (non-stocked / quote-only).`;
-          }
-        }
-        if(ci===13) c.numFmt='0.0';                          // Labor Time
-        if(ci===5)  c.numFmt='#,##0.###';                    // QTY
-        c.alignment={vertical:'middle',
-                     horizontal: (ci===3||ci===4)?'left':(ci>=5?'right':'left'),
-                     wrapText: ci===3};
-        // Fills, applied LAST and in priority order. The amber match flag has to
-        // win: the zebra band used to be written afterwards and silently painted
-        // over it, so an approximate match looked like every other row.
-        if(matchFlagged) fill(c,'FFFFFBEB');
-        else if(isTool) fill(c,_XL.tool);
-        else if(i%2===1) fill(c,_XL.bomBand);
-      });
-      // Amber edge on the left of a tool row, mirroring the on-screen marker.
-      if(isTool){
-        ws.getCell(row,1).border={..._xlBoxed,left:{style:'medium',color:{argb:_XL.toolEdge}}};
-        const d=ws.getCell(row,4);
-        d.value=`${r.description||''}   [TOOL — not from customer BOM]`;
-      }
-      row++;
-    });
-    const lastBomRow=row-1;
-    if(lastBomRow>=firstBomRow){
-      ws.autoFilter={from:{row:headRow,column:1},to:{row:lastBomRow,column:LAST}};
-      ws.views=[{state:'frozen',ySplit:headRow,showGridLines:false}];
-    }
-    row++;
-
-    // ── Cost build-up ─────────────────────────────────────────────────────
-    secTitle('PRICE CALCULATION','FF334155');
     const money=(label,val,opts={})=>{
       merge(row,1,LAST-2);
       const l=ws.getCell(row,1);
@@ -6225,58 +6318,175 @@ async function exportSalesDeskExcel(){
       if(opts.height) ws.getRow(row).height=opts.height;
       row++;
     };
-    money('Parts Total',+partsTotal.toFixed(2));
-    money(`Labor  (${(+laborMinutes).toFixed(1)} min × $${_sdLaborRatePerMin()}/min)`,+laborCost.toFixed(2));
-    money('Subtotal',+subtotal.toFixed(2),{bold:true});
-    money(`Profit (${_sdProfitPct}%)`,+(final-subtotal).toFixed(2));
-    money('FINAL PRICE',+final.toFixed(2),
-          {bold:true,size:14,bg:_XL.final,fg:'FFFFFFFF',height:26});
-    row++;
 
-    // ── Tools, quoted separately ──────────────────────────────────────────
-    // Kept visually apart from the calculation above precisely BECAUSE it is
-    // not part of it — the whole risk with this figure is it being read as
-    // included.
-    if(missingToolRows.length){
-      merge(row,1,LAST);
-      const w=ws.getCell(row,1);
-      w.value='⚠  FINAL PRICE above does NOT include manufacturing tools';
-      w.font={bold:true,size:13,color:{argb:'FF92400E'}};
-      w.alignment={vertical:'middle',indent:1};
-      for(let c=1;c<=LAST;c++){
-        fill(ws.getCell(row,c),_XL.warn);
-        ws.getCell(row,c).border={top:{style:'medium',color:{argb:_XL.warnEdge}},
-                                  bottom:{style:'medium',color:{argb:_XL.warnEdge}}};
-      }
+    // ── Summary of drawings, first, so the reader sees the shape of the quote
+    //    before wading through the parts. Only when there IS more than one.
+    if(groups.length>1){
+      secTitle(`QUOTATION SUMMARY — ${groups.length} DRAWINGS`,'FF334155');
+      const sh=['Drawing #','Rows','Parts Total','Labor Cost','Subtotal','Profit %','FINAL PRICE'];
+      sh.forEach((h,k)=>{
+        const c=ws.getCell(row,k+1);
+        c.value=h; c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};
+        fill(c,_XL.bomHead); c.border=_xlBoxed;
+        c.alignment={vertical:'middle',horizontal:k?'center':'left'};
+      });
+      row++;
+      groups.forEach((g,k)=>{
+        const vals=[g.dwg,g.rows.length,+g.partsTotal.toFixed(2),+g.laborCost.toFixed(2),
+                    +g.subtotal.toFixed(2),g.profitPct/100,+g.final.toFixed(2)];
+        vals.forEach((v,ci)=>{
+          const c=ws.getCell(row,ci+1);
+          c.value=v; c.border=_xlBoxed; c.font={size:10};
+          if(ci>=2&&ci!==5) c.numFmt='$#,##0.00';
+          if(ci===5) c.numFmt='0%';
+          c.alignment={vertical:'middle',horizontal:ci?'right':'left'};
+          if(k%2===1) fill(c,_XL.bomBand);
+        });
+        row++;
+      });
+      // Grand total sits in the same table, so the columns line up under it.
+      const gv=['GRAND TOTAL',sdItems.length,+partsTotal.toFixed(2),+laborCost.toFixed(2),
+                +subtotal.toFixed(2),null,+final.toFixed(2)];
+      gv.forEach((v,ci)=>{
+        const c=ws.getCell(row,ci+1);
+        if(v!==null) c.value=v;
+        c.font={bold:true,size:11,color:{argb:'FFFFFFFF'}};
+        fill(c,_XL.final); c.border=_xlBoxed;
+        if(ci>=2&&ci!==5) c.numFmt='$#,##0.00';
+        c.alignment={vertical:'middle',horizontal:ci?'right':'left'};
+      });
+      ws.getRow(row).height=22;
+      row+=2;
+    }
+
+    let itemNo=0;
+    const bomHeaderRow=()=>{
+      const hr=row;
+      COLS.forEach((h,i2)=>{
+        const c=ws.getCell(row,i2+1);
+        c.value=h;
+        c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};
+        fill(c,_XL.bomHead);
+        c.alignment={vertical:'middle',horizontal:i2>=5?'center':'left',wrapText:true};
+        c.border=_xlBoxed;
+      });
       ws.getRow(row).height=24;
       row++;
+      return hr;
+    };
 
-      merge(row,1,LAST);
-      const note=ws.getCell(row,1);
-      note.value=`${missingToolRows.length} tool(s) are not in stock and must be purchased to build this cable. Quoted separately below.`;
-      note.font={size:10,color:{argb:'FF92400E'}};
-      note.alignment={vertical:'middle',indent:1};
-      for(let c=1;c<=LAST;c++) fill(ws.getCell(row,c),_XL.warn);
-      row++;
+    let firstHeaderRow=0;
+    groups.forEach(g=>{
+      secTitle(`DRAWING ${g.dwg}   —   ${g.rows.length} row${g.rows.length===1?'':'s'}`,'FF334155');
+      const hr=bomHeaderRow();
+      if(!firstHeaderRow) firstHeaderRow=hr;
 
-      missingToolRows.forEach(r=>{
-        ws.getCell(row,2).value=r.part_number||'';
-        merge(row,3,LAST-2);
-        ws.getCell(row,3).value=r.description||'';
-        const v=ws.getCell(row,LAST-1);
-        v.value=+(r.total||0); v.numFmt='$#,##0.00';
-        v.alignment={horizontal:'right'};
-        for(let c=1;c<=LAST;c++){
-          const cell=ws.getCell(row,c);
-          fill(cell,_XL.tool); cell.border=_xlBoxed;
-          cell.font={size:10,color:{argb:'FF92400E'}};
+      g.rows.forEach((r,i)=>{
+        const isTool=_sdIsToolRow(r);
+        itemNo++;
+        const stockVal=v=>{ const x=r[v]; return (x===undefined||x===null||x==='') ? null : (parseInt(x,10)||0); };
+        const vals=[itemNo, r.drawing_number||'', r.part_number||'', r.description||'',
+                    r.manufacturer||'',
+                    parseFloat(r.qty)||0, r.unit||'',
+                    _sdLineCost(r,'mouser_price')||null,  stockVal('mouser_stock'),
+                    _sdLineCost(r,'digikey_price')||null, stockVal('digikey_stock'),
+                    _sdLineCost(r,'priority_price')||null,
+                    +(r.total||0), +(r.labor_total||0)];
+        vals.forEach((v,ci)=>{
+          const c=ws.getCell(row,ci+1);
+          c.value=v;
+          c.font={size:10, color:{argb:isTool?'FF92400E':'FF0F172A'}, italic:isTool};
+          c.border=_xlBoxed;
+          if(ci===7||ci===9||ci===11) c.numFmt='$#,##0.00';
+          if(ci===12) c.numFmt='$#,##0.00';
+          if(ci===8||ci===10) c.numFmt='#,##0';
+          if(ci===13) c.numFmt='0.0';
+          if(ci===5)  c.numFmt='#,##0.###';
+          let matchFlagged=false;
+          if(ci===7||ci===9){
+            const cfg = ci===7 ? {code:'mouser_match', mpn:'mouser_mpn', name:'Mouser'}
+                               : {code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey'};
+            const code=r[cfg.code]||'';
+            if(code==='approx'){
+              c.font={...c.font, color:{argb:'FF92400E'}};
+              matchFlagged=true;
+              c.note=`Matched as "${r[cfg.mpn]||''}" on ${cfg.name} — different punctuation/zero-padding to "${r.part_number||''}". Verify before quoting.`;
+            } else if(code==='noprice'){
+              c.value=null; matchFlagged=true;
+              c.note=`${cfg.name} lists this part but publishes no price (non-stocked / quote-only).`;
+            }
+          }
+          c.alignment={vertical:'middle',
+                       horizontal: (ci===3||ci===4)?'left':(ci>=5?'right':'left'),
+                       wrapText: ci===3};
+          if(matchFlagged) fill(c,'FFFFFBEB');
+          else if(isTool) fill(c,_XL.tool);
+          else if(i%2===1) fill(c,_XL.bomBand);
+        });
+        if(isTool){
+          ws.getCell(row,1).border={..._xlBoxed,left:{style:'medium',color:{argb:_XL.toolEdge}}};
+          ws.getCell(row,4).value=`${r.description||''}   [TOOL — not from customer BOM]`;
         }
         row++;
       });
-      money('TOOLS TOTAL (separate)',+toolsTotal.toFixed(2),
-            {bold:true,size:12,bg:_XL.warn,fg:'FF92400E',height:22});
+
+      // This drawing's own price build-up, immediately under its parts.
+      money('Parts Total',+g.partsTotal.toFixed(2));
+      money(`Labor  (${(+g.laborMinutes).toFixed(1)} min × $${g.rate}/min)`,+g.laborCost.toFixed(2));
+      money('Subtotal',+g.subtotal.toFixed(2),{bold:true});
+      money(`Profit (${g.profitPct}%)`,+(g.final-g.subtotal).toFixed(2));
+      money(`FINAL PRICE — ${g.dwg}`,+g.final.toFixed(2),
+            {bold:true,size:13,bg:_XL.final,fg:'FFFFFFFF',height:24});
+
+      if(g.missingToolRows.length){
+        merge(row,1,LAST);
+        const w=ws.getCell(row,1);
+        w.value=`⚠  ${g.dwg}: final price does NOT include ${g.missingToolRows.length} manufacturing tool(s) — quoted separately below`;
+        w.font={bold:true,size:12,color:{argb:'FF92400E'}};
+        w.alignment={vertical:'middle',indent:1};
+        for(let c=1;c<=LAST;c++){
+          fill(ws.getCell(row,c),_XL.warn);
+          ws.getCell(row,c).border={top:{style:'medium',color:{argb:_XL.warnEdge}},
+                                    bottom:{style:'medium',color:{argb:_XL.warnEdge}}};
+        }
+        ws.getRow(row).height=22; row++;
+        g.missingToolRows.forEach(r=>{
+          ws.getCell(row,2).value=r.part_number||'';
+          merge(row,3,LAST-2);
+          ws.getCell(row,3).value=r.description||'';
+          const v=ws.getCell(row,LAST-1);
+          v.value=+(r.total||0); v.numFmt='$#,##0.00'; v.alignment={horizontal:'right'};
+          for(let c=1;c<=LAST;c++){
+            const cell=ws.getCell(row,c);
+            fill(cell,_XL.tool); cell.border=_xlBoxed; cell.font={size:10,color:{argb:'FF92400E'}};
+          }
+          row++;
+        });
+        money(`TOOLS TOTAL — ${g.dwg} (separate)`,+g.toolsTotal.toFixed(2),
+              {bold:true,size:11,bg:_XL.warn,fg:'FF92400E',height:20});
+      }
+      row++;   // breathing room before the next drawing
+    });
+
+    // ── Grand total, restated at the end ──
+    if(groups.length>1){
+      secTitle('GRAND TOTAL — ALL DRAWINGS','FF334155');
+      money('Parts Total (all drawings)',+partsTotal.toFixed(2));
+      money('Labor Cost (all drawings)',+laborCost.toFixed(2));
+      money('Subtotal (all drawings)',+subtotal.toFixed(2),{bold:true});
+      money('TOTAL FINAL PRICE',+final.toFixed(2),
+            {bold:true,size:15,bg:_XL.final,fg:'FFFFFFFF',height:28});
+      if(missingToolRows.length){
+        money(`TOOLS TOTAL — all drawings (NOT in the price)`,+toolsTotal.toFixed(2),
+              {bold:true,size:12,bg:_XL.warn,fg:'FF92400E',height:22});
+      }
       row++;
     }
+
+    if(firstHeaderRow){
+      ws.views=[{state:'frozen',ySplit:firstHeaderRow,showGridLines:false}];
+    }
+
 
     // ── Footer ────────────────────────────────────────────────────────────
     merge(row,1,LAST);
