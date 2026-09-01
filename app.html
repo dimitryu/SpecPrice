@@ -430,7 +430,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.8.95';
+const APP_VER   = '1.8.96';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -939,18 +939,24 @@ async function loadParts(){
 }
 
 const _PS_DEFAULT_COLS=[
-  {k:'part_number',   l:'MNF P/N',    w:'120px'},
+  // Canonical column order, shared with Sales Desk and the Check Price modal
+  // (see _SD_DEFAULT_COLS): identity → description → maker → quantity → prices.
+  // Each vendor's stock sits immediately beside that vendor's price, because
+  // a price you can't buy is worth knowing about at a glance.
   {k:'drawing_number',l:'Drawing #',       w:'100px'},
+  {k:'part_number',   l:'MNF P/N',    w:'120px'},
   {k:'drawing_name',  l:'Drawing Name',    w:'130px'},
   {k:'atlantium_pn',  l:'Customer PN',     w:'100px'},
   {k:'description',   l:'Description',     w:'200px',wrap:true},
   {k:'manufacturer',  l:'Manufacturer',    w:'110px'},
-  {k:'mouser_price',  l:'Mouser Price',     w:'95px'},
-  {k:'digikey_price', l:'DigiKey Price',    w:'95px'},
-  {k:'priority_price',l:'Priority Price',   w:'95px'},
-  {k:'own_stock',     l:'Stock',            w:'60px'},
   {k:'qty',           l:'QTY',              w:'55px'},
   {k:'unit',          l:'Units',            w:'55px'},
+  {k:'mouser_price',  l:'Mouser Price',     w:'95px'},
+  {k:'mouser_stock',  l:'Mouser Stock',     w:'85px'},
+  {k:'digikey_price', l:'DigiKey Price',    w:'95px'},
+  {k:'digikey_stock', l:'DigiKey Stock',    w:'85px'},
+  {k:'priority_price',l:'Priority Price',   w:'95px'},
+  {k:'own_stock',     l:'In Stock (ours)',  w:'95px'},
   {k:'rfq_names',     l:'RFQ',             w:'140px',wrap:true},
   {k:'pin_count',       l:'Pins',           w:'55px'},
   {k:'updatedAt',     l:'Updated',          w:'90px'},
@@ -1050,6 +1056,18 @@ function _matchMarkerHTML(row, field){
   return '';
 }
 
+// Stock reads differently from a price: 0 is a real, actionable answer and an
+// empty cell means "this vendor doesn't list the part at all". Amber for a
+// listed-but-empty vendor so it's visible without hunting.
+function _stockCellHTML(row, field){
+  const raw=row[field];
+  if(raw===undefined || raw===null || raw==='') return '<span style="color:var(--muted)">—</span>';
+  const n=parseInt(raw,10)||0;
+  return n>0
+    ? `<span title="Units on hand">${n.toLocaleString()}</span>`
+    : `<span style="color:#B45309;font-weight:600" title="Listed by this vendor, but none in stock">0</span>`;
+}
+
 function _priceCellHTML(row, field){
   const unit=parseFloat(row[field])||0;
   const mine=unit ? _priceRankValue(row, field) : 0;
@@ -1079,6 +1097,8 @@ function _psCellHTML(k,p){
     case 'priority_price':
     case 'mouser_price':
     case 'digikey_price': return _priceCellHTML(p,k);
+    case 'mouser_stock':
+    case 'digikey_stock': return _stockCellHTML(p,k);
     case 'unit': return esc(p.unit||p.units||'');
     case 'rfq_names': return esc((p.rfq_names||[]).join(', '));
     case 'updatedAt': return fmtDate(p.updatedAt);
@@ -1144,6 +1164,21 @@ async function purgeLegacyFindChipsFields(){
   }
 }
 
+// The same legend the Sales Desk and Check Price modal carry. These markers
+// appear on Database price cells too, and a symbol whose meaning lives on
+// another screen may as well not be there.
+const _PRICE_LEGEND_HTML = `
+  <div style="padding:7px 12px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);
+       display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center">
+    <span>Mouser / DigiKey price:</span>
+    <span><strong style="color:var(--green)">✓</strong> exact part number</span>
+    <span><strong style="color:#B45309">✓ ≈</strong> matched under a differently formatted part number — hover to see which</span>
+    <span><strong style="color:#B45309">◑</strong> listed, but no published price</span>
+    <span><strong style="color:#7C3AED">✓n</strong> n manufacturers share this part number — chosen by description match</span>
+    <span><strong style="color:#B45309">≈$n</strong> descriptions didn't separate them — cheapest taken; hover to see all n</span>
+    <span><strong style="color:#B45309">Stock 0</strong> listed, none on hand · <strong>—</strong> not listed by that vendor</span>
+  </div>`;
+
 async function renderPartStock(filter=''){
   setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading parts…</div>`);
   setActions('');
@@ -1208,6 +1243,7 @@ async function renderPartStock(filter=''){
       </tr></thead>
       <tbody>${rows||`<tr class="empty-row"><td colspan="${COLS.length+1}">No parts found</td></tr>`}</tbody>
     </table></div>
+    ${_PRICE_LEGEND_HTML}
     ${_buildPager(psPage,totalPages,'ps')}`);
 
   const inp=document.getElementById('ps-search');
@@ -3354,10 +3390,12 @@ async function runFCCheckModal(items, mode){
         <table style="width:100%;font-size:12px" id="fc-res-table">
           <thead><tr style="position:sticky;top:0;background:#fff">
             <th>MNF P/N</th><th>Manufacturer</th><th>QTY</th>
-            <th title="Total for the row's QTY, not a per-unit price">DigiKey</th>
             <th title="Total for the row's QTY, not a per-unit price">Mouser</th>
+            <th title="Units Mouser has on hand">Mouser Stock</th>
+            <th title="Total for the row's QTY, not a per-unit price">DigiKey</th>
+            <th title="Units DigiKey has on hand">DigiKey Stock</th>
             <th title="Total for the row's QTY, not a per-unit price">Priority</th>
-            <th>Stock</th><th>Status</th>
+            <th>Status</th>
           </tr></thead>
           <tbody id="fc-res-tbody">
             ${items.map((it,i)=>`<tr id="fc-row-${i}">
@@ -3366,10 +3404,11 @@ async function runFCCheckModal(items, mode){
                 : ''}</td>
               <td id="fc-mf-${i}" style="color:var(--muted)">${esc(it.manufacturer||'')||'—'}</td>
               <td>${it.qty||1}</td>
-              <td id="fc-dk-${i}" style="color:var(--muted)">—</td>
               <td id="fc-mo-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-ms-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-dk-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-ds-${i}" style="color:var(--muted)">—</td>
               <td id="fc-pr-${i}" style="color:var(--muted)">${money(_lineCost(it,'priority_price',parseFloat(it.priority_price)||0))||'—'}</td>
-              <td id="fc-s-${i}" style="color:var(--muted)">—</td>
               <td id="fc-st-${i}"><span class="ring" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle"></span></td>
             </tr>`).join('')}
           </tbody>
@@ -3390,7 +3429,7 @@ async function runFCCheckModal(items, mode){
         <div style="display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:4px;border-top:1px dashed var(--border);padding-top:5px">
           <span><strong>Prices are the TOTAL for the row's QTY</strong>, not per unit — that's the only basis on which the three sources compare (Priority quotes per metre, the distributors per foot)</span>
           <span><strong style="color:var(--green)">green</strong> = cheapest of the three, <strong style="color:var(--red)">red</strong> = dearest</span>
-          <span><strong>Stock 0</strong> = the vendor carries it but has none on hand</span>
+          <span><strong>Stock 0</strong> = that vendor carries it but has none on hand; <strong>—</strong> = that vendor doesn't list it</span>
         </div>
       </div>
     </div>
@@ -3513,15 +3552,24 @@ async function runFCCheckModal(items, mode){
         _lineCost(it,'mouser_price',moNum),
         _lineCost(it,'priority_price',prPrice));
 
-      // Stock is shown for every listed part, in stock or not — 0 is a useful
-      // answer ("they carry it, none on hand"), quite different from a blank.
-      const stockNum = r.best ? (parseInt(r.best.stock,10)||0) : 0;
-      const sEl=document.getElementById(`fc-s-${i}`);
-      if(sEl && r.best){
-        sEl.textContent=stockNum>0?String(stockNum):'0';
-        sEl.style.color = stockNum>0 ? 'var(--text)' : 'var(--muted)';
-        sEl.title = stockNum>0 ? '' : 'Listed by the distributor, none currently in stock';
-      }
+      // Stock PER VENDOR. A single "Stock" column showed only whichever vendor
+      // won on price, so you could not tell whether the other one had any —
+      // which is the first thing you need when the cheapest source is empty.
+      // 0 stays meaningful ("they carry it, none on hand"), distinct from blank
+      // ("this vendor doesn't list it").
+      const stockOf = v => v ? String(parseInt(v.stock,10)||0) : '';
+      const mouserStock  = stockOf(r.mouser);
+      const digikeyStock = stockOf(r.digikey);
+      const paintStock=(id,val)=>{
+        const el=document.getElementById(id); if(!el) return;
+        if(val===''){ el.textContent='—'; el.style.color='var(--muted)'; el.title=''; return; }
+        const n=parseInt(val,10)||0;
+        el.textContent=n>0?n.toLocaleString():'0';
+        el.style.color = n>0 ? 'var(--text)' : '#B45309';
+        el.title = n>0 ? '' : 'Listed by this vendor, none currently in stock';
+      };
+      paintStock(`fc-ms-${i}`, mouserStock);
+      paintStock(`fc-ds-${i}`, digikeyStock);
 
       if(!r.best){
         setStatus(i,'Not found','var(--muted)',
@@ -3590,12 +3638,15 @@ async function runFCCheckModal(items, mode){
                          price:+c.price||0})) : [],
       };
 
-      const stock=String(stockNum);
+      const stockFields={ mouser_stock:mouserStock, digikey_stock:digikeyStock };
+      // Legacy single field kept in step with the winning vendor so older rows
+      // and any code still reading `stock` don't suddenly go blank.
+      const stock=String(r.best ? (parseInt(r.best.stock,10)||0) : 0);
       if(mode==='parts'){
         if(it._id){
           try{
             const patch={
-              mouser_price:moNum, digikey_price:dkNum, ...matchFields,
+              mouser_price:moNum, digikey_price:dkNum, ...matchFields, ...stockFields,
               stock, updatedAt:serverTimestamp(), qty:1
             };
             if(newMfr) patch.manufacturer=newMfr;
@@ -3608,7 +3659,7 @@ async function runFCCheckModal(items, mode){
             const ap=allParts.find(p=>p._id===it._id);
             if(ap){
               ap.mouser_price=moNum; ap.digikey_price=dkNum; ap.stock=stock;
-              Object.assign(ap, matchFields);
+              Object.assign(ap, matchFields, stockFields);
               if(newMfr) ap.manufacturer=newMfr;
               if(patch.part_number){ ap.part_number=patch.part_number; ap.manufacturer=chosenMfr||ap.manufacturer; }
             }
@@ -3619,7 +3670,7 @@ async function runFCCheckModal(items, mode){
         if(sdIdx!==undefined&&sdItems[sdIdx]){
           sdItems[sdIdx].mouser_price=moNum;
           sdItems[sdIdx].digikey_price=dkNum;
-          Object.assign(sdItems[sdIdx], matchFields);
+          Object.assign(sdItems[sdIdx], matchFields, stockFields);
           if(newMfr) sdItems[sdIdx].manufacturer=newMfr;
           if(candidates.length>1 && chosenPn && chosenPn!==sdItems[sdIdx].part_number){
             sdItems[sdIdx].part_number=chosenPn;
@@ -3634,24 +3685,24 @@ async function runFCCheckModal(items, mode){
             const existing=allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
             if(existing){
               const sdPatch={
-                mouser_price:moNum, digikey_price:dkNum, ...matchFields,
+                mouser_price:moNum, digikey_price:dkNum, ...matchFields, ...stockFields,
                 stock, updatedAt:serverTimestamp(), qty:1
               };
               if(newMfr) sdPatch.manufacturer=newMfr;
               await updateDoc(doc(db,'companies',companyId,'parts_cache',existing._id),sdPatch);
               existing.mouser_price=moNum; existing.digikey_price=dkNum; existing.stock=stock;
-              Object.assign(existing, matchFields);
+              Object.assign(existing, matchFields, stockFields);
               if(newMfr) existing.manufacturer=newMfr;
             } else {
               const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
               await setDoc(doc(db,'companies',companyId,'parts_cache',key),{
                 part_number:pn, description:'', drawing_number:'', manufacturer:newMfr||'',
-                unit:'', atlantium_pn:'', qty:1, stock, ...matchFields,
+                unit:'', atlantium_pn:'', qty:1, stock, ...matchFields, ...stockFields,
                 mouser_price:moNum, digikey_price:dkNum,
                 price_description:'', updatedAt:serverTimestamp()
               },{merge:true});
-              allParts.push({_id:key, part_number:pn, qty:1, stock,
-                mouser_price:moNum, digikey_price:dkNum});
+              allParts.push({_id:key, part_number:pn, qty:1, stock, ...matchFields, ...stockFields,
+                mouser_price:moNum, digikey_price:dkNum, manufacturer:newMfr||''});
             }
           }
         }catch(e){ console.warn('price->Database save error:',e.message); }
@@ -4270,16 +4321,20 @@ async function saveToolsImport(rows){
 // ══════════════════════════════════════════════════════════════════════════════
 // SALES DESK
 // ══════════════════════════════════════════════════════════════════════════════
+// Canonical column order — identical to the Database's (see the Part Stock
+// column list) so the same data reads the same way on every screen.
 const _SD_DEFAULT_COLS=[
-  {k:'part_number',    l:'MNF P/N',          w:'110px'},
   {k:'drawing_number', l:'Drawing #',       w:'100px'},
+  {k:'part_number',    l:'MNF P/N',          w:'110px'},
   {k:'description',    l:'Description',     w:'190px',wrap:true},
   {k:'manufacturer',   l:'Manufacturer',    w:'120px'},
   {k:'qty',            l:'QTY',             w:'75px'},
   {k:'unit',           l:'Units',           w:'55px'},
-  {k:'priority_price', l:'Priority Cost',  w:'95px'},
   {k:'mouser_price',   l:'Mouser Cost',     w:'95px'},
+  {k:'mouser_stock',   l:'Mouser Stock',    w:'85px'},
   {k:'digikey_price',  l:'DigiKey Cost',    w:'95px'},
+  {k:'digikey_stock',  l:'DigiKey Stock',   w:'85px'},
+  {k:'priority_price', l:'Priority Cost',  w:'95px'},
   {k:'total',          l:'Part Cost',       w:'85px'},
   {k:'labor_time',     l:'Labor Time',      w:'85px'},
 ];
@@ -4420,6 +4475,8 @@ function _sdCellHTML(k,r,i){
     case 'priority_price':
     case 'mouser_price':
     case 'digikey_price': return _priceCellHTML(r,k);
+    case 'mouser_stock':
+    case 'digikey_stock': return _stockCellHTML(r,k);
     // Part Cost is always editable — type a number to set/correct it directly
     // (see _sdRecalcTotal). Highlighted cyan when no source has a price and
     // there's no manual override yet, so missing-price rows are easy to spot.
@@ -4874,7 +4931,8 @@ let _sdFilterQ='';
 // Independent sort state for the Sales Desk table (separate from Part Stock's
 // sortCol/sortAsc, which is a different table with different columns).
 let _sdSortCol=null, _sdSortAsc=true;
-const _SD_NUMERIC_COLS=new Set(['qty','price','priority_price','mouser_price','digikey_price','total','labor_time']);
+const _SD_NUMERIC_COLS=new Set(['qty','priority_price','mouser_price','digikey_price',
+                                'mouser_stock','digikey_stock','total','labor_time']);
 // The 'labor_time' column now displays/edits the row's final total (see
 // _sdCellHTML/_sdRecalcLaborTotal), stored on r.labor_total, not r.labor_time
 // itself — sort on the value actually shown to the user.
@@ -5222,15 +5280,7 @@ async function renderSalesDesk(){
             <tbody id="sd-tbody"></tbody>
           </table>
         </div>
-        <div style="padding:7px 12px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);
-             display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center">
-          <span>Mouser / DigiKey price:</span>
-          <span><strong style="color:var(--green)">✓</strong> exact part number</span>
-          <span><strong style="color:#B45309">✓ ≈</strong> matched under a differently formatted part number — hover to see which</span>
-          <span><strong style="color:#B45309">◑</strong> listed, but no published price</span>
-          <span><strong style="color:#7C3AED">✓n</strong> n manufacturers share this part number — chosen by description match</span>
-          <span><strong style="color:#B45309">≈$n</strong> descriptions didn't separate them — cheapest taken; hover to see all n</span>
-        </div>
+        ${_PRICE_LEGEND_HTML}
         <div id="sd-notes-panel" style="display:none;padding:11px;border-top:1px solid var(--border)"></div>
         <!-- Labor estimation is a 5-15 second AI call. Without this the table
              just sits there and the button looks dead — the user has no way to
@@ -5998,10 +6048,11 @@ async function exportSalesDeskExcel(){
     });
 
     const COLS=['Item','Drawing #','MNF P/N','Description','Manufacturer','QTY','Units',
-                'Priority Cost','Mouser Cost','DigiKey Cost','Part Cost','Labor Time (min)'];
-    const LAST=COLS.length;                 // 12 columns, A..L
-    ws.columns=[{width:6},{width:18},{width:24},{width:42},{width:22},{width:9},{width:8},
-                {width:13},{width:13},{width:13},{width:12},{width:15}];
+                'Mouser Cost','Mouser Stock','DigiKey Cost','DigiKey Stock','Priority Cost',
+                'Part Cost','Labor Time (min)'];
+    const LAST=COLS.length;                 // 14 columns, A..N
+    ws.columns=[{width:6},{width:18},{width:24},{width:40},{width:22},{width:9},{width:8},
+                {width:13},{width:12},{width:13},{width:12},{width:13},{width:12},{width:15}];
 
     const merge=(r,c1,c2)=>ws.mergeCells(r,c1,r,c2);
     const fill=(cell,argb)=>{cell.fill={type:'pattern',pattern:'solid',fgColor:{argb}};};
@@ -6088,6 +6139,7 @@ async function exportSalesDeskExcel(){
     const firstBomRow=row;
     sdItems.forEach((r,i)=>{
       const isTool=_sdIsToolRow(r);
+      const stockVal=v=>{ const x=r[v]; return (x===undefined||x===null||x==='') ? null : (parseInt(x,10)||0); };
       const vals=[i+1, r.drawing_number||'', r.part_number||'', r.description||'',
                   r.manufacturer||'',
                   parseFloat(r.qty)||0, r.unit||'',
@@ -6095,22 +6147,24 @@ async function exportSalesDeskExcel(){
                   // on screen. Writing per-unit prices here while the Sales Desk
                   // shows costs would have the quote disagree with the app it
                   // came from.
+                  _sdLineCost(r,'mouser_price')||null,  stockVal('mouser_stock'),
+                  _sdLineCost(r,'digikey_price')||null, stockVal('digikey_stock'),
                   _sdLineCost(r,'priority_price')||null,
-                  _sdLineCost(r,'mouser_price')||null,
-                  _sdLineCost(r,'digikey_price')||null,
                   +(r.total||0), +(r.labor_total||0)];
       vals.forEach((v,ci)=>{
         const c=ws.getCell(row,ci+1);
         c.value=v;
         c.font={size:10, color:{argb:isTool?'FF92400E':'FF0F172A'}, italic:isTool};
         c.border=_xlBoxed;
-        if(ci>=7&&ci<=10) c.numFmt='$#,##0.00';
+        if(ci===7||ci===9||ci===11) c.numFmt='$#,##0.00';   // Mouser / DigiKey / Priority
+        if(ci===12) c.numFmt='$#,##0.00';                    // Part Cost
+        if(ci===8||ci===10) c.numFmt='#,##0';                // stock counts
         // Carry the match quality into the file. A printed quote has no
         // tooltips, so an approximate match would otherwise be indistinguishable
         // from an exact one — an amber cell and a cell note make it visible.
         let matchFlagged=false;
-        if(ci===8||ci===9){
-          const cfg = ci===8 ? {code:'mouser_match', mpn:'mouser_mpn', name:'Mouser'}
+        if(ci===7||ci===9){
+          const cfg = ci===7 ? {code:'mouser_match', mpn:'mouser_mpn', name:'Mouser'}
                              : {code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey'};
           const code=r[cfg.code]||'';
           if(code==='approx'){
@@ -6123,8 +6177,8 @@ async function exportSalesDeskExcel(){
             c.note=`${cfg.name} lists this part but publishes no price (non-stocked / quote-only).`;
           }
         }
-        if(ci===11) c.numFmt='0.0';
-        if(ci===5)  c.numFmt='#,##0.###';
+        if(ci===13) c.numFmt='0.0';                          // Labor Time
+        if(ci===5)  c.numFmt='#,##0.###';                    // QTY
         c.alignment={vertical:'middle',
                      horizontal: (ci===3||ci===4)?'left':(ci>=5?'right':'left'),
                      wrapText: ci===3};
