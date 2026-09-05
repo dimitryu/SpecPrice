@@ -222,6 +222,31 @@
     .cs-foot { margin-top:28px; padding:12px 0 26px; border-top:1px solid #E4E5E7;
                font-size:11.5px; color:#334155; display:flex; justify-content:space-between; gap:18px; }
 
+    /* ── Edit mode ── */
+    .cs-edit-bar { background:#EFF6FF; border-bottom:1px solid #BFDBFE; color:#1E3A8A;
+                   padding:10px 34px; font-size:12.5px; display:flex; flex-wrap:wrap;
+                   align-items:center; gap:6px 16px; }
+    .cs-edit-bar b { font-weight:800; }
+    .cs-edit-lang { opacity:.8; font-style:italic; }
+    .cs-in { font:inherit; font-size:13px; color:#0F172A; background:#fff;
+             border:1px solid #93C5FD; border-radius:4px; padding:4px 7px; width:100%;
+             box-sizing:border-box; }
+    .cs-in:focus { outline:2px solid #2563EB; outline-offset:-1px; border-color:#2563EB; }
+    textarea.cs-in { resize:vertical; line-height:1.45; }
+    .cs-in-num { width:88px; direction:ltr; text-align:center;
+                 font-family:ui-monospace,Menlo,Consolas,monospace; }
+    .cs-unit { font-size:12px; color:#334155; margin-inline-start:4px; }
+    .cs-chk-lbl { display:inline-flex; align-items:center; gap:5px; font-size:12px;
+                  color:#15803D; font-weight:700; margin-inline-start:8px; cursor:pointer;
+                  white-space:nowrap; }
+    .cs-chk-lbl input { cursor:pointer; }
+    .cs-del-btn { border:1px solid #FCA5A5; background:#FEF2F2; color:#B91C1C;
+                  border-radius:4px; font-size:11px; line-height:1; padding:3px 6px;
+                  cursor:pointer; margin-inline-end:7px; }
+    .cs-del-btn:hover { background:#DC2626; color:#fff; border-color:#DC2626; }
+    /* An in-progress edit must never reach paper. */
+    @media print { .cs-edit-bar, .cs-del-btn, .cs-chk-lbl { display:none !important; } }
+
     /* Printing the sheet must produce the sheet and nothing else — no topbar,
        no Support button, no shadows eating toner. */
     @media print {
@@ -520,7 +545,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.9.0';
+const APP_VER   = '1.9.1';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7693,14 +7718,26 @@ function _csNum(v){ const n=parseFloat(v); return Number.isFinite(n)?n:null; }
 function _csMM(v){ const n=_csNum(v); return n==null ? '—' : (Math.round(n*100)/100)+' mm'; }
 
 // ── Translation ───────────────────────────────────────────────────────────────
-// Same model as the Labor Breakdown dialog: English is the source of truth and
-// is ALWAYS what opens. Translation is a per-viewing choice the operator makes
-// by pressing a button, not a saved setting — quietly reopening in a language
-// somebody picked last week would hide the fact that the underlying spec is
-// English. The translated STRINGS are cached across sessions, which is just a
-// cost/latency optimisation and invisible.
+// This screen behaves differently from the Labor Breakdown dialog, on purpose.
+// A breakdown is read by whoever is quoting; a cut & strip sheet is read at the
+// bench, by the same people, every day. So Hebrew is the default and the choice
+// STICKS: making an operator press a language button every single time they open
+// a work instruction is friction with no upside.
+//
+// English remains the stored source of truth — the AI produces English, and
+// Hebrew and Russian are translations of it. That matters for editing: see
+// _csT and _csCollectEdits.
 const _CS_CACHE_KEY='cut_strip_tr_cache';
-let _csLang='en';
+const _CS_LANG_KEY='cut_strip_lang';
+let _csLang = (()=>{
+  try{ const v=localStorage.getItem(_CS_LANG_KEY); return ['en','he','ru'].includes(v) ? v : 'he'; }
+  catch{ return 'he'; }
+})();
+function _csSetLang(l){
+  _csLang=l;
+  try{ localStorage.setItem(_CS_LANG_KEY,l); }
+  catch(e){ console.warn('[CutStrip] language choice not saved:', e.message); }
+}
 let _csCache = (()=>{
   try{ const c=JSON.parse(localStorage.getItem(_CS_CACHE_KEY))||{}; return {he:c.he||{}, ru:c.ru||{}}; }
   catch{ return {he:{}, ru:{}}; }
@@ -7746,6 +7783,15 @@ const _CS_LABELS={
     'Prepared by':'הוכן על ידי','Checked by — Engineering':'נבדק על ידי — הנדסה','Approved for production':'אושר לייצור',
     'Print':'הדפסה','Export PDF':'ייצוא PDF','Back':'חזרה','Delete':'מחיקה','Re-analyse':'ניתוח מחדש',
     'Translating…':'מתרגם…','Page':'עמוד','of':'מתוך',
+    'Edit':'עריכה','Save':'שמירה','Cancel':'ביטול','Saving…':'שומר…',
+    'Confirmed':'מאומת','Add step':'הוסף שלב','Add check':'הוסף בדיקה','Remove':'הסר',
+    'Editing':'מצב עריכה',
+    'Tick Confirmed once a dimension is verified against a datasheet — the red TBC marking disappears from the sheet and the diagrams.':
+      'סמן "מאומת" ברגע שמידה אומתה מול datasheet — הסימון האדום TBC ייעלם מהמפרט ומהשרטוטים.',
+    'You are editing the Hebrew wording. The English source is kept unchanged; your wording is saved for this specification.':
+      'אתה עורך את הנוסח בעברית. מקור האנגלית נשמר ללא שינוי; הנוסח שלך נשמר עבור המפרט הזה.',
+    'You are editing the English source. Existing Hebrew and Russian wording for anything you change will be re-translated.':
+      'אתה עורך את מקור האנגלית. נוסח קיים בעברית וברוסית עבור מה שתשנה יתורגם מחדש.',
     'CRITICAL':'קריטי',
     'Generated by AI from the drawing — verify against the drawing before use.':
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
@@ -7780,6 +7826,15 @@ const _CS_LABELS={
     'Prepared by':'Подготовил','Checked by — Engineering':'Проверил — инженер','Approved for production':'Допущено к производству',
     'Print':'Печать','Export PDF':'Экспорт PDF','Back':'Назад','Delete':'Удалить','Re-analyse':'Проанализировать заново',
     'Translating…':'Перевод…','Page':'Стр.','of':'из',
+    'Edit':'Редактировать','Save':'Сохранить','Cancel':'Отмена','Saving…':'Сохранение…',
+    'Confirmed':'Подтверждено','Add step':'Добавить шаг','Add check':'Добавить проверку','Remove':'Удалить',
+    'Editing':'Режим редактирования',
+    'Tick Confirmed once a dimension is verified against a datasheet — the red TBC marking disappears from the sheet and the diagrams.':
+      'Отметьте «Подтверждено», когда размер сверен с datasheet — красная пометка TBC исчезнет из спецификации и с чертежей.',
+    'You are editing the Hebrew wording. The English source is kept unchanged; your wording is saved for this specification.':
+      'Вы редактируете формулировку. Английский источник остаётся без изменений; ваш текст сохраняется для этой спецификации.',
+    'You are editing the English source. Existing Hebrew and Russian wording for anything you change will be re-translated.':
+      'Вы редактируете английский источник. Существующие переводы изменённых строк будут переведены заново.',
     'CRITICAL':'ВАЖНО',
     'Generated by AI from the drawing — verify against the drawing before use.':
       'Сгенерировано ИИ по чертежу — сверьте с чертежом перед применением.',
@@ -7787,10 +7842,40 @@ const _CS_LABELS={
 };
 // Never blocks, never throws. An untranslated line is far better than a broken
 // sheet, so anything missing falls through to the English original.
+//
+// Lookup order matters. A human override saved on THIS spec beats the shared
+// machine-translation cache, and both beat the English original. That is what
+// makes "edit the Hebrew wording and have it stay fixed" work: the operator's
+// correction is stored against the spec, so re-opening — or someone else opening
+// it — sees the corrected wording rather than the machine's first attempt.
 function _csT(text){
   if(_csLang==='en') return text;
   const t=String(text||'');
-  return (_CS_LABELS[_csLang]||{})[t] || (_csCache[_csLang]||{})[t] || t;
+  const ov=(csCurrent && csCurrent.overrides && csCurrent.overrides[_csLang]) || {};
+  return ov[t] || (_CS_LABELS[_csLang]||{})[t] || (_csCache[_csLang]||{})[t] || t;
+}
+
+// Makes sure every prose string on a spec has a translation before the sheet is
+// drawn in Hebrew or Russian. Called on OPEN, not just when the language button
+// is pressed, because the default is now Hebrew — without this, the first view
+// of a new spec would be a half-translated page.
+//
+// Deliberately non-fatal: if the translation call fails, the sheet still opens,
+// in English, with the reason shown. A work instruction that renders in the
+// wrong language is usable; one that refuses to render is not.
+async function _csEnsureLang(spec, lang){
+  if(lang==='en' || !spec) return true;
+  const ov=(spec.overrides&&spec.overrides[lang])||{};
+  const bucket=_csCache[lang]||{};
+  const todo=_csProseStrings(spec).filter(t=>!ov[t] && !bucket[t]);
+  if(!todo.length) return true;
+  try{ await _csTranslate(todo, lang); return true; }
+  catch(e){
+    console.warn('[CutStrip] auto-translate failed:', e.message);
+    toast(`Showing in English — translation failed: ${e.message}`,'error');
+    _csSetLang('en');
+    return false;
+  }
 }
 
 // Every free-text string on the sheet that came from the AI rather than from
@@ -8266,9 +8351,15 @@ async function renderCutStrip(){
     }).join('')}
     </tbody></table></div>`);
 
-  document.querySelectorAll('.cs-open').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.cs-open').forEach(b=>b.addEventListener('click',async()=>{
     const s=csSpecs.find(x=>x._id===b.dataset.id);
-    if(s){ csCurrent=s; _csLang='en'; renderCutStripSheet(); }
+    if(!s) return;
+    csCurrent=s; _csEditing=false; _csEditBackup=null;
+    // Hebrew is the default, so the translation has to be in hand BEFORE the
+    // first paint — otherwise the sheet flashes up half English.
+    b.disabled=true; b.textContent=_csT('Translating…');
+    await _csEnsureLang(s, _csLang);
+    renderCutStripSheet();
   }));
   document.querySelectorAll('.cs-del').forEach(b=>b.addEventListener('click',async()=>{
     const s=csSpecs.find(x=>x._id===b.dataset.id);
@@ -8364,11 +8455,15 @@ async function handleCSFile(file){
       {...spec, updatedAt:serverTimestamp(), createdBy:currentUserEmail||''}, {merge:false});
     logAudit('cut_strip_generated',{drawing:spec.drawing_number, unverified:_csTBCCount(spec)},true);
 
-    closeModal();
-    toast(`Specification created for ${spec.drawing_number}`,'success');
     csSpecs=[]; await loadCutStripSpecs(true);
     csCurrent=csSpecs.find(s=>s._id===id) || {_id:id, ...spec};
-    _csLang='en';
+    _csEditing=false; _csEditBackup=null;
+
+    setM('Translating…',96);
+    await _csEnsureLang(csCurrent, _csLang);
+
+    closeModal();
+    toast(`Specification created for ${spec.drawing_number}`,'success');
     renderCutStripSheet();
   }catch(e){
     console.error('[CutStrip]',e);
@@ -8392,16 +8487,161 @@ function _csDim(value, confirmed){
     : `<span style="font-weight:700">${esc(txt)}</span>`;
 }
 
+// ── Editing ───────────────────────────────────────────────────────────────────
+// The single most valuable edit on this screen is an engineer receiving the
+// manufacturer's assembly spec, typing the real strip dimension in, and ticking
+// Confirmed — at which point the red TBC marking disappears from the table AND
+// from the diagrams, because both read the same field. That loop is what turns
+// a provisional sheet into a released one, so it has to be two clicks, not a
+// re-analysis.
+//
+// Every editable control carries where it writes back to, so collection is one
+// generic pass over the DOM rather than a bespoke reader per field.
+let _csEditing=false;
+let _csEditBackup=null;   // deep copy taken on entering edit mode, for Cancel
+
+function _csGetPath(o,path){
+  return path.split('.').reduce((a,k)=>(a==null?a:a[k]), o);
+}
+function _csSetPath(o,path,val){
+  const p=path.split('.');
+  let cur=o;
+  for(let i=0;i<p.length-1;i++){ cur=cur[p[i]]; if(cur==null) return false; }
+  cur[p[p.length-1]]=val;
+  return true;
+}
+
+// Renders a value as plain text, or as an input when editing.
+function _csFNum(path, value, unit){
+  if(!_csEditing) return `<span class="cs-ltr">${esc(_csNum(value)==null?'—':value+(unit||''))}</span>`;
+  return `<input class="cs-in cs-in-num" type="number" step="any" data-cs-path="${esc(path)}" data-cs-type="num"
+            value="${_csNum(value)==null?'':esc(value)}">${unit?`<span class="cs-unit">${esc(unit)}</span>`:''}`;
+}
+// Language-independent strings — part numbers, refs, codes, settings. Saved as
+// typed, in whatever language the sheet happens to be showing.
+function _csFRaw(path, value){
+  if(!_csEditing) return esc(value||'');
+  return `<input class="cs-in cs-ltr" type="text" data-cs-path="${esc(path)}" data-cs-type="raw" value="${esc(value||'')}">`;
+}
+// Prose. Displayed translated; edited in whatever language is on screen. See
+// _csCollectEdits for where the edit actually lands.
+function _csFText(path, english, multiline){
+  const shown=_csT(english||'');
+  if(!_csEditing) return esc(shown);
+  const a=`data-cs-path="${esc(path)}" data-cs-type="text" data-cs-en="${esc(english||'')}"`;
+  return multiline
+    ? `<textarea class="cs-in" rows="${Math.min(6,Math.max(2,Math.ceil((shown.length||1)/90)))}" ${a}>${esc(shown)}</textarea>`
+    : `<input class="cs-in" type="text" ${a} value="${esc(shown)}">`;
+}
+function _csFChk(path, checked, label){
+  if(!_csEditing) return '';
+  return `<label class="cs-chk-lbl"><input type="checkbox" data-cs-path="${esc(path)}" data-cs-type="bool"
+            ${checked===true?'checked':''}> ${esc(label)}</label>`;
+}
+function _csDelBtn(act, idx){
+  return _csEditing ? `<button class="cs-del-btn" data-cs-act="${esc(act)}" data-cs-idx="${idx}"
+    title="${esc(_csT('Remove'))}">✕</button>` : '';
+}
+
+// C = A − B and friends. Without this, editing A from 4.0 to 4.5 would leave a
+// derived dimension that no longer adds up, and the sheet would quietly
+// contradict its own arithmetic — exactly the kind of error a work instruction
+// must never contain.
+function _csRecomputeDerived(end){
+  const rows=end.strip||[];
+  const real=rows.filter(r=>!r.derived && _csNum(r.value_mm)!=null)
+                 .map(r=>_csNum(r.value_mm)).sort((a,b)=>b-a);
+  if(real.length<2) return;
+  rows.filter(r=>r.derived).forEach(r=>{
+    r.value_mm = Math.round((real[0]-real[1])*1000)/1000;
+    // A derived value is only as trustworthy as the values it came from.
+    r.confirmed = rows.filter(x=>!x.derived).every(x=>x.confirmed===true);
+  });
+}
+
+// One pass over the DOM, writing every control back into csCurrent.
+function _csCollectEdits(){
+  const spec=csCurrent; if(!spec) return;
+  spec.overrides = spec.overrides || {};
+  document.querySelectorAll('#cs-sheet [data-cs-path]').forEach(el=>{
+    const path=el.dataset.csPath, type=el.dataset.csType;
+    if(type==='bool'){ _csSetPath(spec, path, !!el.checked); return; }
+    if(type==='num'){
+      const v=el.value.trim();
+      _csSetPath(spec, path, v==='' ? null : (Number.isFinite(parseFloat(v))?parseFloat(v):null));
+      return;
+    }
+    if(type==='raw'){ _csSetPath(spec, path, el.value.trim()); return; }
+    // type === 'text'
+    const en=el.dataset.csEn||'';
+    const val=(el.value!=null?el.value:el.textContent).trim();
+    if(_csLang==='en'){
+      if(val===en) return;
+      _csSetPath(spec, path, val);
+      // The old English is now gone, so any translation stored against it is
+      // orphaned. Drop it rather than leaving stale wording that can never be
+      // reached but still ships in the document.
+      ['he','ru'].forEach(L=>{ if(spec.overrides[L]) delete spec.overrides[L][en]; });
+    } else {
+      const shown=_csT(en);
+      if(val===shown) return;
+      (spec.overrides[_csLang] = spec.overrides[_csLang] || {})[en] = val;
+    }
+  });
+  (spec.ends||[]).forEach(_csRecomputeDerived);
+}
+
+function _csEnterEdit(){
+  _csEditBackup=JSON.parse(JSON.stringify(csCurrent));
+  _csEditing=true;
+  renderCutStripSheet();
+}
+function _csCancelEdit(){
+  if(_csEditBackup) csCurrent=_csEditBackup;
+  _csEditBackup=null; _csEditing=false;
+  renderCutStripSheet();
+}
+async function _csSaveSpec(){
+  const btn=document.getElementById('btn-cs-save');
+  if(btn){ btn.disabled=true; btn.textContent=_csT('Saving…'); }
+  try{
+    _csCollectEdits();
+    const {_id, ...body}=csCurrent;
+    await setDoc(doc(db,'companies',companyId,'cut_strip_specs',_id),
+      {...body, edited_by:currentUserEmail||'', edited_at:new Date().toISOString(),
+       updatedAt:serverTimestamp()}, {merge:false});
+    csCurrent.edited_by=currentUserEmail||'';
+    csCurrent.edited_at=new Date().toISOString();
+    logAudit('cut_strip_edited',{drawing:csCurrent.drawing_number, unverified:_csTBCCount(csCurrent)},true);
+    csSpecs=[];                       // list is now stale
+    _csEditBackup=null; _csEditing=false;
+    toast('Specification saved','success');
+    renderCutStripSheet();
+  }catch(e){
+    logAudit('cut_strip_edited',{drawing:csCurrent?.drawing_number, error:e.message},false);
+    toast('Save failed: '+e.message,'error');
+    // Deliberately stays in edit mode — dropping the user's unsaved changes
+    // because the network hiccuped would be worse than the failed save.
+    if(btn){ btn.disabled=false; btn.textContent='💾 '+_csT('Save'); }
+  }
+}
+
 function renderCutStripSheet(){
   const spec=csCurrent; if(!spec){ renderCutStrip(); return; }
   const T=_csT, rtl=_csRTL();
   const tbc=_csTBCCount(spec);
 
-  setActions(`
+  // Print and PDF are hidden while editing: exporting a half-typed sheet is
+  // never what someone means to do, and an unsaved export is a document that
+  // exists nowhere in the system.
+  setActions(_csEditing ? `
+    <button class="btn btn-sm btn-blue" id="btn-cs-save">💾 ${esc(T('Save'))}</button>
+    <button class="btn btn-sm btn-ghost" id="btn-cs-cancel">${esc(T('Cancel'))}</button>` : `
     <span style="display:inline-flex;gap:4px;margin-inline-end:10px">
       ${['en','he','ru'].map(L=>`<button class="btn btn-sm ${_csLang===L?'btn-blue':'btn-ghost'}"
           data-cs-lang="${L}" ${_csLang===L?'disabled':''}>${_CS_LANG_NAMES[L]}</button>`).join('')}
     </span>
+    <button class="btn btn-sm btn-ghost" id="btn-cs-edit">✎ ${esc(T('Edit'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-print">🖨 ${esc(T('Print'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-pdf">📄 ${esc(T('Export PDF'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-back">← ${esc(T('Back'))}</button>`);
@@ -8413,6 +8653,14 @@ function renderCutStripSheet(){
 
     <div class="cs-banner">${esc(T('Generated by AI from the drawing — verify against the drawing before use.'))}</div>
 
+    ${_csEditing ? `<div class="cs-edit-bar">
+      <b>✎ ${esc(T('Editing'))}</b>
+      <span>${esc(T('Tick Confirmed once a dimension is verified against a datasheet — the red TBC marking disappears from the sheet and the diagrams.'))}</span>
+      <span class="cs-edit-lang">${esc(T(_csLang==='en'
+        ? 'You are editing the English source. Existing Hebrew and Russian wording for anything you change will be re-translated.'
+        : 'You are editing the Hebrew wording. The English source is kept unchanged; your wording is saved for this specification.'))}</span>
+    </div>` : ''}
+
     <div class="cs-tb">
       <div class="cs-tb-l">
         <div class="cs-doc-t">${esc(T('Cut & Strip Specification'))}</div>
@@ -8423,8 +8671,12 @@ function renderCutStripSheet(){
         <dt>${esc(T('Revision'))}</dt><dd class="cs-ltr">${esc(spec.revision||'—')}</dd>
         <dt>${esc(T('Spec no.'))}</dt><dd class="cs-ltr">${esc(spec.spec_no||'')}</dd>
         <dt>${esc(T('Workmanship'))}</dt><dd class="cs-ltr">${esc(spec.standard||'—')}</dd>
-        <dt>${esc(T('Cable'))}</dt><dd class="cs-ltr">${esc(spec.cable?.part_number||'—')}</dd>
-        <dt>${esc(T('Cut length'))}</dt><dd class="cs-ltr">${esc(_csMM(spec.cable?.cut_length_mm))}</dd>
+        <dt>${esc(T('Cable'))}</dt><dd>${_csFRaw('cable.part_number', spec.cable?.part_number)}</dd>
+        <dt>${esc(T('Cut length'))}</dt><dd>${_csFNum('cable.cut_length_mm', spec.cable?.cut_length_mm, ' mm')}</dd>
+        ${_csEditing||_csNum(spec.cable?.cut_length_tolerance_mm)!=null ? `
+        <dt>± ${esc(T('Value'))}</dt><dd>${_csFNum('cable.cut_length_tolerance_mm', spec.cable?.cut_length_tolerance_mm, ' mm')}
+          ${_csFChk('cable.cut_length_tolerance_confirmed', spec.cable?.cut_length_tolerance_confirmed===true, T('Confirmed'))}
+          ${!_csEditing && spec.cable?.cut_length_tolerance_confirmed===false ? _csTBC() : ''}</dd>` : ''}
       </dl></div>
     </div>
 
@@ -8433,14 +8685,14 @@ function renderCutStripSheet(){
     <div class="cs-pad"><div class="cs-box cs-stop">
       <b>${esc(T('Do not cut production material'))}</b>
       <p>${esc(T('The dimensions below marked TBC were derived, not read from a manufacturer datasheet. Prove them on sample pieces and get engineering sign-off before the first production lot.'))}</p>
-      ${(spec.open_items||[]).length?`<ul>${spec.open_items.map(o=>
-        `<li><b>${esc(T(o.what||''))}</b> — ${esc(T(o.why||''))}${o.action?` <i>→ ${esc(T(o.action))}</i>`:''}</li>`).join('')}</ul>`:''}
+      ${(spec.open_items||[]).length?`<ul>${spec.open_items.map((o,i)=>
+        `<li>${_csDelBtn('del-open',i)}<b>${_csFText(`open_items.${i}.what`, o.what)}</b> — ${_csFText(`open_items.${i}.why`, o.why, true)}${(o.action||_csEditing)?` <i>→ ${_csFText(`open_items.${i}.action`, o.action)}</i>`:''}</li>`).join('')}</ul>`:''}
     </div></div>` : ''}
 
     ${(spec.discrepancies||[]).length ? `
     <div class="cs-pad"><div class="cs-box cs-warn">
       <b>${esc(T('Discrepancies found in the source drawing'))}</b>
-      <ul>${spec.discrepancies.map(d=>`<li><b>${esc(T(d.what||''))}</b> — ${esc(T(d.detail||''))}</li>`).join('')}</ul>
+      <ul>${spec.discrepancies.map((d,i)=>`<li>${_csDelBtn('del-disc',i)}<b>${_csFText(`discrepancies.${i}.what`, d.what)}</b> — ${_csFText(`discrepancies.${i}.detail`, d.detail, true)}</li>`).join('')}</ul>
     </div></div>` : ''}
 
     ${(spec.materials||[]).length ? `
@@ -8460,9 +8712,10 @@ function renderCutStripSheet(){
     <table class="cs-tbl">
       <thead><tr><th style="width:170px">${esc(T('Layer'))}</th><th style="width:140px">${esc(T('Nominal Ø'))}</th>
         <th style="width:120px">${esc(T('Material'))}</th><th>${esc(T('Note'))}</th></tr></thead>
-      <tbody>${layers.map(l=>`<tr><td>${esc(T(l.name||''))}</td>
-        <td class="cs-ltr">${esc(_csMM(l.od_mm))}</td><td class="cs-ltr">${esc(l.material||'')}</td>
-        <td>${esc(T(l.note||''))}</td></tr>`).join('')}
+      <tbody>${layers.map((l,i)=>`<tr><td>${_csFText(`cable.layers.${i}.name`, l.name)}</td>
+        <td class="cs-ctr">${_csFNum(`cable.layers.${i}.od_mm`, l.od_mm, ' mm')}</td>
+        <td>${_csFRaw(`cable.layers.${i}.material`, l.material)}</td>
+        <td>${_csFText(`cable.layers.${i}.note`, l.note, true)}</td></tr>`).join('')}
       </tbody></table>
       ${spec.cable?.layers_confirmed===false?`<p class="cs-note">${_csTBC()}</p>`:''}
     </div>` : ''}
@@ -8479,16 +8732,23 @@ function renderCutStripSheet(){
         <thead><tr><th style="width:60px">${esc(T('End'))}</th><th style="width:150px">${esc(T('Connector'))}</th>
           <th style="width:56px">#</th><th>${esc(T('Description'))}</th>
           <th style="width:190px">${esc(T('Value'))}</th><th style="width:280px">${esc(T('Basis'))}</th></tr></thead>
-        <tbody>${ends.flatMap(e=>(e.strip||[]).map((s,i)=>`<tr>
+        <tbody>${ends.flatMap((e,ei)=>(e.strip||[]).map((s,i)=>`<tr>
           <td class="cs-ctr cs-ltr"><b>${i===0?esc(e.ref||''):''}</b></td>
           <td class="cs-ltr">${i===0?esc(e.connector_pn||''):''}</td>
           <td class="cs-ctr cs-ltr"><b>${esc(s.code||'')}</b></td>
-          <td>${esc(T(s.label||''))}${s.derived?' <i style="opacity:.6">(derived)</i>':''}</td>
-          <td class="cs-ctr">${_csDim(s.value_mm, s.confirmed)}</td>
-          <td style="font-size:12px">${esc(T(s.basis||''))}</td></tr>`)).join('')}
+          <td>${_csFText(`ends.${ei}.strip.${i}.label`, s.label)}${s.derived?' <i style="opacity:.6">(derived)</i>':''}</td>
+          <td class="cs-ctr">${
+            // A derived dimension is arithmetic from the others, so it is never
+            // typed in — it recomputes on save. Offering an input here would
+            // invite an entry that the next save silently overwrites.
+            (_csEditing && !s.derived)
+              ? `${_csFNum(`ends.${ei}.strip.${i}.value_mm`, s.value_mm, ' mm')}
+                 ${_csFChk(`ends.${ei}.strip.${i}.confirmed`, s.confirmed===true, T('Confirmed'))}`
+              : _csDim(s.value_mm, s.confirmed)}</td>
+          <td style="font-size:12px">${_csFText(`ends.${ei}.strip.${i}.basis`, s.basis, true)}</td></tr>`)).join('')}
         </tbody></table>
-      ${ends.filter(e=>_csNum(e.strip_tolerance_mm)!=null).map(e=>
-        `<p class="cs-note">${esc(e.ref||'')} — tolerance <span class="cs-ltr">+0 / −${_csNum(e.strip_tolerance_mm)} mm</span></p>`).join('')}
+      ${ends.map((e,ei)=>(_csEditing||_csNum(e.strip_tolerance_mm)!=null)
+        ? `<p class="cs-note">${esc(e.ref||'')} — tolerance +0 / −${_csFNum(`ends.${ei}.strip_tolerance_mm`, e.strip_tolerance_mm, ' mm')}</p>` : '').join('')}
       ${ends.filter(e=>e.datasheet_ref).map(e=>
         `<p class="cs-note">${esc(e.ref||'')} — governed by <span class="cs-ltr">${esc(e.datasheet_ref)}</span></p>`).join('')}
     </div>` : ''}
@@ -8498,24 +8758,40 @@ function renderCutStripSheet(){
       <div class="cs-step">
         <div class="cs-step-n">${esc(s.n??(i+1))}</div>
         <div>
-          <h4>${esc(T(s.title||''))}${s.dimension_ref?` <span class="cs-tag cs-dim cs-ltr">${esc(s.dimension_ref)}</span>`:''}</h4>
-          <div>${esc(T(s.body||''))}</div>
-          ${s.critical?`<div class="cs-crit"><b>${esc(T('CRITICAL'))}:</b> ${esc(T(s.critical))}</div>`:''}
+          <h4>${_csDelBtn('del-step',i)}${_csFText(`steps.${i}.title`, s.title)}${(s.dimension_ref||_csEditing)?` <span class="cs-tag cs-dim cs-ltr">${_csFRaw(`steps.${i}.dimension_ref`, s.dimension_ref)}</span>`:''}</h4>
+          <div>${_csFText(`steps.${i}.body`, s.body, true)}</div>
+          ${(s.critical||_csEditing)?`<div class="cs-crit"><b>${esc(T('CRITICAL'))}:</b> ${_csFText(`steps.${i}.critical`, s.critical, true)}</div>`:''}
         </div>
-      </div>`).join('')}</div>
+      </div>`).join('')}
+      ${_csEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:12px" data-cs-act="add-step">＋ ${esc(T('Add step'))}</button>`:''}</div>
 
     ${(spec.inspection||[]).length ? `
     <h2 class="cs-h2"><span class="cs-n">05</span>${esc(T('Inspection'))}${spec.standard?` — <span class="cs-ltr">${esc(spec.standard)}</span>`:''}</h2>
-    <div class="cs-pad"><ul class="cs-chk">${spec.inspection.map(c=>
-      `<li><span class="cs-b"></span><span>${esc(T(c))}</span></li>`).join('')}</ul></div>` : ''}
+    <div class="cs-pad"><ul class="cs-chk">${spec.inspection.map((c,i)=>
+      `<li><span class="cs-b"></span><span>${_csDelBtn('del-chk',i)}${_csFText(`inspection.${i}`, c, true)}</span></li>`).join('')}</ul>
+      ${_csEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:12px" data-cs-act="add-chk">＋ ${esc(T('Add check'))}</button>`:''}</div>` : ''}
 
     ${(spec.tools||[]).length ? `
     <h2 class="cs-h2"><span class="cs-n">06</span>${esc(T('Tools & consumables'))}</h2>
     <div class="cs-pad"><table class="cs-tbl">
       <thead><tr><th style="width:240px">${esc(T('Tool'))}</th><th style="width:170px">${esc(T('Setting'))}</th>
         <th>${esc(T('Note'))}</th></tr></thead>
-      <tbody>${spec.tools.map(t=>`<tr><td>${esc(T(t.tool||''))}</td>
-        <td class="cs-ctr cs-ltr">${esc(t.setting||'—')}</td><td>${esc(T(t.note||''))}</td></tr>`).join('')}
+      <tbody>${spec.tools.map((t,i)=>`<tr><td>${_csDelBtn('del-tool',i)}${_csFText(`tools.${i}.tool`, t.tool)}</td>
+        <td class="cs-ctr">${_csEditing?_csFRaw(`tools.${i}.setting`, t.setting):esc(t.setting||'—')}</td>
+        <td>${_csFText(`tools.${i}.note`, t.note, true)}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+
+    ${(spec.markers||[]).length && _csEditing ? `
+    <div class="cs-pad"><h3 class="cs-h3">${esc(T('Assembly overview — dimensions'))}</h3>
+    <table class="cs-tbl"><thead><tr><th style="width:70px">${esc(T('Ref'))}</th>
+      <th style="width:150px">${esc(T('Part number'))}</th><th style="width:90px">${esc(T('End'))}</th>
+      <th>${esc(T('Value'))}</th></tr></thead>
+      <tbody>${spec.markers.map((m,i)=>`<tr>
+        <td class="cs-ctr cs-ltr"><b>${esc(m.label||'')}</b></td>
+        <td>${_csFRaw(`markers.${i}.part_number`, m.part_number)}</td>
+        <td>${_csFRaw(`markers.${i}.from_end`, m.from_end)}</td>
+        <td>${_csFNum(`markers.${i}.distance_mm`, m.distance_mm, ' mm')}
+            ${_csFChk(`markers.${i}.confirmed`, m.confirmed===true, T('Confirmed'))}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
 
     <div class="cs-pad">
@@ -8524,24 +8800,63 @@ function renderCutStripSheet(){
       </div>
       <div class="cs-foot">
         <span class="cs-ltr">${esc(spec.spec_no||'')} · ${esc(spec.drawing_number||'')} ${esc(spec.revision?('Rev '+spec.revision):'')}${spec.source_file?' · '+esc(spec.source_file):''}</span>
-        <span>v${APP_VER}</span>
+        <span class="cs-ltr">${spec.edited_by?`✎ ${esc(spec.edited_by)} ${esc(String(spec.edited_at||'').slice(0,10))} · `:''}v${APP_VER}</span>
       </div>
     </div>
   </div>`);
 
-  document.getElementById('btn-cs-back')?.addEventListener('click',()=>renderCutStrip());
+  document.getElementById('btn-cs-back')?.addEventListener('click',()=>{
+    if(_csEditing && !confirm('Discard unsaved changes to this specification?')) return;
+    _csEditing=false; _csEditBackup=null;
+    renderCutStrip();
+  });
   document.getElementById('btn-cs-print')?.addEventListener('click',()=>window.print());
   document.getElementById('btn-cs-pdf')?.addEventListener('click',_csExportPDF);
+  document.getElementById('btn-cs-edit')?.addEventListener('click',_csEnterEdit);
+  document.getElementById('btn-cs-save')?.addEventListener('click',_csSaveSpec);
+  document.getElementById('btn-cs-cancel')?.addEventListener('click',()=>{
+    if(confirm('Discard unsaved changes to this specification?')) _csCancelEdit();
+  });
+
+  // Structural edits. Whatever is typed into the form is collected FIRST, so
+  // adding or deleting a row never throws away edits made in other fields.
+  document.querySelectorAll('#cs-sheet [data-cs-act]').forEach(b=>b.addEventListener('click',()=>{
+    _csCollectEdits();
+    const s=csCurrent, i=parseInt(b.dataset.csIdx,10);
+    switch(b.dataset.csAct){
+      case 'add-step':  s.steps.push({n:s.steps.length+1,title:'New step',body:'',critical:'',dimension_ref:''}); break;
+      case 'del-step':  s.steps.splice(i,1); s.steps.forEach((x,k)=>x.n=k+1); break;
+      case 'add-chk':   s.inspection.push('New check'); break;
+      case 'del-chk':   s.inspection.splice(i,1); break;
+      case 'del-tool':  s.tools.splice(i,1); break;
+      case 'del-open':  s.open_items.splice(i,1); break;
+      case 'del-disc':  s.discrepancies.splice(i,1); break;
+    }
+    renderCutStripSheet();
+  }));
+
+  // Live diagram feedback: ticking Confirmed or changing a dimension redraws
+  // the figures immediately, so the operator sees the red TBC marking clear
+  // while still in the form rather than after saving.
+  document.querySelectorAll('#cs-sheet input[data-cs-type="bool"], #cs-sheet input[data-cs-type="num"]')
+    .forEach(el=>el.addEventListener('change',()=>{
+      _csCollectEdits();
+      const fig=document.querySelectorAll('#cs-sheet .cs-fig');
+      if(fig[0]) fig[0].innerHTML=_csHarnessSVG(csCurrent);
+      (csCurrent.ends||[]).forEach((e,k)=>{ if(fig[k+1]) fig[k+1].innerHTML=_csStripSVG(csCurrent,e); });
+    }));
+
   document.querySelectorAll('[data-cs-lang]').forEach(b=>b.addEventListener('click',async()=>{
     const lang=b.dataset.csLang;
     if(lang===_csLang) return;
     if(lang!=='en'){
-      const prose=_csProseStrings(csCurrent);
+      const ov=(csCurrent.overrides&&csCurrent.overrides[lang])||{};
       const bucket=_csCache[lang]||{};
-      if(prose.some(t=>!bucket[t])){
+      const todo=_csProseStrings(csCurrent).filter(t=>!ov[t] && !bucket[t]);
+      if(todo.length){
         const old=b.textContent; b.textContent=_CS_LABELS[lang]?.['Translating…']||'Translating…';
         document.querySelectorAll('[data-cs-lang]').forEach(x=>x.disabled=true);
-        try{ await _csTranslate(prose, lang); }
+        try{ await _csTranslate(todo, lang); }
         catch(e){
           toast('Translation failed: '+e.message,'error');
           b.textContent=old;
@@ -8550,7 +8865,7 @@ function renderCutStripSheet(){
         }
       }
     }
-    _csLang=lang;   // deliberately NOT persisted — see _csLang above
+    _csSetLang(lang);   // remembered for next time — see _csLang above
     renderCutStripSheet();
   }));
 }
