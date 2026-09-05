@@ -545,7 +545,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.9.2';
+const APP_VER   = '1.9.3';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2885,25 +2885,32 @@ function _parseAIJson(raw){
 // resolves most of them. Deliberately does NOT retry on a real HTTP error
 // response (4xx/5xx): those are genuine API errors (bad key, rate limit,
 // oversized request) that a retry wouldn't fix.
-async function _fetchWithRetry(url, opts){
-  // A 60s timeout turns an indefinite hang (e.g. a large image upload stalling
-  // on a slow connection) into a clear, bounded failure instead of the tab
-  // just spinning forever — and it's a DIFFERENT error class (AbortError) from
-  // the network-level TypeError this function otherwise retries, so the two
-  // failure modes stay distinguishable in the message shown to the user.
-  const withTimeout = (o)=>({...o, signal:o.signal||AbortSignal.timeout(60000)});
+async function _fetchWithRetry(url, opts, timeoutMs){
+  // A timeout turns an indefinite hang (e.g. a large image upload stalling on a
+  // slow connection) into a clear, bounded failure instead of the tab just
+  // spinning forever — and it's a DIFFERENT error class (AbortError) from the
+  // network-level TypeError this function otherwise retries, so the two failure
+  // modes stay distinguishable in the message shown to the user.
+  //
+  // The budget is per-call because the calls are not comparable. Extracting a
+  // BOM is a short request; asking for a full cut & strip specification means
+  // reading a whole drawing AND generating several thousand tokens of
+  // structured JSON, which legitimately takes longer than a minute on a big
+  // sheet. A single shared 60s ceiling failed that work as if it had hung,
+  // when it was simply still going.
+  const ms = timeoutMs || 60000;
+  const secs = Math.round(ms/1000);
+  const withTimeout = (o)=>({...o, signal:o.signal||AbortSignal.timeout(ms)});
+  const timedOut = ()=> new Error(
+    `The AI provider did not finish within ${secs}s. The drawing may be very dense, or the connection slow — try again, or use a sharper/simpler drawing file.`);
   try{ return await fetch(url, withTimeout(opts)); }
   catch(e){
-    if(e && e.name==='TimeoutError'){
-      throw new Error('The AI provider took too long to respond (60s timeout) — the image may be too large, or the connection too slow. Try again or use a smaller/simpler drawing file.');
-    }
+    if(e && e.name==='TimeoutError') throw timedOut();
     if(!(e instanceof TypeError)) throw e;
     await new Promise(res=>setTimeout(res,1200));
     try{ return await fetch(url, withTimeout(opts)); }
     catch(e2){
-      if(e2 && e2.name==='TimeoutError'){
-        throw new Error('The AI provider took too long to respond (60s timeout) — the image may be too large, or the connection too slow. Try again or use a smaller/simpler drawing file.');
-      }
+      if(e2 && e2.name==='TimeoutError') throw timedOut();
       throw new Error(`Network error reaching the AI provider — check your internet connection and try again. (${e2.message})`);
     }
   }
@@ -7997,6 +8004,46 @@ async function _csTranslateChunk(todo, lang, bucket){
 }
 
 // ── AI analysis ───────────────────────────────────────────────────────────────
+// Reading a whole drawing and emitting several thousand tokens of structured
+// JSON is the longest single request this app makes. 60s — the app-wide default
+// — was cutting it off mid-generation and reporting it as a hang.
+const _CS_ANALYSIS_TIMEOUT = 180000;
+// Vision needs to read dimension callouts, not fine-print BOM rows, so the
+// analysis image can be smaller than the one BOM extraction uses. Less to
+// upload is less time spent before the model even starts.
+const _CS_IMG_MAXDIM = 1800, _CS_IMG_QUALITY = 0.82;
+
+// Provider errors are quoted verbatim, but a few of them have a specific fix
+// the user would otherwise have to go and look up.
+function _csProviderHint(provider, msg){
+  const m=String(msg||'');
+  if(/service account is deleted or disabled|API key not valid|API_KEY_INVALID/i.test(m))
+    return `${provider} rejected the key: ${m} → the key needs to be re-issued in Admin → AI API Keys.`;
+  if(/quota|rate limit|429|insufficient|credit balance/i.test(m))
+    return `${provider} is out of quota or credit: ${m} → check the account's billing, or use the other provider.`;
+  return m;
+}
+
+// Re-encodes an already-rendered page smaller. Rendering again from the PDF
+// would be cleaner but costs a second full render; this is a cheap resize of
+// something already in memory.
+function _csShrinkJpeg(b64, maxDim, quality){
+  return new Promise(resolve=>{
+    const img=new Image();
+    img.onload=()=>{
+      const scale=Math.min(1, maxDim/Math.max(img.width,img.height));
+      if(scale>=1){ resolve(b64); return; }
+      const c=document.createElement('canvas');
+      c.width=Math.round(img.width*scale); c.height=Math.round(img.height*scale);
+      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+      try{ resolve(c.toDataURL('image/jpeg',quality).split(',')[1]); }
+      catch{ resolve(b64); }          // tainted canvas etc — the original still works
+    };
+    img.onerror=()=>resolve(b64);     // never let a resize failure block the analysis
+    img.src='data:image/jpeg;base64,'+b64;
+  });
+}
+
 // The analysis writes its prose DIRECTLY in the language the sheet will be read
 // in. This is not a convenience — it removes the entire translate-after-the-fact
 // round trip from the normal path. That second call was both the slowest part of
@@ -8135,9 +8182,9 @@ async function _csAnthropic(text, isImage, imgData, lang){
     // dimensions off a drawing is not a creative task, and a spec that comes
     // back different every time it is run cannot be checked against itself.
     body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:8192,temperature:0,messages})
-  });
+  }, _CS_ANALYSIS_TIMEOUT);
   if(!resp.ok){let m=`Anthropic error ${resp.status}`;
-    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(_csProviderHint('Anthropic', m));}
   return _csParse((await resp.json()).content[0].text);
 }
 async function _csGemini(text, isImage, imgData, lang){
@@ -8149,28 +8196,52 @@ async function _csGemini(text, isImage, imgData, lang){
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
     {method:'POST',headers:{'content-type':'application/json'},
      body:JSON.stringify({contents:[{parts}],
-       generationConfig:{temperature:0, maxOutputTokens:8192, thinkingConfig:{thinkingBudget:0}}})});
+       generationConfig:{temperature:0, maxOutputTokens:8192, thinkingConfig:{thinkingBudget:0}}})},
+    _CS_ANALYSIS_TIMEOUT);
   if(!resp.ok){let m=`Gemini error ${resp.status}`;
-    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(_csProviderHint('Gemini', m));}
   const d=await resp.json();
   const raw=(d.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
   return _csParse(raw);
 }
+// A rejected KEY is not a transient failure — it will be rejected identically on
+// every subsequent drawing. Retrying it each time just spends a round-trip
+// before the fallback, on a screen where the total wait already matters. So a
+// credential-class failure parks that provider for the rest of the session;
+// anything else (a timeout, a bad response) is treated as transient and retried
+// normally. Cleared by a reload, which is also what happens after fixing the key.
+let _csDeadProviders={};
+function _csIsKeyError(msg){
+  return /service account is deleted or disabled|API key not valid|API_KEY_INVALID|invalid x-api-key|authentication_error|401|403/i.test(String(msg||''));
+}
 async function aiAnalyzeCutStrip(text, isImage, imgData, lang){
-  let spec, firstError='';
-  if(geminiKey){
+  let spec, geminiError='';
+  if(geminiKey && !_csDeadProviders.gemini){
     try{ spec=await _csGemini(text,isImage,imgData,lang); }
     catch(e){
-      firstError=e.message;
+      geminiError=e.message;
+      if(_csIsKeyError(e.message)){
+        _csDeadProviders.gemini=e.message;
+        console.warn('[CutStrip] Gemini key rejected — skipping it for this session:', e.message);
+      }
       if(!anthKey) throw e;
       console.warn('Gemini cut-strip failed, falling back to Anthropic:', e.message);
     }
+  } else if(geminiKey && _csDeadProviders.gemini){
+    geminiError=_csDeadProviders.gemini;
   }
   if(!spec && anthKey){
     try{ spec=await _csAnthropic(text,isImage,imgData,lang); }
     catch(e){
-      throw new Error(firstError && firstError!==e.message
-        ? `${e.message} (Gemini also failed: ${firstError})` : e.message);
+      if(_csIsKeyError(e.message)) _csDeadProviders.anthropic=e.message;
+      // Lead with whichever failure the user can actually act on. A rejected key
+      // has a fix; a timeout is just "try again", so it should not be the
+      // headline when the other provider told us something concrete.
+      const both=[e.message, geminiError].filter(Boolean);
+      const actionable=both.find(_csIsKeyError);
+      throw new Error(actionable && both.length>1
+        ? `${actionable} The other provider also failed: ${both.find(m=>m!==actionable)}`
+        : both.join(' | '));
     }
   }
   if(!spec) throw new Error('No AI key configured — add one in Admin → AI API Keys');
@@ -8493,7 +8564,12 @@ async function handleCSFile(file){
       // Vision on page 1 is the right default here, unlike BOM extraction: the
       // cut length, strip callouts and marker positions live on the assembly
       // view, and reading them needs the picture, not the text layer.
-      if(pageImages[0]){ isImage=true; imgData={mimeType:'image/jpeg', b64:pageImages[0]}; }
+      if(pageImages[0]){
+        const small=await _csShrinkJpeg(pageImages[0], _CS_IMG_MAXDIM, _CS_IMG_QUALITY);
+        console.log('[CutStrip] drawing image',(pageImages[0].length/1e6).toFixed(2),'MB →',
+                    (small.length/1e6).toFixed(2),'MB base64');
+        isImage=true; imgData={mimeType:'image/jpeg', b64:small};
+      }
     } else {
       setM('Reading image…',20);
       imgData=await encodeImage(file); isImage=true;
@@ -8501,7 +8577,7 @@ async function handleCSFile(file){
 
     // Generated straight into the display language. No translation pass on the
     // normal path — see _csPrompt for why that matters.
-    setM(`Analysing cut & strip requirements in ${_CS_LANG_NAMES[_csLang]||'Hebrew'}… (this takes 10–20 s)`,55);
+    setM(`Analysing cut & strip requirements in ${_CS_LANG_NAMES[_csLang]||'Hebrew'}… a dense drawing can take up to 2 minutes — leave this open`,55);
     const spec=await aiAnalyzeCutStrip(text, isImage, imgData, _csLang);
 
     // A drawing number is what the sheet is filed and found under. Falling back
