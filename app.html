@@ -147,6 +147,93 @@
     .drop-zone p { color:var(--muted); font-size:13px; margin-top:8px; }
     .drop-zone .icon-big { font-size:40px; display:block; margin-bottom:8px; }
 
+    /* ── Cut & Strip specification sheet ──────────────────────────────────────
+       Deliberately styled like a controlled document rather than like the rest
+       of the app: this page gets printed and taped to a bench, so it has to read
+       the same on paper as on screen. Everything is scoped under .cs-sheet so it
+       can't leak into the other views. */
+    .cs-sheet { max-width:1080px; margin:0 auto 40px; background:#fff; color:#0F172A;
+                font-size:15px; line-height:1.6;
+                box-shadow:0 1px 3px rgba(0,0,0,.10), 0 6px 24px rgba(0,0,0,.06); }
+    .cs-pad { padding:0 34px; }
+    .cs-banner { background:repeating-linear-gradient(135deg,#FDE68A,#FDE68A 14px,#FCD34D 14px,#FCD34D 28px);
+                 color:#78350F; font-weight:800; font-size:12.5px; text-align:center;
+                 padding:10px 34px; border-bottom:2px solid #B45309; }
+    .cs-tb { display:grid; grid-template-columns:1.5fr 1fr; border-bottom:3px solid #1E293B; }
+    .cs-tb-l { padding:22px 34px 18px; }
+    .cs-tb-r { padding:18px 26px; background:#F8FAFC; }
+    .cs-sheet[dir="ltr"] .cs-tb-r { border-left:1px solid #E4E5E7; }
+    .cs-sheet[dir="rtl"] .cs-tb-r { border-right:1px solid #E4E5E7; }
+    .cs-doc-t { font-size:24px; font-weight:800; letter-spacing:-.01em; }
+    .cs-doc-s { font-size:14px; color:#334155; margin-top:3px; }
+    .cs-kv { display:grid; grid-template-columns:auto 1fr; gap:5px 14px; font-size:13px; margin:0; }
+    .cs-kv dt { color:#334155; font-weight:500; }
+    .cs-kv dd { margin:0; font-weight:700; }
+    .cs-h2 { font-size:13px; font-weight:800; color:#fff; background:#1E293B;
+             padding:8px 34px; margin:30px 0 16px; }
+    .cs-sheet[dir="ltr"] .cs-n { opacity:.55; margin-right:11px; font-family:monospace; }
+    .cs-sheet[dir="rtl"] .cs-n { opacity:.55; margin-left:11px; font-family:monospace;
+                                 direction:ltr; display:inline-block; }
+    .cs-h3 { font-size:15px; font-weight:700; margin:22px 0 8px; }
+    /* Part numbers, dimensions and codes must not be reordered by the bidi
+       algorithm when the sheet is shown in Hebrew — an SMP part number printed
+       backwards is a wrong part number. */
+    .cs-ltr { direction:ltr; unicode-bidi:isolate; display:inline-block;
+              font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; }
+    .cs-ctr { text-align:center; }
+    .cs-tbl { width:100%; border-collapse:collapse; font-size:13px; }
+    .cs-tbl th { background:#F1F2F3; padding:8px 10px; font-weight:700; font-size:12px;
+                 color:#334155; border:1px solid #E4E5E7; }
+    .cs-sheet[dir="ltr"] .cs-tbl th { text-align:left; }
+    .cs-sheet[dir="rtl"] .cs-tbl th { text-align:right; }
+    .cs-tbl td { padding:8px 10px; border:1px solid #E4E5E7; vertical-align:top; }
+    .cs-tbl tr:nth-child(even) td { background:#FBFCFD; }
+    .cs-note { font-size:12.5px; color:#334155; margin-top:7px; }
+    .cs-box { padding:14px 18px; margin:0 0 16px; font-size:14px; }
+    .cs-sheet[dir="ltr"] .cs-box { border-left:4px solid; }
+    .cs-sheet[dir="rtl"] .cs-box { border-right:4px solid; }
+    .cs-box b { display:block; margin-bottom:5px; font-weight:800; }
+    .cs-box p { margin:0; }
+    .cs-box ul { margin:8px 0 0; padding-inline-start:20px; padding-inline-end:0; }
+    .cs-box li { margin:4px 0; }
+    .cs-stop { border-color:#DC2626; background:#FEE2E2; color:#7F1D1D; }
+    .cs-warn { border-color:#B45309; background:#FEF3C7; color:#78350F; }
+    .cs-tag { display:inline-block; font-family:ui-monospace,Menlo,Consolas,monospace;
+              font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:3px;
+              white-space:nowrap; direction:ltr; }
+    .cs-tbc { background:#DC2626; color:#fff; }
+    .cs-dim { background:#DBEAFE; color:#1D4ED8; border:1px solid #93C5FD; }
+    .cs-fig { margin:0 0 20px; border:1px solid #E4E5E7; background:#fff; }
+    .cs-fig svg { display:block; width:100%; height:auto; }
+    .cs-step { display:grid; grid-template-columns:40px 1fr; gap:15px;
+               padding:15px 0; border-top:1px solid #E4E5E7; }
+    .cs-step:last-child { border-bottom:1px solid #E4E5E7; }
+    .cs-step-n { width:34px; height:34px; border-radius:50%; background:#1E293B; color:#fff;
+                 display:flex; align-items:center; justify-content:center; font-weight:800; font-size:14px; }
+    .cs-step h4 { margin:0 0 4px; font-size:15px; font-weight:700; }
+    .cs-crit { margin-top:7px; color:#B91C1C; font-weight:600; font-size:13.5px; }
+    .cs-chk { list-style:none; padding:0; margin:0; font-size:14px; }
+    .cs-chk li { display:grid; grid-template-columns:20px 1fr; gap:11px;
+                 padding:8px 0; border-bottom:1px dashed #E4E5E7; }
+    .cs-b { width:15px; height:15px; border:2px solid #334155; margin-top:4px; }
+    .cs-sig { display:grid; grid-template-columns:repeat(3,1fr); gap:24px; margin-top:26px; }
+    .cs-sig div { border-top:1px solid #1E293B; padding-top:7px; font-size:12px;
+                  color:#334155; font-weight:600; min-height:56px; }
+    .cs-foot { margin-top:28px; padding:12px 0 26px; border-top:1px solid #E4E5E7;
+               font-size:11.5px; color:#334155; display:flex; justify-content:space-between; gap:18px; }
+
+    /* Printing the sheet must produce the sheet and nothing else — no topbar,
+       no Support button, no shadows eating toner. */
+    @media print {
+      body { background:#fff; }
+      .topbar, .home-btn-grid, #btn-support-fab, #modal-bg, .breadcrumb { display:none !important; }
+      .cs-sheet { box-shadow:none; margin:0; max-width:none; }
+      .cs-h2 { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      .cs-box, .cs-banner, .cs-tag, .cs-step-n, .cs-tbl th { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      .cs-step, .cs-fig, .cs-chk li { break-inside:avoid; page-break-inside:avoid; }
+      .cs-h2 { break-after:avoid; page-break-after:avoid; }
+    }
+
     /* ── Modal ── */
     .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex;
                 align-items:center; justify-content:center; z-index:200;
@@ -347,9 +434,12 @@ let currentUserRole = '';
 // roles fall back to 'agent' — the pre-role-system behavior was "everyone sees
 // everything except Settings", which 'agent' already matches.
 const DEFAULT_ROLE_VIEWS = {
-  admin:  ['rfq','sales-desk','part-stock','customers','settings','admin'],
-  agent:  ['rfq','sales-desk','part-stock','customers'],
-  viewer: ['part-stock','rfq'],
+  admin:  ['rfq','sales-desk','part-stock','cut-strip','customers','settings','admin'],
+  agent:  ['rfq','sales-desk','part-stock','cut-strip','customers'],
+  // 'viewer' gets cut-strip too: the whole point of a cut & strip sheet is that
+  // the person on the bench can pull it up, and a shop-floor account is exactly
+  // the kind of read-only user 'viewer' exists for.
+  viewer: ['part-stock','rfq','cut-strip'],
   sales:  ['sales-desk'],
 };
 let roleViewsMap = {}; // populated from Firestore 'roles' collection: {[roleKey]: {name, views:[...]}}
@@ -430,7 +520,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.8.97';
+const APP_VER   = '1.9.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -567,7 +657,7 @@ function route(v){
   currentView=target;
   const btnHome=document.getElementById('btn-home');
   if(btnHome) btnHome.style.display = currentView==='home' ? 'none' : 'inline-flex';
-  const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','customers':'👥 Customers','settings':'⚙️ Settings','admin':'🛡️ Admin'};
+  const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','cut-strip':'✂️ Cut & Strip','customers':'👥 Customers','settings':'⚙️ Settings','admin':'🛡️ Admin'};
   document.getElementById('page-title').textContent=TITLES[currentView]||'';
   setActions('');
   if(currentView!=='home') logAudit('screen_open',{screen:currentView},true);
@@ -584,6 +674,9 @@ function route(v){
   }
   else if(currentView==='rfq') renderRFQList();
   else if(currentView==='sales-desk') renderSalesDesk();
+  // Always lands on the saved-specs list, never on whatever spec happened to be
+  // open last — a stale sheet on screen is how the wrong revision gets cut.
+  else if(currentView==='cut-strip'){ csCurrent=null; renderCutStrip(); }
   else if(currentView==='customers') renderCustomers();
   else if(currentView==='settings'){
     if(currentUserRole!=='admin'){ route('home'); return; }
@@ -606,6 +699,7 @@ const HOME_BUTTONS = {
   'rfq':         ['📋',"RFQ's"],
   'sales-desk':  ['💰','Sales Desk'],
   'part-stock':  ['📦','Database'],
+  'cut-strip':   ['✂️','Cut &amp; Strip'],
   'customers':   ['👥','Customers'],
   'settings':    ['⚙️','Settings'],
   'admin':       ['🛡️','Admin'],
@@ -7562,6 +7656,977 @@ function openNewRoleModal(){
       renderSettingsRolesSection();
     }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='＋ Create'; }
   });
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CUT & STRIP
+// ------------------------------------------------------------------------------
+// Turns one cable/harness drawing into a specification a bench operator can
+// actually work from: verbal steps AND generated diagrams carrying the real
+// dimensions.
+//
+// The hard constraint that shapes this whole module: a WRONG strip dimension
+// destroys parts. Connector manufacturers publish strip dimensions in separate
+// assembly specs that are frequently not in the drawing and often not public at
+// all (Amphenol's SMP outline drawing, for instance, just says "see spec
+// 349-50687"). So every dimension carries a `confirmed` flag. Anything the AI
+// derived rather than read is rendered in red as TBC, and the sheet opens with
+// a "do not cut production material" block listing exactly what's unverified.
+// The operator is never left guessing which numbers are trustworthy.
+//
+// Specs are stored per drawing number at
+//   companies/{cid}/cut_strip_specs/{sanitised drawing number}
+// so re-analysing the same drawing UPDATES the sheet instead of piling up
+// near-duplicates, and so it can be reopened later without paying for another
+// AI call.
+// ══════════════════════════════════════════════════════════════════════════════
+
+let csSpecs   = [];      // cached list of saved specs
+let csCurrent = null;    // spec object currently open, or null for the list view
+
+function _csDocId(dwg){
+  return String(dwg||'').trim().toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,120)
+         || ('UNTITLED_'+Date.now());
+}
+function _csNum(v){ const n=parseFloat(v); return Number.isFinite(n)?n:null; }
+function _csMM(v){ const n=_csNum(v); return n==null ? '—' : (Math.round(n*100)/100)+' mm'; }
+
+// ── Translation ───────────────────────────────────────────────────────────────
+// Same model as the Labor Breakdown dialog: English is the source of truth and
+// is ALWAYS what opens. Translation is a per-viewing choice the operator makes
+// by pressing a button, not a saved setting — quietly reopening in a language
+// somebody picked last week would hide the fact that the underlying spec is
+// English. The translated STRINGS are cached across sessions, which is just a
+// cost/latency optimisation and invisible.
+const _CS_CACHE_KEY='cut_strip_tr_cache';
+let _csLang='en';
+let _csCache = (()=>{
+  try{ const c=JSON.parse(localStorage.getItem(_CS_CACHE_KEY))||{}; return {he:c.he||{}, ru:c.ru||{}}; }
+  catch{ return {he:{}, ru:{}}; }
+})();
+function _csSaveCache(){
+  try{ localStorage.setItem(_CS_CACHE_KEY, JSON.stringify(_csCache)); }
+  catch(e){ console.warn('[CutStrip] translation cache not saved:', e.message); }
+}
+function _csRTL(){ return _csLang==='he'; }
+const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
+
+// Fixed chrome. Kept as a table rather than sent to the AI so the structure of
+// the sheet never depends on a network call — a failed translation must leave a
+// readable document, not a skeleton.
+const _CS_LABELS={
+  he:{
+    'Cut & Strip Specification':'מפרט חיתוך וחשיפה',
+    'Drawing':'סרטוט','Revision':'מהדורה','Spec no.':'מספר מפרט','Workmanship':'תקן עבודה',
+    'Cable':'כבל','Cut length':'אורך חיתוך','Issued':'הונפק','Status':'סטטוס',
+    'Before you start — open items':'לפני שמתחילים — פריטים פתוחים',
+    'Do not cut production material':'אין לחתוך חומר ייצור',
+    'The dimensions below marked TBC were derived, not read from a manufacturer datasheet. Prove them on sample pieces and get engineering sign-off before the first production lot.':
+      'המידות המסומנות TBC נגזרו ולא נקראו מ-datasheet של יצרן. יש להוכיח אותן על חתיכות דוגמה ולקבל אישור הנדסה לפני האצווה הראשונה.',
+    'Discrepancies found in the source drawing':'סתירות שנמצאו בסרטוט המקור',
+    'Material list':'רשימת חומרים',
+    'Item':'פריט','Part number':'מק״ט יצרן','Manufacturer':'יצרן','Description':'תיאור','Qty':'כמות','Ref':'סימון',
+    'Cable cross-section':'חתך הכבל',
+    'Layer':'שכבה','Nominal Ø':'קוטר נומינלי','Material':'חומר',
+    'Assembly overview — dimensions':'מבט כללי על המכלול — מידות',
+    'Strip detail':'פרט חשיפה',
+    'Strip dimensions':'מידות חשיפה',
+    'End':'קצה','Connector':'מחבר','Value':'מידה','Basis':'מקור',
+    'Operation sequence':'סדר פעולות',
+    'Inspection':'בדיקה',
+    'Tools & consumables':'כלים וחומרים מתכלים',
+    'Tool':'כלי','Setting':'כיוונון','Note':'הערה',
+    'All dimensions in millimetres. Not to scale.':'כל המידות במילימטרים. לא בקנה מידה.',
+    'Cut length — cable only, connectors NOT included':'אורך חיתוך — כבל בלבד, ללא המחברים',
+    'square cut':'חתך ישר',
+    'Red faces = every cut square to the axis, free of burrs and nicks.':'הפאות האדומות = כל חתך ניצב לציר, ללא גדיליות ושריטות.',
+    'TO BE CONFIRMED':'לאימות',
+    'verified':'מאומת',
+    'Prepared by':'הוכן על ידי','Checked by — Engineering':'נבדק על ידי — הנדסה','Approved for production':'אושר לייצור',
+    'Print':'הדפסה','Export PDF':'ייצוא PDF','Back':'חזרה','Delete':'מחיקה','Re-analyse':'ניתוח מחדש',
+    'Translating…':'מתרגם…','Page':'עמוד','of':'מתוך',
+    'CRITICAL':'קריטי',
+    'Generated by AI from the drawing — verify against the drawing before use.':
+      'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
+  },
+  ru:{
+    'Cut & Strip Specification':'Спецификация резки и зачистки',
+    'Drawing':'Чертёж','Revision':'Ревизия','Spec no.':'№ спецификации','Workmanship':'Стандарт',
+    'Cable':'Кабель','Cut length':'Длина реза','Issued':'Выпущено','Status':'Статус',
+    'Before you start — open items':'Перед началом — открытые вопросы',
+    'Do not cut production material':'Не резать производственный материал',
+    'The dimensions below marked TBC were derived, not read from a manufacturer datasheet. Prove them on sample pieces and get engineering sign-off before the first production lot.':
+      'Размеры с пометкой TBC получены расчётом, а не из datasheet производителя. Проверьте их на образцах и получите согласование инженера до первой партии.',
+    'Discrepancies found in the source drawing':'Расхождения в исходном чертеже',
+    'Material list':'Перечень материалов',
+    'Item':'Поз.','Part number':'Артикул','Manufacturer':'Производитель','Description':'Описание','Qty':'Кол-во','Ref':'Обозн.',
+    'Cable cross-section':'Сечение кабеля',
+    'Layer':'Слой','Nominal Ø':'Ø номинальный','Material':'Материал',
+    'Assembly overview — dimensions':'Общий вид сборки — размеры',
+    'Strip detail':'Деталь зачистки',
+    'Strip dimensions':'Размеры зачистки',
+    'End':'Конец','Connector':'Разъём','Value':'Размер','Basis':'Основание',
+    'Operation sequence':'Последовательность операций',
+    'Inspection':'Контроль',
+    'Tools & consumables':'Инструмент и расходные материалы',
+    'Tool':'Инструмент','Setting':'Настройка','Note':'Примечание',
+    'All dimensions in millimetres. Not to scale.':'Все размеры в миллиметрах. Не в масштабе.',
+    'Cut length — cable only, connectors NOT included':'Длина реза — только кабель, без разъёмов',
+    'square cut':'рез под 90°',
+    'Red faces = every cut square to the axis, free of burrs and nicks.':'Красные торцы = каждый рез перпендикулярен оси, без заусенцев и задиров.',
+    'TO BE CONFIRMED':'ПОДЛЕЖИТ УТОЧНЕНИЮ',
+    'verified':'проверено',
+    'Prepared by':'Подготовил','Checked by — Engineering':'Проверил — инженер','Approved for production':'Допущено к производству',
+    'Print':'Печать','Export PDF':'Экспорт PDF','Back':'Назад','Delete':'Удалить','Re-analyse':'Проанализировать заново',
+    'Translating…':'Перевод…','Page':'Стр.','of':'из',
+    'CRITICAL':'ВАЖНО',
+    'Generated by AI from the drawing — verify against the drawing before use.':
+      'Сгенерировано ИИ по чертежу — сверьте с чертежом перед применением.',
+  },
+};
+// Never blocks, never throws. An untranslated line is far better than a broken
+// sheet, so anything missing falls through to the English original.
+function _csT(text){
+  if(_csLang==='en') return text;
+  const t=String(text||'');
+  return (_CS_LABELS[_csLang]||{})[t] || (_csCache[_csLang]||{})[t] || t;
+}
+
+// Every free-text string on the sheet that came from the AI rather than from
+// the label table. Collected in one place so translation is a single batched
+// request instead of one call per sentence.
+function _csProseStrings(spec){
+  const out=[];
+  const push=v=>{ const s=String(v||'').trim(); if(s) out.push(s); };
+  (spec.steps||[]).forEach(s=>{ push(s.title); push(s.body); push(s.critical); });
+  (spec.inspection||[]).forEach(push);
+  (spec.open_items||[]).forEach(o=>{ push(o.what); push(o.why); push(o.action); });
+  (spec.discrepancies||[]).forEach(d=>{ push(d.what); push(d.detail); });
+  (spec.tools||[]).forEach(t=>{ push(t.tool); push(t.note); });
+  (spec.materials||[]).forEach(m=>push(m.description));
+  (spec.cable&&spec.cable.layers||[]).forEach(l=>{ push(l.name); push(l.note); });
+  (spec.ends||[]).forEach(e=>{
+    push(e.description);
+    (e.strip||[]).forEach(s=>{ push(s.label); push(s.basis); });
+  });
+  return [...new Set(out)];
+}
+
+async function _csTranslate(texts, lang){
+  const bucket=_csCache[lang] || (_csCache[lang]={});
+  const todo=[...new Set(texts.map(t=>String(t||'').trim()).filter(t=>t && !bucket[t]))];
+  if(!todo.length) return true;
+  if(!anthKey && !geminiKey) throw new Error('No AI key configured — add one in Admin → AI API Keys');
+
+  const langName = lang==='ru' ? 'Russian' : 'Hebrew';
+  const prompt=`Translate each of these cable-harness shop-floor work instruction strings from English to ${langName}.\n`
+    +'Rules:\n'
+    +'- Keep part numbers, standards (IPC/WHMA-A-620, MIL-DTL-17), reference designators (P1, J1), dimension codes (A, B, C) and all units EXACTLY as they are.\n'
+    +'- Keep numbers and their units unchanged (e.g. "320 mm" stays "320 mm").\n'
+    +'- Technical terms a technician normally says in English (crimp, PTFE, VSWR, PCB) may stay in English.\n'
+    +'- These are safety-relevant instructions. Translate precisely; do not soften, shorten or embellish.\n'
+    +'- Return ONLY a JSON array of the translated strings, same order, same length. No commentary.\n\n'
+    +JSON.stringify(todo, null, 0);
+
+  let raw='';
+  if(anthKey){
+    const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
+               'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
+      body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:8192,temperature:0,
+                           messages:[{role:'user',content:prompt}]})
+    });
+    if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
+      try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
+    raw=(await resp.json()).content[0].text;
+  } else {
+    const resp=await _fetchWithRetry(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+      {method:'POST',headers:{'content-type':'application/json'},
+       body:JSON.stringify({contents:[{parts:[{text:prompt}]}],
+                            generationConfig:{temperature:0, thinkingConfig:{thinkingBudget:0}}})});
+    if(!resp.ok){ let m=`Gemini error ${resp.status}`;
+      try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
+    const d=await resp.json();
+    raw=(d.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
+  }
+
+  const m=String(raw).match(/\[[\s\S]*\]/);
+  if(!m) throw new Error('Translation came back in an unexpected format');
+  const arr=JSON.parse(m[0]);
+  // A length mismatch means the lines no longer line up with their originals.
+  // Caching by position would then attach the wrong translation to the wrong
+  // instruction — on a work instruction that is a safety problem, not a
+  // cosmetic one, so refuse the whole batch.
+  if(!Array.isArray(arr) || arr.length!==todo.length)
+    throw new Error(`Translation returned ${Array.isArray(arr)?arr.length:'?'} lines for ${todo.length} strings`);
+  todo.forEach((t,i)=>{ const v=String(arr[i]||'').trim(); if(v) bucket[t]=v; });
+  _csSaveCache();
+  return true;
+}
+
+// ── AI analysis ───────────────────────────────────────────────────────────────
+function _csPrompt(){
+  return `You are a cable-harness manufacturing engineer. From this drawing, produce a CUT AND STRIP specification that a bench operator can work from.
+
+Return ONLY a JSON object. No markdown fence, no commentary.
+
+{
+  "drawing_number": "as printed in the TITLE BLOCK",
+  "title": "what the assembly is",
+  "revision": "e.g. 1.0",
+  "standard": "workmanship standard called out on the drawing, e.g. IPC/WHMA-A-620 Class 3, else \\"\\"",
+  "cable": {
+    "part_number": "", "manufacturer": "", "description": "",
+    "type": "coax" | "single_wire" | "multi_conductor",
+    "cut_length_mm": <number>,
+    "cut_length_tolerance_mm": <number>,
+    "cut_length_tolerance_confirmed": <true|false>,
+    "length_includes_connectors": <true|false>,
+    "layers": [ {"name":"Outer conductor + jacket","od_mm":2.20,"material":"Cu spiral","note":"what the operator must watch out for"},
+                {"name":"Dielectric","od_mm":1.68,"material":"PTFE","note":""},
+                {"name":"Centre conductor","od_mm":0.51,"material":"SPCW","note":""} ],
+    "layers_confirmed": <true|false>
+  },
+  "ends": [
+    { "ref":"P1", "connector_pn":"", "manufacturer":"", "description":"",
+      "termination":"solder|crimp|clamp",
+      "strip":[
+        {"code":"A","label":"Outer conductor / jacket removed from cable end","value_mm":4.0,"derived":false,
+         "confirmed":false,"basis":"where this number came from — datasheet name, or what it was derived from"},
+        {"code":"B","label":"Centre conductor exposed","value_mm":2.4,"derived":false,"confirmed":false,"basis":"..."},
+        {"code":"C","label":"Dielectric remaining ahead of outer conductor","value_mm":1.6,"derived":true,"confirmed":false,"basis":"A − B"}
+      ],
+      "strip_tolerance_mm":0.2,
+      "datasheet_ref":"the manufacturer assembly spec that governs this, if the drawing or your knowledge names one"
+    }
+  ],
+  "sleeves":  [ {"part_number":"","kind":"heatshrink","length_mm":5,"qty":2,"from_end":"P1","distance_mm":0,
+                 "position":"plain-language position","confirmed":true} ],
+  "markers":  [ {"part_number":"","label":"A","from_end":"P1","distance_mm":50,"confirmed":false,
+                 "text_lines":["P/N. ...","Rev. ..."]} ],
+  "materials":[ {"item":1,"part_number":"","manufacturer":"","description":"","qty":"1","ref":"J1"} ],
+  "steps":    [ {"n":1,"title":"short imperative title","body":"what to do, in plain language an operator can follow",
+                 "critical":"the one thing that ruins the part if they get it wrong, or \\"\\"",
+                 "dimension_ref":"the dimension this step sets, e.g. \\"320 mm\\" or \\"A / B\\", or \\"\\""} ],
+  "inspection":[ "one check per line, phrased so it can be ticked off" ],
+  "tools":     [ {"tool":"","setting":"","note":""} ],
+  "open_items":[ {"what":"","why":"","action":""} ],
+  "discrepancies":[ {"what":"","detail":""} ]
+}
+
+RULES — these matter more than completeness:
+
+1. CONFIRMED vs DERIVED. Set "confirmed": true ONLY when the value is printed on the drawing, or comes from a manufacturer datasheet you actually know for that exact part number. If you calculated it, inferred it from connector geometry, or took it from a similar part, set "confirmed": false and say so plainly in "basis". A wrong strip dimension destroys parts — never dress up a guess as a fact.
+
+2. Still give a number. When a dimension is not confirmed, provide your best engineering proposal anyway with confirmed:false, so the sheet is usable while engineering verifies it. Only use null when you have no defensible basis at all.
+
+3. OPEN ITEMS. Every unconfirmed dimension gets an entry in "open_items" naming what is unverified, why (e.g. "the manufacturer's outline drawing defers cable prep to spec 349-50687, which is not public"), and the action that closes it.
+
+4. DISCREPANCIES. Report contradictions in the drawing rather than silently picking one: file name vs title block, balloon numbers vs BOM item numbers, dimensions that do not add up. Do not "fix" them.
+
+5. GEOMETRY. "distance_mm" for sleeves and markers is measured from the end named in "from_end". "cut_length_mm" is the cable length; if the drawing says the length excludes connectors, set length_includes_connectors:false.
+
+6. LAYERS run OUTERMOST FIRST. For single_wire there are two layers (insulation, conductor) and only strip code "A".
+
+7. STRIP CODES. "A" is always measured from the cable end. "derived":true marks a dimension that is arithmetic from the others (like C = A − B) rather than an independent setting.
+
+8. STEPS. Write for someone holding the cable, not for an engineer. Include threading sleeves on BEFORE connectors if the assembly has sleeves — that mistake scraps the cable. Everything in English; it gets translated separately.
+
+9. Units in millimetres throughout.`;
+}
+
+function _csParse(raw){
+  const text=String(raw||'').trim();
+  if(!text) throw new Error('The AI returned an empty response');
+  const m=text.match(/\{[\s\S]*\}/);
+  if(!m) throw new Error('No JSON in the AI response: '+text.slice(0,160));
+  let obj;
+  try{ obj=JSON.parse(m[0]); }
+  catch(e){ throw new Error('Malformed JSON from the AI: '+m[0].slice(0,160)); }
+  if(!obj || typeof obj!=='object') throw new Error('AI response was not an object');
+  if(!Array.isArray(obj.steps) || !obj.steps.length)
+    throw new Error('AI response had no operation steps — the drawing may not be a cable/harness drawing');
+  // Normalise the shapes the renderer indexes into, so a partial response
+  // degrades to a thinner sheet rather than throwing halfway through drawing.
+  obj.ends       = Array.isArray(obj.ends) ? obj.ends : [];
+  obj.sleeves    = Array.isArray(obj.sleeves) ? obj.sleeves : [];
+  obj.markers    = Array.isArray(obj.markers) ? obj.markers : [];
+  obj.materials  = Array.isArray(obj.materials) ? obj.materials : [];
+  obj.inspection = Array.isArray(obj.inspection) ? obj.inspection : [];
+  obj.tools      = Array.isArray(obj.tools) ? obj.tools : [];
+  obj.open_items = Array.isArray(obj.open_items) ? obj.open_items : [];
+  obj.discrepancies = Array.isArray(obj.discrepancies) ? obj.discrepancies : [];
+  obj.cable      = obj.cable && typeof obj.cable==='object' ? obj.cable : {};
+  obj.cable.layers = Array.isArray(obj.cable.layers) ? obj.cable.layers : [];
+  obj.ends.forEach(e=>{ e.strip = Array.isArray(e.strip) ? e.strip : []; });
+  return obj;
+}
+
+async function _csAnthropic(text, isImage, imgData){
+  const prompt=_csPrompt();
+  const messages = isImage
+    ? [{role:'user',content:[{type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
+                             {type:'text',text:prompt}]}]
+    : [{role:'user', content: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,24000)}];
+  const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
+             'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
+    // temperature 0 for the same reason as the labor estimate: reading
+    // dimensions off a drawing is not a creative task, and a spec that comes
+    // back different every time it is run cannot be checked against itself.
+    body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:8192,temperature:0,messages})
+  });
+  if(!resp.ok){let m=`Anthropic error ${resp.status}`;
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
+  return _csParse((await resp.json()).content[0].text);
+}
+async function _csGemini(text, isImage, imgData){
+  const prompt=_csPrompt();
+  const parts = isImage
+    ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:prompt}]
+    : [{text: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,24000)}];
+  const resp=await _fetchWithRetry(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+    {method:'POST',headers:{'content-type':'application/json'},
+     body:JSON.stringify({contents:[{parts}],
+       generationConfig:{temperature:0, maxOutputTokens:8192, thinkingConfig:{thinkingBudget:0}}})});
+  if(!resp.ok){let m=`Gemini error ${resp.status}`;
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
+  const d=await resp.json();
+  const raw=(d.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
+  return _csParse(raw);
+}
+async function aiAnalyzeCutStrip(text, isImage, imgData){
+  let spec, firstError='';
+  if(geminiKey){
+    try{ spec=await _csGemini(text,isImage,imgData); }
+    catch(e){
+      firstError=e.message;
+      if(!anthKey) throw e;
+      console.warn('Gemini cut-strip failed, falling back to Anthropic:', e.message);
+    }
+  }
+  if(!spec && anthKey){
+    try{ spec=await _csAnthropic(text,isImage,imgData); }
+    catch(e){
+      throw new Error(firstError && firstError!==e.message
+        ? `${e.message} (Gemini also failed: ${firstError})` : e.message);
+    }
+  }
+  if(!spec) throw new Error('No AI key configured — add one in Admin → AI API Keys');
+  return spec;
+}
+
+// ── Generated diagrams ────────────────────────────────────────────────────────
+// Both figures are drawn FROM the spec, not from a fixed template: the cable
+// span is scaled to the real cut length, sleeves and markers land at their real
+// distances, and the strip profile has as many steps as the cable has layers.
+// That way the picture and the numbers can never disagree — which is the whole
+// reason for drawing it rather than just tabulating it.
+
+const _CS_SVG={ x0:170, x1:830, w:1000 };
+
+function _csScale(spec){
+  const L=_csNum(spec?.cable?.cut_length_mm);
+  return (L && L>0) ? (_CS_SVG.x1-_CS_SVG.x0)/L : 0;
+}
+// Distance measured from a named end → x. Falls back to the left end when the
+// reference designator doesn't match anything, so a typo in `from_end` misplaces
+// one sleeve instead of throwing away the whole diagram.
+function _csX(spec, fromEnd, mm){
+  const s=_csScale(spec); const d=_csNum(mm)||0;
+  const rightRef=(spec.ends?.[1]?.ref)||'';
+  const fromRight = rightRef && String(fromEnd||'').trim().toUpperCase()===String(rightRef).trim().toUpperCase();
+  return fromRight ? _CS_SVG.x1 - d*s : _CS_SVG.x0 + d*s;
+}
+function _csSvgTxt(s){ return esc(String(s||'')); }
+
+function _csHarnessSVG(spec){
+  const T=_csT, rtlAttr = _csRTL() ? ' direction="rtl"' : '';
+  const {x0,x1}=_CS_SVG;
+  const L=_csNum(spec?.cable?.cut_length_mm);
+  const left=spec.ends?.[0]||{}, right=spec.ends?.[1]||null;
+  const lenOK = !!(L && L>0);
+
+  let g='';
+  // cable body
+  g+=`<rect x="${x0}" y="122" width="${x1-x0}" height="16" fill="#CBD5E1" stroke="#475569" stroke-width="1.4"/>
+      <line x1="${x0}" y1="130" x2="${x1}" y2="130" stroke="#94A3B8" stroke-width="1" stroke-dasharray="5 4"/>`;
+
+  // left connector (drawn as a right-angle body when the description says so)
+  const leftRA=/right\s*angle|r\/a|\bra\b/i.test(String(left.description||'')+' '+String(left.termination||''));
+  g += leftRA
+    ? `<g stroke="#1E293B" stroke-width="1.6" fill="#E2E8F0"><rect x="128" y="112" width="44" height="36"/>
+       <rect x="128" y="52" width="44" height="62"/><rect x="122" y="40" width="56" height="14" fill="#94A3B8"/></g>`
+    : `<g stroke="#1E293B" stroke-width="1.6" fill="#E2E8F0"><rect x="122" y="114" width="48" height="32"/>
+       <rect x="88" y="106" width="34" height="48"/><rect x="76" y="112" width="12" height="36" fill="#94A3B8"/></g>`;
+  g+=`<text x="150" y="${leftRA?30:88}" text-anchor="middle" font-size="15" font-weight="800" fill="#1E293B">${_csSvgTxt(left.ref||'P1')}</text>
+      <text x="150" y="176" text-anchor="middle" font-size="11" font-family="monospace" fill="#64748B">${_csSvgTxt(left.connector_pn||'')}</text>`;
+
+  if(right){
+    const rightRA=/right\s*angle|r\/a|\bra\b/i.test(String(right.description||'')+' '+String(right.termination||''));
+    g += rightRA
+      ? `<g stroke="#1E293B" stroke-width="1.6" fill="#E2E8F0"><rect x="${x1}" y="112" width="44" height="36"/>
+         <rect x="${x1}" y="52" width="44" height="62"/><rect x="${x1-6}" y="40" width="56" height="14" fill="#94A3B8"/></g>`
+      : `<g stroke="#1E293B" stroke-width="1.6" fill="#E2E8F0"><rect x="${x1}" y="114" width="48" height="32"/>
+         <rect x="${x1+48}" y="106" width="34" height="48"/><rect x="${x1+82}" y="112" width="12" height="36" fill="#94A3B8"/></g>`;
+    g+=`<text x="${x1+46}" y="${rightRA?30:88}" text-anchor="middle" font-size="15" font-weight="800" fill="#1E293B">${_csSvgTxt(right.ref||'J1')}</text>
+        <text x="${x1+46}" y="176" text-anchor="middle" font-size="11" font-family="monospace" fill="#64748B">${_csSvgTxt(right.connector_pn||'')}</text>`;
+  }
+
+  // sleeves — hatched blocks, drawn only when the length scale is known
+  if(lenOK) (spec.sleeves||[]).forEach(s=>{
+    const len=Math.max(6,(_csNum(s.length_mm)||0)*_csScale(spec));
+    const ends=[left, right].filter(Boolean);
+    // A sleeve at distance 0 sits against its connector; qty 2 with no explicit
+    // end means one at each end, which is how these drawings are normally noted.
+    const targets = (_csNum(s.qty)>=2 && ends.length>1 && !_csNum(s.distance_mm)) ? ends : [{ref:s.from_end}];
+    targets.forEach(t=>{
+      const isRight = right && String(t.ref||'').toUpperCase()===String(right.ref||'').toUpperCase();
+      const x = isRight ? _csX(spec,right.ref,_csNum(s.distance_mm)||0)-len : _csX(spec,t.ref,_csNum(s.distance_mm)||0);
+      g+=`<rect x="${x.toFixed(1)}" y="118" width="${len.toFixed(1)}" height="24" fill="url(#csHatch)" stroke="#1E293B" stroke-width="1.2"/>`;
+    });
+  });
+
+  // markers — white tags with their label letter, plus a dimension to their end
+  let dimY=214;
+  if(lenOK) (spec.markers||[]).forEach(mk=>{
+    const x=_csX(spec, mk.from_end, mk.distance_mm);
+    const bad=mk.confirmed===false;
+    g+=`<rect x="${(x-7.5).toFixed(1)}" y="116" width="15" height="28" fill="#fff" stroke="#1E293B" stroke-width="1.4"/>
+        <text x="${x.toFixed(1)}" y="136" text-anchor="middle" font-size="11" font-weight="800" fill="#0F172A">${_csSvgTxt(mk.label||'')}</text>`;
+    const anchorX=_csX(spec, mk.from_end, 0);
+    const col=bad?'#DC2626':'#334155';
+    g+=`<line x1="${Math.min(anchorX,x).toFixed(1)}" y1="${dimY}" x2="${Math.max(anchorX,x).toFixed(1)}" y2="${dimY}" stroke="${col}" stroke-width="1.1" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
+        <line x1="${x.toFixed(1)}" y1="144" x2="${x.toFixed(1)}" y2="${dimY+6}" stroke="${col}" stroke-width=".8" stroke-dasharray="3 3"/>
+        <rect x="${((anchorX+x)/2-26).toFixed(1)}" y="${dimY-12}" width="52" height="20" fill="#fff"/>
+        <text x="${((anchorX+x)/2).toFixed(1)}" y="${dimY+3}" text-anchor="middle" font-size="13" font-weight="700" fill="${col}">${_csNum(mk.distance_mm)??'?'}${bad?' *':''}</text>`;
+    dimY+=26;
+  });
+
+  // overall length
+  const dy=Math.max(258,dimY+14);
+  g+=`<line x1="${x0}" y1="${dy}" x2="${x1}" y2="${dy}" stroke="#0F172A" stroke-width="1.3" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
+      <line x1="${x0}" y1="146" x2="${x0}" y2="${dy+6}" stroke="#0F172A" stroke-width=".9"/>
+      <line x1="${x1}" y1="146" x2="${x1}" y2="${dy+6}" stroke="#0F172A" stroke-width=".9"/>
+      <rect x="${(500-80)}" y="${dy-14}" width="160" height="26" fill="#fff"/>
+      <text x="500" y="${dy+5}" text-anchor="middle" font-size="16" font-weight="800" fill="#0F172A">${lenOK?L+' mm':'? mm'}</text>`;
+  if(spec.cable?.length_includes_connectors===false)
+    g+=`<text x="500" y="${dy+28}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#DC2626"${rtlAttr}>${_csSvgTxt(T('Cut length — cable only, connectors NOT included'))}</text>`;
+
+  const h=dy+58;
+  return `<svg viewBox="0 0 1000 ${h}" xmlns="http://www.w3.org/2000/svg" font-family="Heebo, Public Sans, Arial, sans-serif" direction="ltr">
+    <defs>
+      <marker id="csAr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#0F172A"/></marker>
+      <marker id="csArL" markerWidth="9" markerHeight="9" refX="1" refY="4.5" orient="auto"><path d="M9,0 L0,4.5 L9,9 z" fill="#0F172A"/></marker>
+      <pattern id="csHatch" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+        <line x1="0" y1="0" x2="0" y2="6" stroke="#334155" stroke-width="2.4"/></pattern>
+    </defs>
+    ${g}
+    <text x="40" y="${h-12}" font-size="10.5" fill="#64748B"${rtlAttr}>${_csSvgTxt(T('All dimensions in millimetres. Not to scale.'))}</text>
+    ${(spec.markers||[]).some(m=>m.confirmed===false)
+      ? `<text x="500" y="${h-12}" text-anchor="middle" font-size="11" font-weight="700" fill="#DC2626"${rtlAttr}>* ${_csSvgTxt(T('TO BE CONFIRMED'))}</text>` : ''}
+    <text x="960" y="${h-12}" text-anchor="end" font-size="10.5" font-weight="700" fill="#64748B">${_csSvgTxt(spec.drawing_number||'')} · FIG. 1</text>
+  </svg>`;
+}
+
+// Stepped profile for one end. Driven by the cable's layer list and the strip
+// dimensions: cuts sorted ascending from the tip give the boundary between one
+// layer and the next, so a 3-layer coax draws 3 steps and a 2-layer wire draws
+// 2, with no special-casing.
+function _csStripSVG(spec, end){
+  const T=_csT, rtlAttr=_csRTL()?' direction="rtl"':'';
+  const layers=(spec.cable?.layers||[]).slice();           // outermost first
+  const inner=layers.slice().reverse();                    // innermost first
+  const cuts=(end.strip||[]).filter(s=>!s.derived && _csNum(s.value_mm)>0)
+                            .map(s=>({code:s.code,mm:_csNum(s.value_mm),confirmed:s.confirmed!==false}))
+                            .sort((a,b)=>a.mm-b.mm);
+  if(!inner.length || !cuts.length) return '';
+
+  const X_TIP=910, X_BACK=80;
+  const maxMM=cuts[cuts.length-1].mm;
+  // Scale so the largest cut occupies ~410px, leaving room for the full-OD run.
+  const S=maxMM>0 ? 410/maxMM : 1;
+  const maxOD=Math.max(...layers.map(l=>_csNum(l.od_mm)||1), 1);
+  const H=72;                                              // px height of the full OD
+  const CY=132;
+
+  let g='', prev=0;
+  inner.forEach((layer,i)=>{
+    const to = i<cuts.length ? cuts[i].mm : null;           // null = runs off to the back
+    const xR = X_TIP - prev*S;
+    const xL = to==null ? X_BACK : X_TIP - to*S;
+    const od = _csNum(layer.od_mm)||maxOD;
+    const h  = Math.max(10, H*(od/maxOD));
+    const fill = i===0 ? '#FCD34D' : (i===inner.length-1 ? '#CBD5E1' : '#F1F5F9');
+    const stroke = i===0 ? '#92400E' : '#475569';
+    g+=`<rect x="${xL.toFixed(1)}" y="${(CY-h/2).toFixed(1)}" width="${(xR-xL).toFixed(1)}" height="${h.toFixed(1)}" fill="${fill}" stroke="${stroke}" stroke-width="1.6"/>`;
+    // layer caption, alternating above/below so they don't collide
+    const cx=(xL+xR)/2, above=i%2===1;
+    g+=`<text x="${cx.toFixed(1)}" y="${above?(CY-h/2-16):(CY+h/2+20)}" text-anchor="middle" font-size="12" font-weight="700" fill="${i===0?'#92400E':'#1E293B'}"${rtlAttr}>${_csSvgTxt(T(layer.name||''))}</text>`;
+    if(_csNum(layer.od_mm)!=null)
+      g+=`<text x="${cx.toFixed(1)}" y="${above?(CY-h/2-3):(CY+h/2+35)}" text-anchor="middle" font-size="10.5" fill="#475569">Ø ${_csNum(layer.od_mm)} mm</text>`;
+    prev = to==null ? prev : to;
+  });
+
+  // red cut faces + the tip
+  const faceX=[X_TIP, ...cuts.map(c=>X_TIP-c.mm*S)];
+  faceX.forEach(x=>{ g+=`<line x1="${x.toFixed(1)}" y1="${CY-H/2-4}" x2="${x.toFixed(1)}" y2="${CY+H/2+4}" stroke="#DC2626" stroke-width="3"/>`; });
+
+  // dimension lines, longest at the bottom so they nest cleanly
+  let y=CY+H/2+62;
+  cuts.slice().reverse().forEach(c=>{
+    const x=X_TIP-c.mm*S;
+    const col=c.confirmed?'#0F172A':'#DC2626';
+    g+=`<line x1="${x.toFixed(1)}" y1="${y}" x2="${X_TIP}" y2="${y}" stroke="${col}" stroke-width="1.3" marker-start="url(#csAr2L)" marker-end="url(#csAr2)"/>
+        <line x1="${x.toFixed(1)}" y1="${CY+H/2+4}" x2="${x.toFixed(1)}" y2="${y+6}" stroke="${col}" stroke-width=".9" stroke-dasharray="3 3"/>
+        <rect x="${((x+X_TIP)/2-60).toFixed(1)}" y="${y-13}" width="120" height="22" fill="#fff"/>
+        <text x="${((x+X_TIP)/2).toFixed(1)}" y="${y+5}" text-anchor="middle" font-size="14" font-weight="800" fill="${col}">${_csSvgTxt(c.code)} = ${c.mm} mm${c.confirmed?'':' *'}</text>`;
+    y+=30;
+  });
+
+  const h=y+34;
+  return `<svg viewBox="0 0 1000 ${h}" xmlns="http://www.w3.org/2000/svg" font-family="Heebo, Public Sans, Arial, sans-serif" direction="ltr">
+    <defs>
+      <marker id="csAr2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#0F172A"/></marker>
+      <marker id="csAr2L" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto"><path d="M8,0 L0,4 L8,8 z" fill="#0F172A"/></marker>
+    </defs>
+    <text x="80" y="34" font-size="15" font-weight="800" fill="#1E293B">${_csSvgTxt(end.ref||'')} — ${_csSvgTxt(end.connector_pn||'')}</text>
+    ${g}
+    <text x="500" y="${h-30}" text-anchor="middle" font-size="11.5" fill="#7F1D1D"${rtlAttr}>${_csSvgTxt(T('Red faces = every cut square to the axis, free of burrs and nicks.'))}</text>
+    ${cuts.some(c=>!c.confirmed)
+      ? `<text x="500" y="${h-12}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#DC2626"${rtlAttr}>* ${_csSvgTxt(T('TO BE CONFIRMED'))}</text>` : ''}
+  </svg>`;
+}
+
+// ── Rendering: list ───────────────────────────────────────────────────────────
+async function loadCutStripSpecs(force){
+  if(csSpecs.length && !force) return csSpecs;
+  if(!companyId) return (csSpecs=[]);
+  const snap=await getDocs(query(collection(db,'companies',companyId,'cut_strip_specs'),orderBy('updatedAt','desc')));
+  csSpecs=snap.docs.map(d=>({_id:d.id, ...d.data()}));
+  return csSpecs;
+}
+
+function _csTBCCount(spec){
+  let n=0;
+  (spec.ends||[]).forEach(e=>(e.strip||[]).forEach(s=>{ if(s.confirmed===false) n++; }));
+  if(spec.cable && spec.cable.cut_length_tolerance_confirmed===false) n++;
+  (spec.markers||[]).forEach(m=>{ if(m.confirmed===false) n++; });
+  return n;
+}
+
+async function renderCutStrip(){
+  csCurrent=null;
+  setActions(`<button class="btn btn-blue" id="btn-cs-new">＋ New from Drawing</button>`);
+  setContent(`<div style="text-align:center;padding:60px"><div class="ring" style="margin:0 auto"></div></div>`);
+  document.getElementById('btn-cs-new')?.addEventListener('click',openCSFileModal);
+
+  let list=[];
+  try{ list=await loadCutStripSpecs(true); }
+  catch(e){ setContent(`<div class="card" style="color:var(--danger)">Could not load saved specifications: ${esc(e.message)}</div>`); return; }
+
+  if(!list.length){
+    setContent(`<div class="card" style="max-width:640px;margin:30px auto;text-align:center;padding:40px 30px">
+      <div style="font-size:44px;margin-bottom:10px">✂️</div>
+      <h3 style="margin-bottom:6px">No cut &amp; strip specifications yet</h3>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:20px">
+        Upload a cable or harness drawing and the analysis produces a bench-ready sheet:
+        verbal steps plus scaled diagrams carrying the actual cut, strip and marker dimensions.</p>
+      <button class="btn btn-blue" id="btn-cs-new2">＋ New from Drawing</button>
+    </div>`);
+    document.getElementById('btn-cs-new2')?.addEventListener('click',openCSFileModal);
+    return;
+  }
+
+  setContent(`<div class="card">
+    <table class="tbl"><thead><tr>
+      <th>Drawing #</th><th>Title</th><th>Cable</th><th style="text-align:center">Cut length</th>
+      <th style="text-align:center">Unverified dims</th><th>Updated</th><th style="width:150px"></th>
+    </tr></thead><tbody>
+    ${list.map(s=>{
+      const tbc=_csTBCCount(s);
+      return `<tr>
+        <td style="font-weight:700">${esc(s.drawing_number||s._id)}</td>
+        <td>${esc(s.title||'')}</td>
+        <td style="font-family:monospace;font-size:12px">${esc(s.cable?.part_number||'')}</td>
+        <td style="text-align:center">${_csNum(s.cable?.cut_length_mm)!=null?esc(s.cable.cut_length_mm+' mm'):'—'}</td>
+        <td style="text-align:center">${tbc
+            ? `<span style="background:#DC2626;color:#fff;border-radius:3px;padding:2px 8px;font-size:11px;font-weight:700">${tbc} TBC</span>`
+            : `<span style="color:#15803D;font-weight:700">✓</span>`}</td>
+        <td style="font-size:12px;color:var(--muted)">${s.updatedAt?.toDate ? esc(s.updatedAt.toDate().toLocaleString()) : ''}</td>
+        <td style="text-align:right">
+          <button class="btn btn-sm btn-blue cs-open" data-id="${esc(s._id)}">Open</button>
+          <button class="btn btn-sm btn-ghost cs-del" data-id="${esc(s._id)}">🗑</button>
+        </td></tr>`;
+    }).join('')}
+    </tbody></table></div>`);
+
+  document.querySelectorAll('.cs-open').forEach(b=>b.addEventListener('click',()=>{
+    const s=csSpecs.find(x=>x._id===b.dataset.id);
+    if(s){ csCurrent=s; _csLang='en'; renderCutStripSheet(); }
+  }));
+  document.querySelectorAll('.cs-del').forEach(b=>b.addEventListener('click',async()=>{
+    const s=csSpecs.find(x=>x._id===b.dataset.id);
+    if(!s || !confirm(`Delete the cut & strip specification for ${s.drawing_number||s._id}?`)) return;
+    try{
+      await deleteDoc(doc(db,'companies',companyId,'cut_strip_specs',s._id));
+      toast('Specification deleted','success');
+      renderCutStrip();
+    }catch(e){ toast('Error: '+e.message,'error'); }
+  }));
+}
+
+// ── Import ────────────────────────────────────────────────────────────────────
+function openCSFileModal(){
+  showModal(`<div class="modal">
+    <div class="modal-head"><h3>New Cut &amp; Strip Specification</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" id="cs-modal-body">
+      <div class="drop-zone" id="cs-drop-zone" tabindex="0">
+        <span class="icon-big">✂️</span>
+        <strong>Drop a cable or harness drawing here</strong>
+        <p>PDF / PNG / JPG — one drawing at a time. The analysis reads the cut length, strip dimensions,
+           sleeve and marker positions, then builds a bench sheet with diagrams.</p>
+        <input type="file" id="cs-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" style="display:none">
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+  </div>`);
+  const dz=document.getElementById('cs-drop-zone'), fi=document.getElementById('cs-file-input');
+  dz.addEventListener('click',()=>fi.click());
+  dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover');});
+  dz.addEventListener('dragleave',()=>dz.classList.remove('dragover'));
+  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');
+    if(e.dataTransfer.files.length) handleCSFile(e.dataTransfer.files[0]);});
+  fi.addEventListener('change',()=>{ if(fi.files.length) handleCSFile(fi.files[0]); });
+}
+
+async function handleCSFile(file){
+  const body=document.getElementById('cs-modal-body');
+  const foot=document.querySelector('#modal-bg .modal-foot');
+  const isPDF=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
+  const isImg=file.type.startsWith('image/');
+  if(!isPDF && !isImg){ toast('Drop a PDF or an image of the drawing','error'); return; }
+
+  body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="cs-msg">Reading drawing…</span></div>
+    <div class="progress-bar"><div class="progress-fill" id="cs-prog"></div></div>`;
+  if(foot) foot.innerHTML='';
+  const setM=(m,p)=>{ const e=document.getElementById('cs-msg'); if(e)e.textContent=m;
+                      const b=document.getElementById('cs-prog'); if(b)b.style.width=p+'%'; };
+
+  try{
+    let text='', isImage=false, imgData=null;
+    if(isPDF){
+      setM('Extracting drawing…',20);
+      const {pageTexts,pageImages}=await extractPDFPages(file);
+      text=pageTexts.join('\n');
+      // Vision on page 1 is the right default here, unlike BOM extraction: the
+      // cut length, strip callouts and marker positions live on the assembly
+      // view, and reading them needs the picture, not the text layer.
+      if(pageImages[0]){ isImage=true; imgData={mimeType:'image/jpeg', b64:pageImages[0]}; }
+    } else {
+      setM('Reading image…',20);
+      imgData=await encodeImage(file); isImage=true;
+    }
+
+    setM('Analysing cut & strip requirements… (this takes 10–20 s)',55);
+    const spec=await aiAnalyzeCutStrip(text, isImage, imgData);
+
+    // A drawing number is what the sheet is filed and found under. Falling back
+    // to the file name is better than an "UNTITLED" doc, but it is recorded as a
+    // discrepancy so nobody mistakes the file name for the title-block number.
+    if(!String(spec.drawing_number||'').trim()){
+      const fromName=file.name.replace(/\.[^.]+$/,'').trim();
+      spec.drawing_number=fromName;
+      spec.discrepancies.push({what:'No drawing number found in the title block',
+        detail:`Filed under the file name "${fromName}". Confirm the real drawing number before this sheet is used.`});
+    }
+    // The same check the operator would make by eye, done every time: the file
+    // name and the title block disagreeing is a common and expensive mix-up.
+    const fileStem=file.name.replace(/\.[^.]+$/,'').trim();
+    const norm=s=>String(s||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+    if(fileStem && norm(fileStem) && !norm(fileStem).includes(norm(spec.drawing_number))
+       && !norm(spec.drawing_number).includes(norm(fileStem))){
+      spec.discrepancies.push({what:'File name does not match the title block',
+        detail:`File is named "${fileStem}" but the title block reads "${spec.drawing_number}". This sheet follows the title block — confirm which is correct before the label is printed.`});
+    }
+
+    spec.source_file=file.name;
+    spec.spec_no='CS-'+_csDocId(spec.drawing_number)+'-01';
+
+    setM('Saving…',90);
+    const id=_csDocId(spec.drawing_number);
+    await setDoc(doc(db,'companies',companyId,'cut_strip_specs',id),
+      {...spec, updatedAt:serverTimestamp(), createdBy:currentUserEmail||''}, {merge:false});
+    logAudit('cut_strip_generated',{drawing:spec.drawing_number, unverified:_csTBCCount(spec)},true);
+
+    closeModal();
+    toast(`Specification created for ${spec.drawing_number}`,'success');
+    csSpecs=[]; await loadCutStripSpecs(true);
+    csCurrent=csSpecs.find(s=>s._id===id) || {_id:id, ...spec};
+    _csLang='en';
+    renderCutStripSheet();
+  }catch(e){
+    console.error('[CutStrip]',e);
+    logAudit('cut_strip_generated',{file:file.name, error:e.message},false);
+    body.innerHTML=`<div class="card" style="border-color:var(--danger)">
+      <strong style="color:var(--danger)">Analysis failed</strong>
+      <p style="font-size:13px;margin-top:8px">${esc(e.message)}</p>
+      <p style="font-size:12px;color:var(--muted);margin-top:10px">
+        Nothing was saved. If the drawing is a scan, a sharper image usually fixes this.</p></div>`;
+    if(foot) foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+  }
+}
+
+// ── Rendering: the sheet ──────────────────────────────────────────────────────
+function _csTBC(){ return `<span class="cs-tag cs-tbc">${esc(_csT('TO BE CONFIRMED'))}</span>`; }
+function _csDim(value, confirmed){
+  const v=_csNum(value);
+  const txt = v==null ? '—' : v+' mm';
+  return confirmed===false
+    ? `<span style="color:#DC2626;font-weight:700">${esc(txt)}</span> ${_csTBC()}`
+    : `<span style="font-weight:700">${esc(txt)}</span>`;
+}
+
+function renderCutStripSheet(){
+  const spec=csCurrent; if(!spec){ renderCutStrip(); return; }
+  const T=_csT, rtl=_csRTL();
+  const tbc=_csTBCCount(spec);
+
+  setActions(`
+    <span style="display:inline-flex;gap:4px;margin-inline-end:10px">
+      ${['en','he','ru'].map(L=>`<button class="btn btn-sm ${_csLang===L?'btn-blue':'btn-ghost'}"
+          data-cs-lang="${L}" ${_csLang===L?'disabled':''}>${_CS_LANG_NAMES[L]}</button>`).join('')}
+    </span>
+    <button class="btn btn-sm btn-ghost" id="btn-cs-print">🖨 ${esc(T('Print'))}</button>
+    <button class="btn btn-sm btn-ghost" id="btn-cs-pdf">📄 ${esc(T('Export PDF'))}</button>
+    <button class="btn btn-sm btn-ghost" id="btn-cs-back">← ${esc(T('Back'))}</button>`);
+
+  const layers=spec.cable?.layers||[];
+  const ends=spec.ends||[];
+
+  setContent(`<div id="cs-sheet" class="cs-sheet" dir="${rtl?'rtl':'ltr'}">
+
+    <div class="cs-banner">${esc(T('Generated by AI from the drawing — verify against the drawing before use.'))}</div>
+
+    <div class="cs-tb">
+      <div class="cs-tb-l">
+        <div class="cs-doc-t">${esc(T('Cut & Strip Specification'))}</div>
+        <div class="cs-doc-s">${esc(spec.title||'')}</div>
+      </div>
+      <div class="cs-tb-r"><dl class="cs-kv">
+        <dt>${esc(T('Drawing'))}</dt><dd class="cs-ltr">${esc(spec.drawing_number||'')}</dd>
+        <dt>${esc(T('Revision'))}</dt><dd class="cs-ltr">${esc(spec.revision||'—')}</dd>
+        <dt>${esc(T('Spec no.'))}</dt><dd class="cs-ltr">${esc(spec.spec_no||'')}</dd>
+        <dt>${esc(T('Workmanship'))}</dt><dd class="cs-ltr">${esc(spec.standard||'—')}</dd>
+        <dt>${esc(T('Cable'))}</dt><dd class="cs-ltr">${esc(spec.cable?.part_number||'—')}</dd>
+        <dt>${esc(T('Cut length'))}</dt><dd class="cs-ltr">${esc(_csMM(spec.cable?.cut_length_mm))}</dd>
+      </dl></div>
+    </div>
+
+    ${(tbc || (spec.open_items||[]).length) ? `
+    <h2 class="cs-h2"><span class="cs-n">00</span>${esc(T('Before you start — open items'))}</h2>
+    <div class="cs-pad"><div class="cs-box cs-stop">
+      <b>${esc(T('Do not cut production material'))}</b>
+      <p>${esc(T('The dimensions below marked TBC were derived, not read from a manufacturer datasheet. Prove them on sample pieces and get engineering sign-off before the first production lot.'))}</p>
+      ${(spec.open_items||[]).length?`<ul>${spec.open_items.map(o=>
+        `<li><b>${esc(T(o.what||''))}</b> — ${esc(T(o.why||''))}${o.action?` <i>→ ${esc(T(o.action))}</i>`:''}</li>`).join('')}</ul>`:''}
+    </div></div>` : ''}
+
+    ${(spec.discrepancies||[]).length ? `
+    <div class="cs-pad"><div class="cs-box cs-warn">
+      <b>${esc(T('Discrepancies found in the source drawing'))}</b>
+      <ul>${spec.discrepancies.map(d=>`<li><b>${esc(T(d.what||''))}</b> — ${esc(T(d.detail||''))}</li>`).join('')}</ul>
+    </div></div>` : ''}
+
+    ${(spec.materials||[]).length ? `
+    <h2 class="cs-h2"><span class="cs-n">01</span>${esc(T('Material list'))}</h2>
+    <div class="cs-pad"><table class="cs-tbl">
+      <thead><tr><th style="width:38px">#</th><th style="width:170px">${esc(T('Part number'))}</th>
+        <th style="width:100px">${esc(T('Manufacturer'))}</th><th>${esc(T('Description'))}</th>
+        <th style="width:80px">${esc(T('Qty'))}</th><th style="width:64px">${esc(T('Ref'))}</th></tr></thead>
+      <tbody>${spec.materials.map(m=>`<tr>
+        <td>${esc(m.item??'')}</td><td class="cs-ltr">${esc(m.part_number||'')}</td>
+        <td class="cs-ltr">${esc(m.manufacturer||'')}</td><td>${esc(T(m.description||''))}</td>
+        <td class="cs-ctr cs-ltr">${esc(m.qty??'')}</td><td class="cs-ctr cs-ltr">${esc(m.ref||'')}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+
+    ${layers.length ? `
+    <div class="cs-pad"><h3 class="cs-h3">${esc(T('Cable cross-section'))}</h3>
+    <table class="cs-tbl">
+      <thead><tr><th style="width:170px">${esc(T('Layer'))}</th><th style="width:140px">${esc(T('Nominal Ø'))}</th>
+        <th style="width:120px">${esc(T('Material'))}</th><th>${esc(T('Note'))}</th></tr></thead>
+      <tbody>${layers.map(l=>`<tr><td>${esc(T(l.name||''))}</td>
+        <td class="cs-ltr">${esc(_csMM(l.od_mm))}</td><td class="cs-ltr">${esc(l.material||'')}</td>
+        <td>${esc(T(l.note||''))}</td></tr>`).join('')}
+      </tbody></table>
+      ${spec.cable?.layers_confirmed===false?`<p class="cs-note">${_csTBC()}</p>`:''}
+    </div>` : ''}
+
+    <h2 class="cs-h2"><span class="cs-n">02</span>${esc(T('Assembly overview — dimensions'))}</h2>
+    <div class="cs-pad"><figure class="cs-fig">${_csHarnessSVG(spec)}</figure></div>
+
+    ${ends.length ? `
+    <h2 class="cs-h2"><span class="cs-n">03</span>${esc(T('Strip detail'))}</h2>
+    <div class="cs-pad">
+      ${ends.map(e=>{ const svg=_csStripSVG(spec,e); return svg?`<figure class="cs-fig">${svg}</figure>`:''; }).join('')}
+      <h3 class="cs-h3">${esc(T('Strip dimensions'))}</h3>
+      <table class="cs-tbl">
+        <thead><tr><th style="width:60px">${esc(T('End'))}</th><th style="width:150px">${esc(T('Connector'))}</th>
+          <th style="width:56px">#</th><th>${esc(T('Description'))}</th>
+          <th style="width:190px">${esc(T('Value'))}</th><th style="width:280px">${esc(T('Basis'))}</th></tr></thead>
+        <tbody>${ends.flatMap(e=>(e.strip||[]).map((s,i)=>`<tr>
+          <td class="cs-ctr cs-ltr"><b>${i===0?esc(e.ref||''):''}</b></td>
+          <td class="cs-ltr">${i===0?esc(e.connector_pn||''):''}</td>
+          <td class="cs-ctr cs-ltr"><b>${esc(s.code||'')}</b></td>
+          <td>${esc(T(s.label||''))}${s.derived?' <i style="opacity:.6">(derived)</i>':''}</td>
+          <td class="cs-ctr">${_csDim(s.value_mm, s.confirmed)}</td>
+          <td style="font-size:12px">${esc(T(s.basis||''))}</td></tr>`)).join('')}
+        </tbody></table>
+      ${ends.filter(e=>_csNum(e.strip_tolerance_mm)!=null).map(e=>
+        `<p class="cs-note">${esc(e.ref||'')} — tolerance <span class="cs-ltr">+0 / −${_csNum(e.strip_tolerance_mm)} mm</span></p>`).join('')}
+      ${ends.filter(e=>e.datasheet_ref).map(e=>
+        `<p class="cs-note">${esc(e.ref||'')} — governed by <span class="cs-ltr">${esc(e.datasheet_ref)}</span></p>`).join('')}
+    </div>` : ''}
+
+    <h2 class="cs-h2"><span class="cs-n">04</span>${esc(T('Operation sequence'))}</h2>
+    <div class="cs-pad">${(spec.steps||[]).map((s,i)=>`
+      <div class="cs-step">
+        <div class="cs-step-n">${esc(s.n??(i+1))}</div>
+        <div>
+          <h4>${esc(T(s.title||''))}${s.dimension_ref?` <span class="cs-tag cs-dim cs-ltr">${esc(s.dimension_ref)}</span>`:''}</h4>
+          <div>${esc(T(s.body||''))}</div>
+          ${s.critical?`<div class="cs-crit"><b>${esc(T('CRITICAL'))}:</b> ${esc(T(s.critical))}</div>`:''}
+        </div>
+      </div>`).join('')}</div>
+
+    ${(spec.inspection||[]).length ? `
+    <h2 class="cs-h2"><span class="cs-n">05</span>${esc(T('Inspection'))}${spec.standard?` — <span class="cs-ltr">${esc(spec.standard)}</span>`:''}</h2>
+    <div class="cs-pad"><ul class="cs-chk">${spec.inspection.map(c=>
+      `<li><span class="cs-b"></span><span>${esc(T(c))}</span></li>`).join('')}</ul></div>` : ''}
+
+    ${(spec.tools||[]).length ? `
+    <h2 class="cs-h2"><span class="cs-n">06</span>${esc(T('Tools & consumables'))}</h2>
+    <div class="cs-pad"><table class="cs-tbl">
+      <thead><tr><th style="width:240px">${esc(T('Tool'))}</th><th style="width:170px">${esc(T('Setting'))}</th>
+        <th>${esc(T('Note'))}</th></tr></thead>
+      <tbody>${spec.tools.map(t=>`<tr><td>${esc(T(t.tool||''))}</td>
+        <td class="cs-ctr cs-ltr">${esc(t.setting||'—')}</td><td>${esc(T(t.note||''))}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+
+    <div class="cs-pad">
+      <div class="cs-sig">
+        <div>${esc(T('Prepared by'))}</div><div>${esc(T('Checked by — Engineering'))}</div><div>${esc(T('Approved for production'))}</div>
+      </div>
+      <div class="cs-foot">
+        <span class="cs-ltr">${esc(spec.spec_no||'')} · ${esc(spec.drawing_number||'')} ${esc(spec.revision?('Rev '+spec.revision):'')}${spec.source_file?' · '+esc(spec.source_file):''}</span>
+        <span>v${APP_VER}</span>
+      </div>
+    </div>
+  </div>`);
+
+  document.getElementById('btn-cs-back')?.addEventListener('click',()=>renderCutStrip());
+  document.getElementById('btn-cs-print')?.addEventListener('click',()=>window.print());
+  document.getElementById('btn-cs-pdf')?.addEventListener('click',_csExportPDF);
+  document.querySelectorAll('[data-cs-lang]').forEach(b=>b.addEventListener('click',async()=>{
+    const lang=b.dataset.csLang;
+    if(lang===_csLang) return;
+    if(lang!=='en'){
+      const prose=_csProseStrings(csCurrent);
+      const bucket=_csCache[lang]||{};
+      if(prose.some(t=>!bucket[t])){
+        const old=b.textContent; b.textContent=_CS_LABELS[lang]?.['Translating…']||'Translating…';
+        document.querySelectorAll('[data-cs-lang]').forEach(x=>x.disabled=true);
+        try{ await _csTranslate(prose, lang); }
+        catch(e){
+          toast('Translation failed: '+e.message,'error');
+          b.textContent=old;
+          document.querySelectorAll('[data-cs-lang]').forEach(x=>{ x.disabled=(x.dataset.csLang===_csLang); });
+          return;
+        }
+      }
+    }
+    _csLang=lang;   // deliberately NOT persisted — see _csLang above
+    renderCutStripSheet();
+  }));
+}
+
+// ── PDF export ────────────────────────────────────────────────────────────────
+// html2canvas + jsPDF rather than a text-drawing PDF library, specifically
+// because of the Hebrew and Russian views: rasterising the already-correct DOM
+// keeps RTL, bidi and the SVG diagrams exactly as they appear on screen, which
+// text-drawing libraries handle badly or not at all. Both are ~700 KB, so they
+// load only when someone actually exports.
+let _csPdfPromise=null;
+function _csLoadPdfLibs(){
+  if(window.html2canvas && window.jspdf) return Promise.resolve();
+  if(_csPdfPromise) return _csPdfPromise;
+  const one=src=>new Promise((res,rej)=>{
+    const el=document.createElement('script'); el.src=src;
+    el.onload=res; el.onerror=()=>rej(new Error('Could not load the PDF library — check your connection'));
+    document.head.appendChild(el);
+  });
+  _csPdfPromise=Promise.all([
+    window.html2canvas?Promise.resolve():one('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'),
+    window.jspdf?Promise.resolve():one('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'),
+  ]).then(()=>{
+    if(!window.html2canvas||!window.jspdf) throw new Error('PDF libraries failed to initialise');
+  });
+  return _csPdfPromise;
+}
+async function _csExportPDF(){
+  const btn=document.getElementById('btn-cs-pdf');
+  const sheet=document.getElementById('cs-sheet');
+  if(!sheet) return;
+  const old=btn?btn.textContent:'';
+  if(btn){ btn.disabled=true; btn.textContent='…'; }
+  // html2canvas measures SVGs by their width/height ATTRIBUTES, not by CSS.
+  // These are sized with width:100% and only a viewBox, so without this they
+  // rasterise at their intrinsic size — or not at all. Stamped before the
+  // capture and stripped again after, so the on-screen layout is untouched.
+  const svgs=[...sheet.querySelectorAll('svg')];
+  const stamped=svgs.map(s=>{
+    const r=s.getBoundingClientRect();
+    const had=s.hasAttribute('width');
+    if(!had){ s.setAttribute('width', Math.round(r.width)); s.setAttribute('height', Math.round(r.height)); }
+    return had;
+  });
+  try{
+    await _csLoadPdfLibs();
+    const canvas=await html2canvas(sheet,{scale:2, backgroundColor:'#ffffff', useCORS:true, logging:false});
+    const {jsPDF}=window.jspdf;
+    const pdf=new jsPDF({unit:'mm', format:'a4', orientation:'portrait'});
+    const pw=pdf.internal.pageSize.getWidth(), ph=pdf.internal.pageSize.getHeight();
+    const M=8, iw=pw-M*2;
+    const ih=canvas.height*iw/canvas.width;             // full image height in mm
+    const pageH=ph-M*2;
+    const pages=Math.max(1, Math.ceil(ih/pageH));
+    const sliceCanvasH=Math.floor(canvas.height*pageH/ih);
+    for(let p=0;p<pages;p++){
+      if(p) pdf.addPage();
+      const sy=p*sliceCanvasH;
+      const sh=Math.min(sliceCanvasH, canvas.height-sy);
+      const slice=document.createElement('canvas');
+      slice.width=canvas.width; slice.height=sh;
+      slice.getContext('2d').drawImage(canvas,0,sy,canvas.width,sh,0,0,canvas.width,sh);
+      pdf.addImage(slice.toDataURL('image/jpeg',0.92),'JPEG',M,M,iw, sh*iw/canvas.width);
+      pdf.setFontSize(8); pdf.setTextColor(120);
+      pdf.text(`${_csT('Page')} ${p+1} ${_csT('of')} ${pages}`, pw-M, ph-3, {align:'right'});
+    }
+    const dwg=(csCurrent?.drawing_number||'spec').replace(/[^A-Za-z0-9._-]+/g,'_');
+    pdf.save(`${dwg}_cut_and_strip.pdf`);
+    toast('PDF exported','success');
+  }catch(e){
+    console.error('[CutStrip PDF]',e);
+    toast('PDF export failed: '+e.message,'error');
+  }finally{
+    svgs.forEach((s,i)=>{ if(!stamped[i]){ s.removeAttribute('width'); s.removeAttribute('height'); } });
+    if(btn){ btn.disabled=false; btn.textContent=old; }
+  }
 }
 
 </script>
