@@ -600,7 +600,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.13.0';
+const APP_VER   = '1.14.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7810,20 +7810,35 @@ function _csR(n){ return Math.round(n*1000)/1000; }
 //
 // Specs saved under the old shape are migrated on read rather than left behind.
 function _csSegments(spec){ return Array.isArray(spec?.segments) ? spec.segments : []; }
+// A breakout is the point where a trunk fans out into branches. It is a NODE,
+// not a connector: nothing is terminated there, so it gets no strip dimensions
+// and no part number — but runs start and end at it, so it has to exist in the
+// model or a breakout harness can only be described as a chain of connectors,
+// which is a different harness from the one on the drawing.
+function _csBreakouts(spec){ return Array.isArray(spec?.breakouts) ? spec.breakouts : []; }
+function _csIsBreakout(spec, ref){
+  const r=String(ref||'').toUpperCase();
+  return _csBreakouts(spec).some(b=>String(b?.id||'').toUpperCase()===r);
+}
 function _csConnectors(spec){ return Array.isArray(spec?.connectors) ? spec.connectors : []; }
 function _csSegLabel(seg){
   const f=String(seg?.from||'').trim(), t=String(seg?.to||'').trim();
   return (f&&t) ? `${f} → ${t}` : (seg?.id||'');
 }
-function _csSegEnds(seg){
+function _csSegEnds(seg, spec){
   const listed=Array.isArray(seg?.ends)?seg.ends:[];
+  const isBrk=ref=>spec ? _csIsBreakout(spec, ref) : false;
   // A segment always has two physical ends. If the model only described one,
   // synthesise the other from `to` rather than dropping half the work.
   const refs=[seg?.from, seg?.to].filter(Boolean).map(String);
-  return refs.map(ref=>
-    listed.find(e=>String(e?.ref||'').toUpperCase()===ref.toUpperCase())
-    || {ref, strip:[], _missing:true}
-  ).concat(listed.filter(e=>!refs.some(r=>r.toUpperCase()===String(e?.ref||'').toUpperCase())));
+  return refs.map(ref=>{
+    const found=listed.find(e=>String(e?.ref||'').toUpperCase()===ref.toUpperCase());
+    // The junction flag depends on the REF, not on whether the model happened to
+    // list that end — otherwise a breakout the model did list would be treated
+    // as a real termination and the sheet would ask for strip dimensions there.
+    if(found) return isBrk(ref) ? {...found, _breakout:true} : found;
+    return {ref, strip:[], _missing:!isBrk(ref), _breakout:isBrk(ref)};
+  }).concat(listed.filter(e=>!refs.some(r=>r.toUpperCase()===String(e?.ref||'').toUpperCase())));
 }
 
 // Old shape → new shape. Runs on parse AND on load, so a spec saved months ago
@@ -7832,6 +7847,7 @@ function _csNormalize(spec){
   if(!spec || typeof spec!=='object') return spec;
   spec.connectors = Array.isArray(spec.connectors) ? spec.connectors : [];
   spec.segments   = Array.isArray(spec.segments)   ? spec.segments   : [];
+  spec.breakouts  = Array.isArray(spec.breakouts)  ? spec.breakouts  : [];
 
   if(!spec.segments.length && spec.cable){
     const c=spec.cable, legacyEnds=Array.isArray(spec.ends)?spec.ends:[];
@@ -7873,6 +7889,7 @@ function _csNormalize(spec){
     seg.conductors = Array.isArray(seg.conductors) ? seg.conductors : [];
     seg.ends.forEach(e=>{ e.strip = Array.isArray(e.strip) ? e.strip : []; });
     [seg.from, seg.to].filter(Boolean).forEach(ref=>{
+      if(_csIsBreakout(spec, ref)) return;      // a junction, not something to terminate
       if(!known.has(String(ref).toUpperCase())){
         known.add(String(ref).toUpperCase());
         spec.connectors.push({ref:String(ref), part_number:'', manufacturer:'',
@@ -8018,6 +8035,14 @@ const _CS_LABELS={
     'Translating…':'מתרגם…','Page':'עמוד','of':'מתוך',
     'Edit':'עריכה','Save':'שמירה','Cancel':'ביטול','Saving…':'שומר…',
     'Cut length calculation':'חישוב אורך החיתוך',
+    'Breakout':'נקודת פיצול',
+    'from':'מ-',
+    'Open wires':'חוטים חשופים',
+    'Label table':'טבלת סימון',
+    'Label':'סימון',
+    'Text':'טקסט',
+    'Kind':'סוג',
+    'junction — nothing is terminated here':'צומת — לא מסתיים כאן דבר',
     'Connectors':'מחברים',
     'Positions':'מגעים',
     'Termination':'סוג חיבור',
@@ -8105,6 +8130,14 @@ const _CS_LABELS={
     'Translating…':'Перевод…','Page':'Стр.','of':'из',
     'Edit':'Редактировать','Save':'Сохранить','Cancel':'Отмена','Saving…':'Сохранение…',
     'Cut length calculation':'Расчёт длины реза',
+    'Breakout':'Точка разветвления',
+    'from':'от',
+    'Open wires':'Открытые провода',
+    'Label table':'Таблица маркировки',
+    'Label':'Маркер',
+    'Text':'Текст',
+    'Kind':'Тип',
+    'junction — nothing is terminated here':'Узел — здесь ничего не заделывается',
     'Connectors':'Разъёмы',
     'Positions':'Контактов',
     'Termination':'Тип заделки',
@@ -8224,7 +8257,6 @@ async function _csEnsureLang(spec, lang, onProgress){
 function _csProseStrings(spec){
   const out=[];
   const push=v=>{ const t=String(v||'').trim(); if(t) out.push(t); };
-  push(spec.drawing_name);
   (spec.steps||[]).forEach(s=>{ push(s.title); push(s.body); push(s.critical); });
   (spec.inspection||[]).forEach(push);
   (spec.open_items||[]).forEach(o=>{ push(o.what); push(o.why); push(o.action); });
@@ -8369,11 +8401,13 @@ function _csPrompt(lang){
   const langRule = langName==='English' ? '' :
 `
 OUTPUT LANGUAGE — read this before anything else:
-Write every human-readable string in ${langName}. That means: drawing_name, all step titles and bodies,
+Write every human-readable string in ${langName}. That means: all step titles and bodies,
 all "critical" warnings, every inspection line, every layer name and note, every strip label and
 "basis" text, every tool name and note, all open_items and discrepancies text, and all descriptions.
 
 Keep these in their original Latin form, never translated or transliterated:
+  - drawing_number, drawing_name and project — copy these from the title block EXACTLY as printed,
+    in their original language. They identify the document; a translated title matches no paperwork.
   - part numbers and catalogue numbers (ISDF-04-D-M, RG-405SS, 50-57-9403)
   - manufacturer names (AMPHENOL, Samtec, Molex, TE)
   - standards (IPC/WHMA-A-620 Class 3, IPC-620, MIL-DTL-17)
@@ -8390,13 +8424,17 @@ Return ONLY a JSON object. No markdown fence, no commentary.
 
 {
   "drawing_number": "the DRAWING NO from the title block — the part number of THIS harness",
-  "drawing_name": "the Description / title of the harness, e.g. \\"Wing servo control harness for two servos\\"",
+  "drawing_name": "the Description / title of the harness, copied VERBATIM from the title block — never translated",
   "project": "the Project field, e.g. \\"H-120 GEN C\\" — the programme this belongs to, NOT the drawing number",
   "revision": "e.g. 01.0",
   "standard": "workmanship standard called out on the drawing, else \\"\\"",
 
+  "topology": "point_to_point | breakout | multi_branch",
+  "breakouts": [ {"id":"BR1","note":"where the trunk fans out into the branches"} ],
+
   "connectors": [
-    { "ref":"P1", "part_number":"ISDF-04-D-M", "manufacturer":"Samtec",
+    { "ref":"J1", "kind":"connector | open_wires | splice | ring_terminal",
+      "part_number":"ISDF-04-D-M", "manufacturer":"Samtec",
       "description":"what it is",
       "positions": <number of contacts, or null>,
       "termination":"crimp|solder|clamp|idc",
@@ -8438,7 +8476,7 @@ Return ONLY a JSON object. No markdown fence, no commentary.
   "sleeves":  [ {"part_number":"","kind":"heatshrink","segment":"S1","from_end":"P1","distance_mm":0,
                  "length_mm":5,"qty":2,"position":"plain-language position","confirmed":true} ],
   "markers":  [ {"part_number":"","label":"A","segment":"S1","from_end":"P1","distance_mm":50,
-                 "confirmed":false,"text_lines":["P/N. ...","Rev. ..."]} ],
+                 "confirmed":false,"text_lines":["DB9 FEMALE","RS422"]} ],
   "materials":[ {"item":1,"part_number":"","manufacturer":"","description":"","qty":"1","ref":"P1"} ],
   "steps":    [ {"n":1,"segment":"S1","title":"short imperative title",
                  "body":"what to do, in plain language an operator can follow. The FIRST step must be the cut, and must state the cut length together with the sum it came from.",
@@ -8452,7 +8490,36 @@ Return ONLY a JSON object. No markdown fence, no commentary.
 
 RULES — these matter more than completeness:
 
-1. COUNT THE CABLES AND THE CONNECTORS FIRST, AND COVER ALL OF THEM.
+1. A LABEL TABLE IS NOT A CONNECTOR LIST. Read this before anything else.
+   Many drawings carry a LABEL TABLE / MARKING TABLE: single letters A, B, C … each with the TEXT to
+   print on a marker sleeve. Those letters identify SLEEVES placed along the cable — they are markers,
+   and they belong in "markers" with their text in "text_lines". They are NOT connectors and must never
+   become entries in "connectors" or appear as "from"/"to" on a segment.
+   Connectors come from the PART LIST and from the connector bodies drawn on the assembly view. Name
+   them by their real reference designator (J1, P1, WSRV1) or, when the drawing gives none, by what they
+   are (DB9, RJ45, CIRC-22). A label letter that happens to sit next to a connector does not rename it.
+
+2. BREAKOUT HARNESSES. Look at the assembly view: does one cable run out of a connector and then FAN OUT
+   into several branches, each ending somewhere different? That is a breakout, and it is common.
+   Model it with a node: put one entry in "breakouts" (e.g. "BR1"), then make the trunk a segment from
+   the far connector to "BR1", and each branch a segment from "BR1" to whatever it ends at.
+   A segment's "from"/"to" may therefore name either a connector ref or a breakout id.
+   Do NOT chain the connectors together (A→B→C) when the drawing shows them fanning from one point —
+   that describes a different harness from the one on the paper.
+
+3. NOT EVERY BRANCH ENDS IN A CONNECTOR. A branch can finish as OPEN WIRES, a splice, or ring terminals.
+   Give it a connectors[] entry with the matching "kind" and a ref like "OPEN", so the run has somewhere
+   to end and the operator is told how to finish it. For open wires, say in the segment's
+   "shield_treatment" or the steps what is stripped, tinned and how far the wires are separated.
+
+4. READ EVERY DIMENSION ON THE DRAWING AND SAY WHAT IT SPANS.
+   A harness drawing usually carries an overall length AND intermediate ones (2500 mm overall, 1250 mm to
+   the breakout, 200 mm of fan-out, 50 mm to each marker). Assign each to the right segment's
+   "finished_length_mm", or to a marker's "distance_mm" — do not put the overall length on every segment,
+   and do not invent a length for a branch the drawing dimensions separately.
+   If two dimensions cannot both be true, put it in "discrepancies" rather than picking one.
+
+5. COUNT THE CABLES AND THE CONNECTORS FIRST, AND COVER ALL OF THEM.
    Look at the assembly view and count every connector body and every separate cable run. A harness with
    three connectors and two cable runs gets THREE entries in "connectors" and TWO in "segments" —
    one segment per cable run, each naming the two connectors it links. Do NOT collapse a branched
@@ -8462,27 +8529,27 @@ RULES — these matter more than completeness:
    If a connector or a cable run appears on the drawing but you cannot work out its details, still list
    it, fill in what you can, and put the gap in "open_items" — a missing run is far worse than a thin one.
 
-2. DRAWING NUMBER vs NAME vs PROJECT. The title block has all three and they are different things.
+6. DRAWING NUMBER vs NAME vs PROJECT. The title block has all three and they are different things.
    "drawing_number" is this harness's own part number (DRAWING NO). "drawing_name" is its description.
    "project" is the programme it belongs to. Never put the project name in drawing_number.
 
-3. CONFIRMED vs DERIVED. Set "confirmed": true ONLY when the value is printed on the drawing, or comes
+7. CONFIRMED vs DERIVED. Set "confirmed": true ONLY when the value is printed on the drawing, or comes
    from a manufacturer datasheet you actually know for that exact part number. If you calculated it,
    inferred it from connector geometry, or took it from a similar part, set "confirmed": false and say
    so plainly in "basis". A wrong strip dimension destroys parts — never dress up a guess as a fact.
 
-4. Still give a number. When a dimension is not confirmed, provide your best engineering proposal anyway
+8. Still give a number. When a dimension is not confirmed, provide your best engineering proposal anyway
    with confirmed:false, so the sheet is usable while engineering verifies it. Only use null when you
    have no defensible basis at all.
 
-5. OPEN ITEMS. Every unconfirmed dimension gets an entry in "open_items" naming what is unverified, why,
+9. OPEN ITEMS. Every unconfirmed dimension gets an entry in "open_items" naming what is unverified, why,
    and the action that closes it.
 
-6. DISCREPANCIES. Report contradictions in the drawing rather than silently picking one: file name vs
+10. DISCREPANCIES. Report contradictions in the drawing rather than silently picking one: file name vs
    title block, balloon numbers vs part-list item numbers, dimensions that do not add up, a wiring table
    with more wires than the connector has positions. Do not "fix" them.
 
-7. CUT LENGTH vs FINISHED LENGTH — per segment, and it is what the operator actually cuts.
+11. CUT LENGTH vs FINISHED LENGTH — per segment, and it is what the operator actually cuts.
    "finished_length_mm" is the length AS DIMENSIONED ON THE DRAWING for that run, and "length_basis"
    says what that dimension measures:
      - "cable_only"       the dimension is the bare cable, connectors excluded
@@ -8499,7 +8566,7 @@ RULES — these matter more than completeness:
      - Insertion depth comes from the connector's assembly spec. Without it, give a defensible estimate,
        set confirmed:false, and say what it was derived from.
 
-8. MULTI-CONDUCTOR CABLE. Fill in "conductors" from the wiring table: one entry per wire, with its
+12. MULTI-CONDUCTOR CABLE. Fill in "conductors" from the wiring table: one entry per wire, with its
    signal name, colour, AWG and the pin it lands on at each end. This table IS the work instruction for
    a crimped harness — an operator cannot terminate without it, so do not leave it empty when the
    drawing has a wiring table. "conductor_strip_mm" is how much insulation comes off each individual
@@ -8508,18 +8575,18 @@ RULES — these matter more than completeness:
    cut back and insulated, or terminated to a ferrule. Getting this wrong is a functional failure that
    inspection will not catch.
 
-9. LAYERS run OUTERMOST FIRST. For single_wire there are two layers (insulation, conductor) and only
+13. LAYERS run OUTERMOST FIRST. For single_wire there are two layers (insulation, conductor) and only
    strip code "A". For a shielded multi-conductor cable list jacket, shield, and conductor insulation.
 
-10. STRIP CODES. "A" is always measured from the cable end. "derived":true marks a dimension that is
+14. STRIP CODES. "A" is always measured from the cable end. "derived":true marks a dimension that is
     arithmetic from the others (like C = A − B) rather than an independent setting.
 
-11. STEPS. Write for someone holding the cable, not for an engineer. Tag each step with the "segment"
+15. STEPS. Write for someone holding the cable, not for an engineer. Tag each step with the "segment"
     it belongs to when the harness has more than one, so the operator knows which run they are on.
     Include threading sleeves on BEFORE connectors if the assembly has sleeves — that mistake scraps
     the cable. Every segment must be covered by the steps, not just the first one.
 
-12. Units in millimetres throughout.`;
+16. Units in millimetres throughout.`;
 }
 
 const _CS_TRUNCATED='The analysis was cut off before it finished — this drawing produces more detail than one reply can hold. Try again; if it keeps happening, split the drawing or analyse it in English (Hebrew costs about twice the space).';
@@ -8637,13 +8704,24 @@ const _CS_SVG={ x0:200, x1:772, w:1000 };   // right margin leaves room for the 
 // and an unescaped one silently breaks the whole figure.
 function _csSvgTxt(s){ return esc(String(s||'')); }
 
-function _csConnBox(x, y, ref, pn, side){
+function _csConnBox(x, y, ref, pn, side, kind){
+  // Open wires are not a connector body — drawing one would tell the operator to
+  // fit something that does not exist.
+  if(kind==='open_wires'){
+    let w='';
+    for(let i=0;i<5;i++){ const wy=y-16+i*8;
+      w+=`<line x1="${x-46}" y1="${wy}" x2="${x}" y2="${y}" stroke="#94A3B8" stroke-width="2"/>`; }
+    return w+`<text x="${x-52}" y="${y-24}" text-anchor="end" font-size="12.5" font-weight="800" fill="#1E293B">${_csSvgTxt(ref)}</text>`;
+  }
+  return _csConnBoxPlain(x,y,ref,pn,side);
+}
+function _csConnBoxPlain(x, y, ref, pn, side){
   // side: 'left' = cable leaves to the right, 'right' = cable arrives from the left
   const bw=46, bh=34, sh=12;
-  const bx = side==='left' ? x-bw : x;
+  const bx = (side==='left') ? x-bw : (side==='right2' ? x-bw : x);
   const g = `<g stroke="#1E293B" stroke-width="1.6" fill="#E2E8F0">
       <rect x="${bx}" y="${y-bh/2}" width="${bw}" height="${bh}"/>
-      <rect x="${side==='left'?bx-sh:bx+bw}" y="${y-bh/2+6}" width="${sh}" height="${bh-12}" fill="#94A3B8"/>
+      <rect x="${(side==='left')?bx-sh:(side==='right2'?bx-sh:bx+bw)}" y="${y-bh/2+6}" width="${sh}" height="${bh-12}" fill="#94A3B8"/>
     </g>
     <text x="${bx+bw/2}" y="${y-bh/2-8}" text-anchor="middle" font-size="14" font-weight="800" fill="#1E293B">${_csSvgTxt(ref)}</text>`;
   return g + (pn ? `<text x="${bx+bw/2}" y="${y+bh/2+15}" text-anchor="middle" font-size="10" font-family="monospace" fill="#64748B">${_csSvgTxt(pn)}</text>` : '');
@@ -8653,87 +8731,70 @@ function _csHarnessSVG(spec){
   const T=_csT, rtlAttr=_csRTL()?' direction="rtl"':'';
   const segs=_csSegments(spec), conns=_csConnectors(spec);
   const pnOf=ref=>(conns.find(c=>String(c.ref||'').toUpperCase()===String(ref||'').toUpperCase())||{}).part_number||'';
+  const kindOf=ref=>(conns.find(c=>String(c.ref||'').toUpperCase()===String(ref||'').toUpperCase())||{}).kind||'connector';
   if(!segs.length) return `<svg viewBox="0 0 1000 60" xmlns="http://www.w3.org/2000/svg"><text x="500" y="35" text-anchor="middle" font-size="13" fill="#64748B">—</text></svg>`;
 
-  // The hub is whichever connector the most runs touch — on a branched harness
-  // that is the connector everything comes back to, and drawing it once on the
-  // left is what makes the branch structure legible.
+  // The layout follows the drawing rather than an abstract graph: whatever the
+  // branches fan out from sits in the middle, the longest run off it goes right
+  // as the trunk, and the rest stack on the left. On a breakout harness that
+  // reproduces the shape an operator already recognises — connectors on one
+  // side, one long trunk to the far connector on the other.
+  const brk=_csBreakouts(spec).map(b=>String(b.id));
   const touch={};
-  segs.forEach(s=>{ [s.from,s.to].filter(Boolean).forEach(r=>{ touch[r]=(touch[r]||0)+1; }); });
-  const hub=Object.keys(touch).sort((a,b)=>touch[b]-touch[a])[0];
+  segs.forEach(sg=>{ [sg.from,sg.to].filter(Boolean).forEach(r=>{ touch[r]=(touch[r]||0)+1; }); });
+  const hub = brk.find(id=>touch[id]) || Object.keys(touch).sort((a,b)=>touch[b]-touch[a])[0];
+  const hubIsBreakout=_csIsBreakout(spec, hub);
 
-  const rows=segs.map(s=>{
-    const far = String(s.from)===hub ? s.to : s.from;
-    return {seg:s, near:hub, far, len:_csCutLength(s).total, finished:_csNum(s.finished_length_mm)};
+  const attached=segs.filter(sg=>String(sg.from)===hub||String(sg.to)===hub);
+  const rest    =segs.filter(sg=>!attached.includes(sg));
+  const row=sg=>{ const far=String(sg.from)===hub?sg.to:sg.from;
+                  return {seg:sg, far, len:_csCutLength(sg).total, fin:_csNum(sg.finished_length_mm)}; };
+  let rows=attached.map(row);
+  // The trunk is the longest run off the hub; it is drawn to the right on its own.
+  rows.sort((a,b)=>(_csNum(b.len)||0)-(_csNum(a.len)||0));
+  const trunk = (hubIsBreakout && rows.length>1) ? rows.shift() : null;
+  const branches=rows.concat(rest.map(sg=>({seg:sg, far:sg.to, len:_csCutLength(sg).total, fin:_csNum(sg.finished_length_mm), _loose:true})));
+
+  const maxLen=Math.max(...segs.map(sg=>_csNum(_csCutLength(sg).total)||0), 1);
+  const ROW=118, TOP=76, HUBX=560, LEFT=150;
+  const H = TOP + Math.max(branches.length,1)*ROW + (trunk?90:40) + (segs.length===1?26:0);
+  const hubY = TOP + (Math.max(branches.length,1)-1)*ROW/2 + 16;
+
+  const W=1180, RIGHT=W-120;
+  let g='';
+
+  // hub itself
+  if(hubIsBreakout){
+    g+=`<ellipse cx="${HUBX}" cy="${hubY}" rx="15" ry="26" fill="#E2E8F0" stroke="#1E293B" stroke-width="1.6"/>
+        <text x="${HUBX}" y="${hubY-34}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#334155"${rtlAttr}>${_csSvgTxt(T('Breakout'))}</text>
+        <text x="${HUBX}" y="${hubY+45}" text-anchor="middle" font-size="10.5" font-family="monospace" fill="#64748B">${_csSvgTxt(hub)}</text>`;
+  } else {
+    g+=_csConnBox(HUBX, hubY, hub, pnOf(hub), 'left', kindOf(hub));
+  }
+
+  // branches fan out to the LEFT of the hub, stacked
+  branches.forEach((r,i)=>{
+    const y=TOP + i*ROW + 16;
+    const x0=LEFT;
+    g+=`<path d="M ${HUBX-18} ${hubY} Q ${HUBX-70} ${hubY} ${HUBX-90} ${(hubY+y)/2} Q ${HUBX-110} ${y} ${HUBX-150} ${y} L ${x0+52} ${y}"
+          fill="none" stroke="#475569" stroke-width="6" stroke-linecap="round"/>
+        <path d="M ${HUBX-18} ${hubY} Q ${HUBX-70} ${hubY} ${HUBX-90} ${(hubY+y)/2} Q ${HUBX-110} ${y} ${HUBX-150} ${y} L ${x0+52} ${y}"
+          fill="none" stroke="#CBD5E1" stroke-width="3.4" stroke-linecap="round"/>`;
+    g+=_csConnBox(x0+52, y, r.far, pnOf(r.far), 'right2', kindOf(r.far));
+    g+=_csRunAnnot(spec, r, x0+52, HUBX-150, y, rtlAttr, T, false, segs.length===1);
   });
-  const maxLen=Math.max(...rows.map(r=>_csNum(r.len)||0), 1);
-  const ROW=140, TOP=70;
-  const H = TOP + rows.length*ROW + 40;
-  const hubY = TOP + (rows.length-1)*ROW/2 + 18;
 
-  let g=_csConnBox(_CS_SVG.x0, hubY, hub, pnOf(hub), 'left');
-
-  rows.forEach((r,i)=>{
-    const y=TOP + i*ROW + 18;
-    const len=_csNum(r.len)||0;
-    const x1=_CS_SVG.x0 + Math.max(120, (_CS_SVG.x1-_CS_SVG.x0)*(len/maxLen));
-    // trunk out of the hub, then a bend up/down to this run's row
-    const bx=_CS_SVG.x0+58;
-    g+=`<path d="M ${_CS_SVG.x0} ${hubY} L ${bx} ${hubY} Q ${bx+26} ${hubY} ${bx+26} ${(hubY+y)/2} Q ${bx+26} ${y} ${bx+52} ${y} L ${x1} ${y}"
-          fill="none" stroke="#475569" stroke-width="7" stroke-linecap="round"/>
-        <path d="M ${_CS_SVG.x0} ${hubY} L ${bx} ${hubY} Q ${bx+26} ${hubY} ${bx+26} ${(hubY+y)/2} Q ${bx+26} ${y} ${bx+52} ${y} L ${x1} ${y}"
-          fill="none" stroke="#CBD5E1" stroke-width="4" stroke-linecap="round"/>`;
-    g+=_csConnBox(x1, y, r.far, pnOf(r.far), 'right');
-
-    // segment id + cable part number along the run
-    g+=`<text x="${(bx+70+x1)/2}" y="${y-16}" text-anchor="middle" font-size="11" font-weight="700" fill="#334155">${
-        _csSvgTxt(r.seg.id||'')}${r.seg.cable_part_number?` · ${_csSvgTxt(r.seg.cable_part_number)}`:''}</text>`;
-
-    // sleeves and markers belonging to this run
-    const scale=len>0 ? (x1-(bx+52))/len : 0;
-    const px=mm=>{
-      const d=_csNum(mm)||0;
-      return (bx+52) + (String(0).length && d)*0 + d*scale;   // measured from the hub end
-    };
-    (spec.sleeves||[]).filter(s=>!s.segment||s.segment===r.seg.id).forEach(sl=>{
-      const from=String(sl.from_end||'').toUpperCase();
-      const w=Math.max(6,(_csNum(sl.length_mm)||0)*scale);
-      const atFar = from===String(r.far).toUpperCase();
-      const x = atFar ? x1-(_csNum(sl.distance_mm)||0)*scale-w : px(sl.distance_mm);
-      g+=`<rect x="${x.toFixed(1)}" y="${y-13}" width="${w.toFixed(1)}" height="26" fill="url(#csHatch)" stroke="#1E293B" stroke-width="1.1"/>`;
-    });
-    let dimY=y+40;
-    (spec.markers||[]).filter(m=>!m.segment||m.segment===r.seg.id).forEach(mk=>{
-      const from=String(mk.from_end||'').toUpperCase();
-      const atFar = from===String(r.far).toUpperCase();
-      const x = atFar ? x1-(_csNum(mk.distance_mm)||0)*scale : px(mk.distance_mm);
-      const anchor = atFar ? x1 : (bx+52);
-      const bad = mk.confirmed===false, col=bad?'#DC2626':'#334155';
-      g+=`<rect x="${(x-7.5).toFixed(1)}" y="${y-15}" width="15" height="30" fill="#fff" stroke="#1E293B" stroke-width="1.3"/>
-          <text x="${x.toFixed(1)}" y="${y+5}" text-anchor="middle" font-size="11" font-weight="800" fill="#0F172A">${_csSvgTxt(mk.label||'')}</text>
-          <line x1="${Math.min(anchor,x).toFixed(1)}" y1="${dimY}" x2="${Math.max(anchor,x).toFixed(1)}" y2="${dimY}" stroke="${col}" stroke-width="1" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
-          <rect x="${((anchor+x)/2-24).toFixed(1)}" y="${dimY-11}" width="48" height="18" fill="#fff"/>
-          <text x="${((anchor+x)/2).toFixed(1)}" y="${dimY+3}" text-anchor="middle" font-size="11.5" font-weight="700" fill="${col}">${_csNum(mk.distance_mm)??'?'}${bad?' *':''}</text>`;
-      dimY+=22;
-    });
-
-    // the length itself — finished on top, and the cut length beside it when they differ
-    const cut=_csCutLength(r.seg);
-    const ly=Math.max(y+40, dimY);
-    g+=`<line x1="${bx+52}" y1="${ly}" x2="${x1}" y2="${ly}" stroke="#0F172A" stroke-width="1.2" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
-        <rect x="${((bx+52+x1)/2-56)}" y="${ly-12}" width="112" height="20" fill="#fff"/>
-        <text x="${((bx+52+x1)/2).toFixed(1)}" y="${ly+4}" text-anchor="middle" font-size="14" font-weight="800" fill="#0F172A">${
-          cut.hasBreakdown&&cut.added!==0 ? cut.finished+' mm' : (_csNum(r.len)!=null?r.len+' mm':'? mm')}</text>`;
-    if(cut.hasBreakdown && cut.added!==0){
-      g+=`<rect x="${x1+16}" y="${y-16}" width="176" height="32" fill="#FEF3C7" stroke="#B45309" stroke-width="1"/>
-          <text x="${x1+104}" y="${y+5}" text-anchor="middle" font-size="13" font-weight="800" fill="#7C2D12"${rtlAttr}>${
-            _csSvgTxt(T('CUT'))} ${cut.total} mm</text>
-          <text x="${((bx+52+x1)/2).toFixed(1)}" y="${ly+22}" text-anchor="middle" font-size="11" font-family="monospace" fill="#7C2D12">${_csSvgTxt(_csCutFormula(r.seg))}</text>`;
-    }
-  });
+  // trunk runs right
+  if(trunk){
+    const y=hubY;
+    g+=`<line x1="${HUBX+18}" y1="${y}" x2="${RIGHT}" y2="${y}" stroke="#475569" stroke-width="9" stroke-linecap="round"/>
+        <line x1="${HUBX+18}" y1="${y}" x2="${RIGHT}" y2="${y}" stroke="#CBD5E1" stroke-width="5" stroke-linecap="round"/>`;
+    g+=_csConnBox(RIGHT, y, trunk.far, pnOf(trunk.far), 'right', kindOf(trunk.far));
+    g+=_csRunAnnot(spec, trunk, HUBX+18, RIGHT, y, rtlAttr, T, true, segs.length===1);
+  }
 
   const anyTBC=(spec.markers||[]).some(m=>m.confirmed===false);
-  return `<svg viewBox="0 0 1040 ${H}" xmlns="http://www.w3.org/2000/svg" font-family="Heebo, Public Sans, Arial, sans-serif" direction="ltr">
+  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" font-family="Heebo, Public Sans, Arial, sans-serif" direction="ltr">
     <defs>
       <marker id="csAr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#0F172A"/></marker>
       <marker id="csArL" markerWidth="9" markerHeight="9" refX="1" refY="4.5" orient="auto"><path d="M9,0 L0,4.5 L9,9 z" fill="#0F172A"/></marker>
@@ -8742,9 +8803,57 @@ function _csHarnessSVG(spec){
     </defs>
     ${g}
     <text x="30" y="${H-12}" font-size="10.5" fill="#64748B"${rtlAttr}>${_csSvgTxt(T('All dimensions in millimetres. Not to scale.'))}</text>
-    ${anyTBC?`<text x="520" y="${H-12}" text-anchor="middle" font-size="11" font-weight="700" fill="#DC2626"${rtlAttr}>* ${_csSvgTxt(T('TO BE CONFIRMED'))}</text>`:''}
-    <text x="1010" y="${H-12}" text-anchor="end" font-size="10.5" font-weight="700" fill="#64748B">${_csSvgTxt(spec.drawing_number||'')} · FIG. 1</text>
+    ${anyTBC?`<text x="${W/2}" y="${H-12}" text-anchor="middle" font-size="11" font-weight="700" fill="#DC2626"${rtlAttr}>* ${_csSvgTxt(T('TO BE CONFIRMED'))}</text>`:''}
+    <text x="${W-20}" y="${H-12}" text-anchor="end" font-size="10.5" font-weight="700" fill="#64748B">${_csSvgTxt(spec.drawing_number||'')} · FIG. 1</text>
   </svg>`;
+}
+
+// Everything drawn along one run: its id and cable, the sleeves and markers
+// that sit on it, the dimensioned length, and the cut length when they differ.
+function _csRunAnnot(spec, r, xNear, xFar, y, rtlAttr, T, isTrunk, showFormula){
+  const seg=r.seg, cut=_csCutLength(seg);
+  const len=_csNum(r.len)||0;
+  const xa=Math.min(xNear,xFar), xb=Math.max(xNear,xFar);
+  const scale=len>0 ? (xb-xa)/len : 0;
+  let g=`<text x="${(xa+xb)/2}" y="${y-16}" text-anchor="middle" font-size="11" font-weight="700" fill="#334155">${
+    _csSvgTxt(seg.id||'')}${seg.cable_part_number?` · ${_csSvgTxt(seg.cable_part_number)}`:''}</text>`;
+
+  (spec.sleeves||[]).filter(sl=>!sl.segment||sl.segment===seg.id).forEach(sl=>{
+    const w=Math.max(6,(_csNum(sl.length_mm)||0)*scale);
+    const atFar=String(sl.from_end||'').toUpperCase()===String(r.far).toUpperCase();
+    const x=atFar ? xb-(_csNum(sl.distance_mm)||0)*scale-w : xa+(_csNum(sl.distance_mm)||0)*scale;
+    g+=`<rect x="${x.toFixed(1)}" y="${y-11}" width="${w.toFixed(1)}" height="22" fill="url(#csHatch)" stroke="#1E293B" stroke-width="1"/>`;
+  });
+
+  let dimY=y+34;
+  (spec.markers||[]).filter(m=>!m.segment||m.segment===seg.id).forEach(mk=>{
+    const atFar=String(mk.from_end||'').toUpperCase()===String(r.far).toUpperCase();
+    const x=atFar ? xb-(_csNum(mk.distance_mm)||0)*scale : xa+(_csNum(mk.distance_mm)||0)*scale;
+    const anchor=atFar?xb:xa, bad=mk.confirmed===false, col=bad?'#DC2626':'#334155';
+    g+=`<rect x="${(x-7).toFixed(1)}" y="${y-13}" width="14" height="26" fill="#fff" stroke="#1E293B" stroke-width="1.2"/>
+        <text x="${x.toFixed(1)}" y="${y+4}" text-anchor="middle" font-size="10.5" font-weight="800" fill="#0F172A">${_csSvgTxt(mk.label||'')}</text>
+        <line x1="${Math.min(anchor,x).toFixed(1)}" y1="${dimY}" x2="${Math.max(anchor,x).toFixed(1)}" y2="${dimY}" stroke="${col}" stroke-width="1" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
+        <rect x="${((anchor+x)/2-22).toFixed(1)}" y="${dimY-10}" width="44" height="17" fill="#fff"/>
+        <text x="${((anchor+x)/2).toFixed(1)}" y="${dimY+3}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${col}">${_csNum(mk.distance_mm)??'?'}${bad?' *':''}</text>`;
+    dimY+=20;
+  });
+
+  const ly=Math.max(y+34, dimY);
+  g+=`<line x1="${xa}" y1="${ly}" x2="${xb}" y2="${ly}" stroke="#0F172A" stroke-width="1.2" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
+      <rect x="${((xa+xb)/2-54)}" y="${ly-12}" width="108" height="19" fill="#fff"/>
+      <text x="${((xa+xb)/2).toFixed(1)}" y="${ly+4}" text-anchor="middle" font-size="13" font-weight="800" fill="#0F172A">${
+        cut.hasBreakdown&&cut.added!==0 ? cut.finished+' mm' : (_csNum(r.len)!=null?r.len+' mm':'? mm')}</text>`;
+  if(cut.hasBreakdown && cut.added!==0){
+    g+=`<rect x="${((xa+xb)/2-92)}" y="${ly+9}" width="184" height="20" fill="#FEF3C7" stroke="#B45309" stroke-width="1"/>
+        <text x="${((xa+xb)/2).toFixed(1)}" y="${ly+23}" text-anchor="middle" font-size="11" font-weight="700" fill="#7C2D12"${rtlAttr}>${
+          _csSvgTxt(T('CUT'))} ${cut.total} mm</text>`;
+    // The full sum is printed on the figure only when there is one run to print
+    // it for. On a breakout harness four formulas would bury the drawing, and
+    // each run's cut-length table carries its own arithmetic anyway.
+    if(showFormula)
+      g+=`<text x="${((xa+xb)/2).toFixed(1)}" y="${ly+44}" text-anchor="middle" font-size="11.5" font-family="monospace" fill="#7C2D12">${_csSvgTxt(_csCutFormula(seg))}</text>`;
+  }
+  return g;
 }
 
 // Stepped strip profile for one end of one segment. Driven by the segment's layer
@@ -8894,7 +9003,7 @@ async function renderCutStrip(){
       const tbc=_csTBCCount(s);
       return `<tr>
         <td style="font-weight:700">${esc(s.drawing_number||s._id)}</td>
-        <td>${esc(s.drawing_name||s.title||'')}</td>
+        <td class="cs-ltr" style="font-size:12.5px">${esc(s.drawing_name||s.title||'')}</td>
         <td style="font-size:12px;color:var(--muted)">${esc(s.project||'')}</td>
         <td style="text-align:center">${_csSegments(s).length||'—'}</td>
         <td style="text-align:center">${_csConnectors(s).length||'—'}</td>
@@ -9239,12 +9348,12 @@ function renderCutStripSheet(){
     <div class="cs-tb">
       <div class="cs-tb-l">
         <div class="cs-doc-t">${esc(T('Cut & Strip Specification'))}</div>
-        <div class="cs-doc-s">${_csP(spec.drawing_name||spec.title||'')}</div>
+        <div class="cs-doc-s cs-ltr" style="font-size:15px">${esc(spec.drawing_name||spec.title||'')}</div>
         ${spec.project?`<div class="cs-doc-s" style="font-size:13px;opacity:.75">${esc(T('Project'))}: <span class="cs-ltr">${esc(spec.project)}</span></div>`:''}
       </div>
       <div class="cs-tb-r"><dl class="cs-kv">
         <dt>${esc(T('Drawing'))}</dt><dd class="cs-ltr">${esc(spec.drawing_number||'')}</dd>
-        <dt>${esc(T('Drawing name'))}</dt><dd>${_csP(spec.drawing_name||'—')}</dd>
+        <dt>${esc(T('Drawing name'))}</dt><dd class="cs-ltr">${esc(spec.drawing_name||'—')}</dd>
         <dt>${esc(T('Project'))}</dt><dd class="cs-ltr">${esc(spec.project||'—')}</dd>
         <dt>${esc(T('Revision'))}</dt><dd class="cs-ltr">${esc(spec.revision||'—')}</dd>
         <dt>${esc(T('Spec no.'))}</dt><dd class="cs-ltr">${esc(spec.spec_no||'')}</dd>
@@ -9282,12 +9391,14 @@ function renderCutStripSheet(){
     ${_csConnectors(spec).length ? `
     <h2 class="cs-h2"><span class="cs-n">02</span>${esc(T('Connectors'))}</h2>
     <div class="cs-pad"><table class="cs-tbl">
-      <thead><tr><th style="width:80px">${esc(T('Ref'))}</th><th style="width:170px">${esc(T('Part number'))}</th>
+      <thead><tr><th style="width:80px">${esc(T('Ref'))}</th><th style="width:100px">${esc(T('Kind'))}</th>
+        <th style="width:170px">${esc(T('Part number'))}</th>
         <th style="width:100px">${esc(T('Manufacturer'))}</th><th style="width:70px">${esc(T('Positions'))}</th>
         <th style="width:90px">${esc(T('Termination'))}</th><th style="width:160px">${esc(T('Contact P/N'))}</th>
         <th>${esc(T('Description'))}</th></tr></thead>
       <tbody>${_csConnectors(spec).map((c,i)=>`<tr>
         <td class="cs-ctr cs-ltr"><b>${esc(c.ref||'')}</b></td>
+        <td class="cs-ctr" style="font-size:12px">${esc(T(c.kind==='open_wires'?'Open wires':(c.kind||'connector')))}</td>
         <td>${_csFRaw(`connectors.${i}.part_number`, c.part_number)}</td>
         <td>${_csFRaw(`connectors.${i}.manufacturer`, c.manufacturer)}</td>
         <td class="cs-ctr">${_csFNum(`connectors.${i}.positions`, c.positions, '')}</td>
@@ -9297,10 +9408,25 @@ function renderCutStripSheet(){
           ${c._inferred?`<span class="cs-tag cs-tbc">${esc(T('not described on the sheet'))}</span>`:''}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
 
+    ${(spec.markers||[]).some(m=>(m.text_lines||[]).length||m.label) ? `
+    <div class="cs-pad"><h3 class="cs-h3">${esc(T('Label table'))}</h3>
+    <table class="cs-tbl"><thead><tr><th style="width:70px">${esc(T('Label'))}</th>
+      <th style="width:160px">${esc(T('Part number'))}</th><th>${esc(T('Text'))}</th>
+      <th style="width:200px">${esc(T('Value'))}</th></tr></thead>
+      <tbody>${spec.markers.map((m,i)=>`<tr>
+        <td class="cs-ctr cs-ltr"><b>${esc(m.label||'')}</b></td>
+        <td>${_csFRaw(`markers.${i}.part_number`, m.part_number)}</td>
+        <td class="cs-ltr" style="font-size:12.5px">${esc((m.text_lines||[]).join(' / '))}</td>
+        <td class="cs-ctr">${_csEditing
+          ? `${_csFNum(`markers.${i}.distance_mm`, m.distance_mm, ' mm')} ${_csFChk(`markers.${i}.confirmed`, m.confirmed===true, T('Confirmed'))}`
+          : `${_csDim(m.distance_mm, m.confirmed)} <span class="cs-ltr" style="font-size:11px">${esc(T('from'))} ${esc(m.from_end||'')}</span>`}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+
     <h2 class="cs-h2"><span class="cs-n">03</span>${esc(T('Harness layout'))}</h2>
     <div class="cs-pad">
       <div class="cs-box cs-info" style="border-color:#2563EB;background:#EFF6FF;color:#1E3A8A">
-        <b>${esc(T('This harness has'))} ${_csSegments(spec).length} ${esc(T('cable run(s)'))} ${esc(T('and'))} ${_csConnectors(spec).length} ${esc(T('connector(s)'))}.</b>
+        <b>${esc(T('This harness has'))} ${_csSegments(spec).length} ${esc(T('cable run(s)'))} ${esc(T('and'))} ${_csConnectors(spec).length} ${esc(T('connector(s)'))}${
+          _csBreakouts(spec).length?` + ${_csBreakouts(spec).length} ${esc(T('Breakout'))}`:''}.</b>
         <p>${_csSegments(spec).map(s=>`<span class="cs-ltr">${esc(s.id)}: ${esc(_csSegLabel(s))}</span>`).join(' &nbsp;·&nbsp; ')}</p>
       </div>
       <figure class="cs-fig">${_csHarnessSVG(spec)}</figure>
@@ -9315,7 +9441,7 @@ function renderCutStripSheet(){
 
     ${_csSegments(spec).map((seg,si)=>{
       const cut=_csCutLength(seg);
-      const ends=_csSegEnds(seg);
+      const ends=_csSegEnds(seg, spec);
       const BASIS={cable_only:'Bare cable, connectors excluded',
                    over_connectors:'Whole assembly, connector face to connector face',
                    unclear:'The drawing does not say — confirm before cutting'};
@@ -9387,6 +9513,8 @@ function renderCutStripSheet(){
             : _csDim(seg.conductor_strip_mm, seg.conductor_strip_confirmed)}</td>
           <td style="font-size:12px">${esc(T('From the contact datasheet — a much smaller number than the jacket strip.'))}</td></tr>` : ''}
         </tbody></table>
+      ${ends.filter(e=>e._breakout).map(e=>`<p class="cs-note">
+        <b class="cs-ltr">${esc(e.ref)}</b> — ${esc(T('junction — nothing is terminated here'))}</p>`).join('')}
       ${ends.filter(e=>e._missing).map(e=>`<p class="cs-note" style="color:#B91C1C">
         <b>${esc(e.ref)}</b> — ${esc(T('this end is on the drawing but the analysis produced no strip dimensions for it. Fill them in before use.'))}</p>`).join('')}
       ${seg.shield_treatment ? `<div class="cs-box cs-warn" style="margin-top:12px">
