@@ -485,9 +485,20 @@ function canView(v){ return v==='home' || allowedViews().includes(v); }
 // All role names known to Settings (built-in defaults ∪ any custom roles
 // already saved to Firestore) — used to populate the role <select> dropdowns
 // in Invite/Edit User, and the row list in Settings > Roles.
+// The built-in roles are code constants, not Firestore documents — they only get
+// written when an admin edits one. So the list has to be the UNION of the two,
+// not "Firestore if it has anything, otherwise the defaults".
+//
+// The old "if empty use defaults" version had a nasty failure: creating the very
+// first custom role made the collection non-empty, and admin/agent/viewer/sales
+// immediately disappeared from every role dropdown — leaving an admin unable to
+// assign the built-in roles to anyone.
+function _mergedRoleKeys(){
+  return [...new Set([...Object.keys(DEFAULT_ROLE_VIEWS), ...Object.keys(roleViewsMap)])];
+}
 function roleOptions(){
-  const keys = Object.keys(roleViewsMap).length ? Object.keys(roleViewsMap) : Object.keys(DEFAULT_ROLE_VIEWS);
-  return keys.map(k => [k, (roleViewsMap[k] && roleViewsMap[k].name) || (k.charAt(0).toUpperCase()+k.slice(1))]);
+  return _mergedRoleKeys().map(k =>
+    [k, (roleViewsMap[k] && roleViewsMap[k].name) || (k.charAt(0).toUpperCase()+k.slice(1))]);
 }
 
 // ── Audit log ─────────────────────────────────────────────────────────────────
@@ -545,7 +556,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.9.3';
+const APP_VER   = '1.9.4';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7610,14 +7621,27 @@ async function renderSettingsRolesSection(){
   const body=document.getElementById('stg-roles-body');
   if(!body) return;
   body.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)"><div class="ring" style="margin:0 auto"></div></div>`;
-  let roles=[];
+  // Built-in roles live in DEFAULT_ROLE_VIEWS and are only written to Firestore
+  // once an admin edits one. The table must therefore show the UNION: a saved
+  // role reads from Firestore, an untouched built-in reads from the constant.
+  //
+  // This replaces an "if the collection is empty, show the defaults" check that
+  // silently broke the moment the first custom role was created — the collection
+  // stopped being empty, so every built-in role vanished from this screen.
+  let saved={};
   try{
     const snap=await getDocs(collection(db,'roles'));
-    roles=snap.docs.map(d=>({_id:d.id,...d.data()}));
-  }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${e.message}</p>`; return; }
-  if(!roles.length){
-    roles=Object.keys(DEFAULT_ROLE_VIEWS).map(k=>({_id:k,name:k.charAt(0).toUpperCase()+k.slice(1),views:DEFAULT_ROLE_VIEWS[k]}));
-  }
+    snap.docs.forEach(d=>{ saved[d.id]=d.data()||{}; });
+  }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${esc(e.message)}</p>`; return; }
+  roleViewsMap=saved;   // keep the in-memory gate in step with what was just read
+
+  const roles=[...new Set([...Object.keys(DEFAULT_ROLE_VIEWS), ...Object.keys(saved)])].map(k=>({
+    _id:k,
+    name: saved[k]?.name || (k.charAt(0).toUpperCase()+k.slice(1)),
+    views: Array.isArray(saved[k]?.views) ? saved[k].views : (DEFAULT_ROLE_VIEWS[k]||[]),
+    _builtin: k in DEFAULT_ROLE_VIEWS,
+    _saved:   k in saved,
+  }));
   const viewKeys=Object.keys(HOME_BUTTONS);
   body.innerHTML=`
     <div class="toolbar"><span class="count-badge">${roles.length} roles</span>
@@ -7626,7 +7650,12 @@ async function renderSettingsRolesSection(){
       <thead><tr><th>Role Name</th><th>Key</th>${viewKeys.map(v=>`<th style="text-align:center">${HOME_BUTTONS[v][0]} ${HOME_BUTTONS[v][1]}</th>`).join('')}<th></th></tr></thead>
       <tbody>${roles.map(r=>`<tr data-key="${esc(r._id)}">
         <td><input class="form-input role-name-inp" data-key="${esc(r._id)}" value="${esc(r.name||r._id)}" style="padding:4px 7px;font-size:12px;min-width:100px"></td>
-        <td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(r._id)}</td>
+        <td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(r._id)}
+          ${r._builtin && !r._saved
+            ? `<div style="font-family:inherit;font-size:10px;color:#2E75B6;margin-top:2px"
+                    title="This is a built-in role using its default permissions. Saving it stores an editable copy.">built-in · default</div>`
+            : (r._builtin ? `<div style="font-family:inherit;font-size:10px;color:var(--muted);margin-top:2px">built-in · customised</div>` : '')}
+        </td>
         ${viewKeys.map(v=>`<td style="text-align:center"><input type="checkbox" class="role-view-chk" data-key="${esc(r._id)}" data-view="${v}" ${(r.views||[]).includes(v)?'checked':''}></td>`).join('')}
         <td style="text-align:right"><button class="btn btn-green btn-sm role-save" data-key="${esc(r._id)}">💾 Save</button></td>
       </tr>`).join('')}</tbody>
@@ -7678,6 +7707,13 @@ function openNewRoleModal(){
     const key=document.getElementById('nr-key-inp').value.trim().toLowerCase().replace(/[^a-z0-9_]+/g,'_');
     const views=[...document.querySelectorAll('.nr-view-chk:checked')].map(c=>c.value);
     if(!name||!key){ toast('Name and key are required','error'); return; }
+    // "Create" on an existing key is really an overwrite, and on a built-in key
+    // it would silently replace that role's permissions for everyone who has it.
+    // Neither is what "New Role" means, so it's refused rather than guessed at.
+    if(_mergedRoleKeys().includes(key)){
+      toast(`A role with the key "${key}" already exists — edit it in the table instead`,'error');
+      return;
+    }
     const btn=document.getElementById('btn-nr-save');
     btn.disabled=true; btn.textContent='Creating…';
     try{
