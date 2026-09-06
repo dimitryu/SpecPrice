@@ -594,7 +594,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.11.1';
+const APP_VER   = '1.12.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7360,12 +7360,9 @@ function _aiPromptCatalog(){
     {id:'notes',      title:'Drawing Notes / Manufacturing Instructions',
      note:'Sales Desk only. Pulls the drawing’s NOTES / GENERAL NOTES block out for the panel under the BOM table.',
      text:_notesPrompt()},
-    {id:'cut-strip',  title:'Cut & Strip specification (Hebrew)',
-     note:'Cut & Strip screen. Reads a cable/harness drawing and produces the whole bench sheet: cut-length calculation, per-end strip dimensions, sleeve and marker positions, operation steps, inspection list and open items. This is the Hebrew variant — the language block changes with the screen’s display language.',
-     text:_csPrompt('he')},
-    {id:'cut-strip-en', title:'Cut & Strip specification (English)',
-     note:'The same prompt with no output-language block — what is sent when the screen is set to English. Shown separately so the language instruction can be reviewed on its own.',
-     text:_csPrompt('en')},
+    {id:'cut-strip',  title:'Cut & Strip specification',
+     note:'Cut & Strip screen. Reads a cable/harness drawing and produces the whole bench sheet: connectors, one block per cable run, cut-length calculation, strip dimensions, wiring table, operation steps, inspection list and open items. Always sent in Hebrew — English and Russian sheets are translations of this output, not separate analyses.',
+     text:_csPrompt(_CS_SOURCE_LANG)},
     {id:'cut-strip-tr', title:'Cut & Strip — translation of an existing sheet',
      note:'Cut & Strip screen. Only used when someone switches a saved sheet to a language it was not generated in. Sent in chunks of 20 strings.',
      text:_csTranslatePromptSample()},
@@ -8066,6 +8063,12 @@ function _csCableTotals(spec){
 // _csT and _csCollectEdits.
 const _CS_CACHE_KEY='cut_strip_tr_cache';
 const _CS_LANG_KEY='cut_strip_lang';
+// The language every analysis is written in, regardless of what the screen is
+// showing. Kept separate from the DISPLAY language on purpose: the sheet is a
+// shop-floor document in Hebrew, and having one source language means a spec
+// reads the same however it was created, and there is a single path to every
+// other language rather than one path per starting point.
+const _CS_SOURCE_LANG='he';
 let _csLang = (()=>{
   try{ const v=localStorage.getItem(_CS_LANG_KEY); return ['en','he','ru'].includes(v) ? v : 'he'; }
   catch{ return 'he'; }
@@ -8744,41 +8747,54 @@ let _csDeadProviders={};
 function _csIsKeyError(msg){
   return /service account is deleted or disabled|API key not valid|API_KEY_INVALID|invalid x-api-key|authentication_error|401|403/i.test(String(msg||''));
 }
+
+// Provider order for THIS screen, deliberately the reverse of BOM extraction.
+//
+// Elsewhere in the app Gemini goes first because it is cheaper and faster and
+// the task is small. That ordering was inherited here without being reconsidered,
+// and it is the wrong default for this screen: a cut & strip analysis is the
+// hardest thing the app asks for — read a dense engineering drawing, get every
+// connector and cable run, and emit a large structured document in Hebrew — and
+// its output is a work instruction whose dimensions are safety-relevant.
+// Accuracy is worth more than the cost difference, so the stronger model leads
+// and the cheaper one is the fallback rather than the other way round.
+const _CS_PROVIDER_ORDER=['anthropic','gemini'];
+
 async function aiAnalyzeCutStrip(text, isImage, imgData, lang){
-  let spec, geminiError='';
-  if(geminiKey && !_csDeadProviders.gemini){
-    try{ spec=await _csGemini(text,isImage,imgData,lang); }
+  const runner={
+    anthropic:{key:()=>anthKey, call:()=>_csAnthropic(text,isImage,imgData,lang)},
+    gemini:   {key:()=>geminiKey, call:()=>_csGemini(text,isImage,imgData,lang)},
+  };
+  let spec, errors=[];
+  for(const name of _CS_PROVIDER_ORDER){
+    const p=runner[name];
+    if(!p.key()) continue;
+    if(_csDeadProviders[name]){ errors.push(_csDeadProviders[name]); continue; }
+    try{ spec=await p.call(); break; }
     catch(e){
-      geminiError=e.message;
+      errors.push(e.message);
       if(_csIsKeyError(e.message)){
-        _csDeadProviders.gemini=e.message;
-        console.warn('[CutStrip] Gemini key rejected — skipping it for this session:', e.message);
+        _csDeadProviders[name]=e.message;
+        console.warn(`[CutStrip] ${name} key rejected — skipping it for this session:`, e.message);
+      } else {
+        console.warn(`[CutStrip] ${name} failed, trying the next provider:`, e.message);
       }
-      if(!anthKey) throw e;
-      console.warn('Gemini cut-strip failed, falling back to Anthropic:', e.message);
-    }
-  } else if(geminiKey && _csDeadProviders.gemini){
-    geminiError=_csDeadProviders.gemini;
-  }
-  if(!spec && anthKey){
-    try{ spec=await _csAnthropic(text,isImage,imgData,lang); }
-    catch(e){
-      if(_csIsKeyError(e.message)) _csDeadProviders.anthropic=e.message;
-      // Lead with whichever failure the user can actually act on. A rejected key
-      // has a fix; a timeout is just "try again", so it should not be the
-      // headline when the other provider told us something concrete.
-      const both=[e.message, geminiError].filter(Boolean);
-      const actionable=both.find(_csIsKeyError);
-      throw new Error(actionable && both.length>1
-        ? `${actionable} The other provider also failed: ${both.find(m=>m!==actionable)}`
-        : both.join(' | '));
     }
   }
-  if(!spec) throw new Error('No AI key configured — add one in Admin → AI API Keys');
+  if(!spec){
+    if(!errors.length) throw new Error('No AI key configured — add one in Admin → AI API Keys');
+    // Lead with whichever failure the user can act on. A rejected key has a fix;
+    // a timeout is just "try again", so it should not be the headline when the
+    // other provider told us something concrete.
+    const actionable=errors.find(_csIsKeyError);
+    throw new Error(actionable && errors.length>1
+      ? `${actionable} The other provider also failed: ${errors.find(m=>m!==actionable)}`
+      : errors.join(' | '));
+  }
   // Records which language the prose is written in, so _csP knows when there is
   // nothing to translate and the sheet can be reopened years later without
   // guessing.
-  spec.lang = lang || 'he';
+  spec.lang = lang || _CS_SOURCE_LANG;
   return spec;
 }
 
@@ -9146,8 +9162,13 @@ async function handleCSFile(file){
 
     // Generated straight into the display language. No translation pass on the
     // normal path — see _csPrompt for why that matters.
-    setM(`Analysing cut & strip requirements in ${_CS_LANG_NAMES[_csLang]||'Hebrew'}… a dense drawing can take up to 2 minutes — leave this open`,55);
-    const spec=await aiAnalyzeCutStrip(text, isImage, imgData, _csLang);
+    // Always analysed in Hebrew, whatever the screen is set to. One source
+    // language keeps every spec written the same way — comparable, editable in
+    // one place, and translated through one path instead of two. English and
+    // Russian are translations of it, produced on demand by the language
+    // buttons, exactly like each other.
+    setM('Analysing cut & strip requirements… a dense drawing can take up to 2 minutes — leave this open',55);
+    const spec=await aiAnalyzeCutStrip(text, isImage, imgData, _CS_SOURCE_LANG);
 
     // A drawing number is what the sheet is filed and found under. Falling back
     // to the file name is better than an "UNTITLED" doc, but it is recorded as a
@@ -9180,6 +9201,12 @@ async function handleCSFile(file){
     csSpecs=[]; await loadCutStripSpecs(true);
     csCurrent=csSpecs.find(s=>s._id===id) || {_id:id, ...spec};
     _csEditing=false; _csEditBackup=null;
+
+    // Only when the operator is reading in something other than the source.
+    if(_csLang!==_CS_SOURCE_LANG){
+      setM('Translating…',94);
+      await _csEnsureLang(csCurrent, _csLang, (n,t)=>setM(`Translating… ${Math.round(n/t*100)}%`, 94+Math.round(n/t*5)));
+    }
     closeModal();
     toast(`Specification created for ${spec.drawing_number}`,'success');
     renderCutStripSheet();
