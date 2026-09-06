@@ -476,12 +476,27 @@ const SEED_ROLE_VIEWS = {
 };
 const PROTECTED_ROLE  = 'admin';
 const PROTECTED_VIEWS = ['settings','admin'];   // cannot be taken away from PROTECTED_ROLE
+
+// Seeding has to tell "this role has never been created" apart from "an admin
+// deleted this role on purpose". Without that distinction you get one of two
+// bugs: either deleted roles keep coming back, or an installation that already
+// has SOME roles never gets the rest.
+//
+// A marker document records that the seed has run. Any doc id starting with __
+// is bookkeeping, never a role, and is filtered out everywhere the roles are
+// listed.
+const ROLES_META_DOC = '__meta__';
+const _isRoleDocId = id => !String(id||'').startsWith('__');
+let _rolesSeeded = false;
 let roleViewsMap = {}; // populated from Firestore 'roles' collection: {[roleKey]: {name, views:[...]}}
 async function loadRoles(){
   try{
     const snap = await getDocs(collection(db,'roles'));
     const map = {};
-    snap.docs.forEach(d=>{ map[d.id] = d.data(); });
+    snap.docs.forEach(d=>{
+      if(d.id===ROLES_META_DOC){ _rolesSeeded = d.data()?.seeded===true; return; }
+      if(_isRoleDocId(d.id)) map[d.id] = d.data();
+    });
     roleViewsMap = map;
   }catch(e){ console.error('loadRoles', e); }
 }
@@ -500,17 +515,17 @@ function allowedViews(){
 function canView(v){ return v==='home' || allowedViews().includes(v); }
 // Every role key the app knows about.
 //
-// Once the roles collection has anything in it, it IS the list — the seed does
-// not contribute. That is only safe because the Roles screen writes the whole
-// seed in one go the first time it loads, so a non-empty collection is always a
-// complete one. Without that guarantee this would be the bug that made every
-// role vanish the moment the first custom one was created.
+// Before the seed has been written, the seed roles exist conceptually even
+// though they have no documents, so they are unioned in — otherwise they vanish
+// from the Roles table and from every user-role dropdown, which is exactly what
+// went wrong when the first custom role was created.
 //
-// It matters that the seed does not leak back in: a role an admin deleted must
-// stay deleted, not reappear in the dropdowns on the next page load.
+// After seeding, Firestore is the whole truth and the seed contributes nothing.
+// That is what lets a deleted role stay deleted instead of reappearing on the
+// next page load.
 function _mergedRoleKeys(){
-  const saved=Object.keys(roleViewsMap);
-  return saved.length ? saved : Object.keys(SEED_ROLE_VIEWS);
+  const saved=Object.keys(roleViewsMap).filter(_isRoleDocId);
+  return _rolesSeeded ? saved : [...new Set([...Object.keys(SEED_ROLE_VIEWS), ...saved])];
 }
 function roleOptions(){
   return _mergedRoleKeys().map(k =>
@@ -572,7 +587,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.9.5';
+const APP_VER   = '1.9.6';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7642,21 +7657,31 @@ async function renderSettingsRolesSection(){
   let saved={};
   try{
     const snap=await getDocs(collection(db,'roles'));
-    snap.docs.forEach(d=>{ saved[d.id]=d.data()||{}; });
+    snap.docs.forEach(d=>{
+      if(d.id===ROLES_META_DOC){ _rolesSeeded = d.data()?.seeded===true; return; }
+      if(_isRoleDocId(d.id)) saved[d.id]=d.data()||{};
+    });
 
-    // First run: materialise the seed roles as real documents. After this the
-    // collection is the single source of truth and the seed is never consulted
-    // again. Only missing keys are written, so an admin who has already deleted
-    // a seeded role does not get it resurrected on every visit.
-    const missing=Object.keys(SEED_ROLE_VIEWS).filter(k=>!(k in saved));
-    if(missing.length && !Object.keys(saved).length){
+    // Materialise any seed role that has no document yet, ONCE. Gated on the
+    // marker rather than on "is the collection empty", because an installation
+    // can easily be part-populated — a custom role created under an earlier
+    // version leaves exactly that state, and an emptiness check would then skip
+    // seeding forever and show only that one role.
+    //
+    // After the marker is written this never runs again, so a role the admin
+    // deletes stays deleted.
+    if(!_rolesSeeded){
+      const missing=Object.keys(SEED_ROLE_VIEWS).filter(k=>!(k in saved));
       await Promise.all(missing.map(k=>{
         const rec={name:k.charAt(0).toUpperCase()+k.slice(1), views:SEED_ROLE_VIEWS[k],
                    createdAt:serverTimestamp(), updatedAt:serverTimestamp()};
         saved[k]=rec;
         return setDoc(doc(db,'roles',k), rec);
       }));
-      logAudit('roles_seeded',{roles:missing},true);
+      await setDoc(doc(db,'roles',ROLES_META_DOC),
+                   {seeded:true, seededAt:serverTimestamp(), seededBy:currentUserEmail||''});
+      _rolesSeeded=true;
+      if(missing.length) logAudit('roles_seeded',{roles:missing},true);
     }
   }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${esc(e.message)}</p>`; return; }
   roleViewsMap=saved;   // keep the in-memory gate in step with what was just read
@@ -7789,6 +7814,8 @@ function openNewRoleModal(){
       toast(`A role with the key "${key}" already exists — edit it in the table instead`,'error');
       return;
     }
+    // __-prefixed ids are bookkeeping documents, not roles.
+    if(!_isRoleDocId(key)){ toast('A role key cannot start with "__"','error'); return; }
     const btn=document.getElementById('btn-nr-save');
     btn.disabled=true; btn.textContent='Creating…';
     try{
