@@ -594,7 +594,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.11.0';
+const APP_VER   = '1.11.1';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -8395,7 +8395,7 @@ async function _csTranslateChunk(todo, lang, bucket){
       method:'POST',
       headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
                'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-      body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:8192,temperature:0,
+      body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:16000,temperature:0,
                            messages:[{role:'user',content:prompt}]})
     });
     if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
@@ -8431,6 +8431,13 @@ async function _csTranslateChunk(todo, lang, bucket){
 // JSON is the longest single request this app makes. 60s — the app-wide default
 // — was cutting it off mid-generation and reporting it as a hang.
 const _CS_ANALYSIS_TIMEOUT = 180000;
+// Output budget. 8192 was enough for one coax with two ends in English; it is
+// not enough for a real harness. The schema now carries connectors, one block
+// per cable run, and a wiring table per run — and Hebrew costs roughly twice
+// the tokens of the same English text. The two together overran the limit and
+// the reply came back cut off mid-string, which surfaced as "malformed JSON"
+// when the real cause was that the model was still writing.
+const _CS_MAX_TOKENS = 32000;
 // Vision needs to read dimension callouts, not fine-print BOM rows, so the
 // analysis image can be smaller than the one BOM extraction uses. Less to
 // upload is less time spent before the model even starts.
@@ -8633,14 +8640,36 @@ RULES — these matter more than completeness:
 12. Units in millimetres throughout.`;
 }
 
+const _CS_TRUNCATED='The analysis was cut off before it finished — this drawing produces more detail than one reply can hold. Try again; if it keeps happening, split the drawing or analyse it in English (Hebrew costs about twice the space).';
+// Unbalanced braces mean the JSON stopped mid-object. Saying "malformed" for
+// that sends the user looking for a bad drawing when the reply was simply
+// unfinished, which is a different problem with a different fix.
+function _csLooksTruncated(text){
+  let depth=0, inStr=false, esc=false;
+  for(const ch of String(text||'')){
+    if(esc){ esc=false; continue; }
+    if(ch==='\\'){ esc=true; continue; }
+    if(ch==='"'){ inStr=!inStr; continue; }
+    if(inStr) continue;
+    if(ch==='{') depth++;
+    else if(ch==='}') depth--;
+  }
+  return inStr || depth>0;
+}
 function _csParse(raw){
   const text=String(raw||'').trim();
   if(!text) throw new Error('The AI returned an empty response');
   const m=text.match(/\{[\s\S]*\}/);
-  if(!m) throw new Error('No JSON in the AI response: '+text.slice(0,160));
+  if(!m){
+    if(_csLooksTruncated(text)) throw new Error(_CS_TRUNCATED);
+    throw new Error('No JSON in the AI response: '+text.slice(0,160));
+  }
   let obj;
   try{ obj=JSON.parse(m[0]); }
-  catch(e){ throw new Error('Malformed JSON from the AI: '+m[0].slice(0,160)); }
+  catch(e){
+    if(_csLooksTruncated(text)) throw new Error(_CS_TRUNCATED);
+    throw new Error('Malformed JSON from the AI: '+m[0].slice(0,160));
+  }
   if(!obj || typeof obj!=='object') throw new Error('AI response was not an object');
   if(!Array.isArray(obj.steps) || !obj.steps.length)
     throw new Error('AI response had no operation steps — the drawing may not be a cable/harness drawing');
@@ -8677,11 +8706,15 @@ async function _csAnthropic(text, isImage, imgData, lang){
     // temperature 0 for the same reason as the labor estimate: reading
     // dimensions off a drawing is not a creative task, and a spec that comes
     // back different every time it is run cannot be checked against itself.
-    body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:8192,temperature:0,messages})
+    body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:_CS_MAX_TOKENS,temperature:0,messages})
   }, _CS_ANALYSIS_TIMEOUT);
   if(!resp.ok){let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(_csProviderHint('Anthropic', m));}
-  return _csParse((await resp.json()).content[0].text);
+  const data=await resp.json();
+  // Truncation is reported by the provider, so say so rather than letting the
+  // JSON parser report a syntax error for a reply that was simply unfinished.
+  if(data.stop_reason==='max_tokens') throw new Error(_CS_TRUNCATED);
+  return _csParse(data.content[0].text);
 }
 async function _csGemini(text, isImage, imgData, lang){
   const prompt=_csPrompt(lang);
@@ -8692,11 +8725,12 @@ async function _csGemini(text, isImage, imgData, lang){
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
     {method:'POST',headers:{'content-type':'application/json'},
      body:JSON.stringify({contents:[{parts}],
-       generationConfig:{temperature:0, maxOutputTokens:8192, thinkingConfig:{thinkingBudget:0}}})},
+       generationConfig:{temperature:0, maxOutputTokens:_CS_MAX_TOKENS, thinkingConfig:{thinkingBudget:0}}})},
     _CS_ANALYSIS_TIMEOUT);
   if(!resp.ok){let m=`Gemini error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(_csProviderHint('Gemini', m));}
   const d=await resp.json();
+  if(d.candidates?.[0]?.finishReason==='MAX_TOKENS') throw new Error(_CS_TRUNCATED);
   const raw=(d.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
   return _csParse(raw);
 }
