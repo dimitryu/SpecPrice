@@ -189,6 +189,9 @@
     .cs-tbl td { padding:8px 10px; border:1px solid #E4E5E7; vertical-align:top; }
     .cs-tbl tr:nth-child(even) td { background:#FBFCFD; }
     .cs-note { font-size:12.5px; color:#334155; margin-top:7px; }
+    /* The one number the operator acts on. */
+    .cs-tbl tr.cs-cut-row td { background:#FEF3C7 !important; border-top:2px solid #B45309; }
+    @media print { .cs-tbl tr.cs-cut-row td { -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
     .cs-box { padding:14px 18px; margin:0 0 16px; font-size:14px; }
     .cs-sheet[dir="ltr"] .cs-box { border-left:4px solid; }
     .cs-sheet[dir="rtl"] .cs-box { border-right:4px solid; }
@@ -591,7 +594,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.9.7';
+const APP_VER   = '1.10.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7357,7 +7360,30 @@ function _aiPromptCatalog(){
     {id:'notes',      title:'Drawing Notes / Manufacturing Instructions',
      note:'Sales Desk only. Pulls the drawing’s NOTES / GENERAL NOTES block out for the panel under the BOM table.',
      text:_notesPrompt()},
+    {id:'cut-strip',  title:'Cut & Strip specification (Hebrew)',
+     note:'Cut & Strip screen. Reads a cable/harness drawing and produces the whole bench sheet: cut-length calculation, per-end strip dimensions, sleeve and marker positions, operation steps, inspection list and open items. This is the Hebrew variant — the language block changes with the screen’s display language.',
+     text:_csPrompt('he')},
+    {id:'cut-strip-en', title:'Cut & Strip specification (English)',
+     note:'The same prompt with no output-language block — what is sent when the screen is set to English. Shown separately so the language instruction can be reviewed on its own.',
+     text:_csPrompt('en')},
+    {id:'cut-strip-tr', title:'Cut & Strip — translation of an existing sheet',
+     note:'Cut & Strip screen. Only used when someone switches a saved sheet to a language it was not generated in. Sent in chunks of 20 strings.',
+     text:_csTranslatePromptSample()},
   ];
+}
+// The translation prompt is built inside _csTranslateChunk around a runtime
+// batch. Rebuilt here from the same text with a placeholder batch, so the panel
+// shows what is really sent rather than a hand-copied paraphrase.
+function _csTranslatePromptSample(){
+  const langName='Hebrew';
+  return `Translate each of these cable-harness shop-floor work instruction strings into ${langName}.\n`
+    +'Rules:\n'
+    +'- Keep part numbers, standards (IPC/WHMA-A-620, MIL-DTL-17), reference designators (P1, J1), dimension codes (A, B, C) and all units EXACTLY as they are.\n'
+    +'- Keep numbers and their units unchanged (e.g. "320 mm" stays "320 mm").\n'
+    +'- Technical terms a technician normally says in English (crimp, PTFE, VSWR, PCB) may stay in English.\n'
+    +'- These are safety-relevant instructions. Translate precisely; do not soften, shorten or embellish.\n'
+    +'- Return ONLY a JSON array of the translated strings, same order, same length. No commentary.\n\n'
+    +JSON.stringify(['<up to 20 strings from the sheet>'], null, 0);
 }
 function renderAdminPromptsSection(){
   const body=document.getElementById('adm-prompts-body');
@@ -7879,6 +7905,62 @@ function _csDocId(dwg){
 }
 function _csNum(v){ const n=parseFloat(v); return Number.isFinite(n)?n:null; }
 function _csMM(v){ const n=_csNum(v); return n==null ? '—' : (Math.round(n*100)/100)+' mm'; }
+function _csR(n){ return Math.round(n*1000)/1000; }
+
+// ── Cut length ────────────────────────────────────────────────────────────────
+// The number on the drawing is almost never the number to cut. Cable is consumed
+// by whatever sits inside each connector, and by squaring the end and re-doing a
+// bad strip. Cutting to the dimensioned length produces an assembly that is
+// short — which on a harness is scrap, because you cannot add cable back.
+//
+// So the sum is computed HERE from its parts rather than taken from the AI's
+// cut_length_mm. If the model's arithmetic disagrees with its own allowances,
+// the parts win: an operator can check 320 + 4 + 3.5 + 5 = 332.5, and cannot
+// check a single number that arrived out of nowhere.
+function _csCutLength(spec){
+  const c=spec?.cable||{};
+  const finished=_csNum(c.finished_length_mm);
+  const allowances=(Array.isArray(c.allowances)?c.allowances:[])
+    .map(a=>({ref:String(a?.ref||''), mm:_csNum(a?.mm)||0,
+              reason:String(a?.reason||''), confirmed:a?.confirmed===true}))
+    .filter(a=>a.mm!==0 || a.reason);
+  const trim=_csNum(c.trim_allowance_mm)||0;
+
+  // Specs made before this existed only ever had cut_length_mm. Show that, and
+  // say plainly that there is no breakdown behind it rather than inventing one.
+  if(finished==null){
+    return {finished:null, allowances:[], trim:0,
+            total:_csNum(c.cut_length_mm), hasBreakdown:false,
+            allConfirmed:false, added:0};
+  }
+  const added=_csR(allowances.reduce((s,a)=>s+a.mm,0)+trim);
+  return {
+    finished, allowances, trim,
+    added,
+    total:_csR(finished+added),
+    hasBreakdown:true,
+    allConfirmed: allowances.every(a=>a.confirmed) && (!trim || c.trim_allowance_confirmed===true),
+  };
+}
+// Keeps cable.cut_length_mm equal to its own breakdown. Everything downstream —
+// the diagrams, the title block, the step text — reads cut_length_mm, so this is
+// the one place the two can be made to agree, and it runs on both parse and edit.
+function _csSyncCutLength(spec){
+  if(!spec?.cable) return;
+  const r=_csCutLength(spec);
+  if(r.hasBreakdown) spec.cable.cut_length_mm=r.total;
+}
+
+// Human-readable arithmetic, e.g. "320 + 4 (P1) + 3.5 (J1) + 5 (trim) = 332.5 mm".
+// Deliberately spelled out: a worker who can see the sum can spot a wrong term.
+function _csCutFormula(spec){
+  const r=_csCutLength(spec);
+  if(!r.hasBreakdown) return '';
+  const parts=[`${r.finished}`]
+    .concat(r.allowances.map(a=>`${a.mm<0?'−':'+'} ${Math.abs(a.mm)}${a.ref?` (${a.ref})`:''}`))
+    .concat(r.trim ? [`+ ${r.trim} (${_csT('trim')})`] : []);
+  return `${parts.join(' ')} = ${r.total} mm`;
+}
 
 // ── Translation ───────────────────────────────────────────────────────────────
 // This screen behaves differently from the Labor Breakdown dialog, on purpose.
@@ -7947,6 +8029,22 @@ const _CS_LABELS={
     'Print':'הדפסה','Export PDF':'ייצוא PDF','Back':'חזרה','Delete':'מחיקה','Re-analyse':'ניתוח מחדש',
     'Translating…':'מתרגם…','Page':'עמוד','of':'מתוך',
     'Edit':'עריכה','Save':'שמירה','Cancel':'ביטול','Saving…':'שומר…',
+    'Cut length calculation':'חישוב אורך החיתוך',
+    'Squaring the cut and re-doing a bad strip':
+      'חיתוך ישר ותיקון חשיפה כושלת',
+    'Prove them on 3 sample pieces before the first production lot.':
+      'להוכיח על 3 חתיכות דוגמה לפני האצווה הראשונה.',
+    'Finished length (from the drawing)':'אורך גמור (מהסרטוט)',
+    'Allowance':'תוספת','Reason':'סיבה','trim':'ריווח חיתוך',
+    'CUT THIS LENGTH':'זה האורך לחיתוך',
+    'Do NOT cut to the drawing length. Cable is consumed inside each connector and by squaring the end — cut the length below.':
+      'אין לחתוך לפי האורך שבסרטוט. חלק מהכבל נבלע בתוך כל מחבר ובחיתוך הישר — לחתוך לפי האורך שלמטה.',
+    'What the drawing dimension measures':'מה המידה בסרטוט מודדת',
+    'Bare cable, connectors excluded':'כבל בלבד, ללא המחברים',
+    'Whole assembly, connector face to connector face':'המכלול כולו, מפאת מחבר לפאת מחבר',
+    'The drawing does not say — confirm before cutting':'הסרטוט לא מציין — לאמת לפני החיתוך',
+    'This specification predates the cut-length breakdown — the length below has no calculation behind it.':
+      'המפרט הזה נוצר לפני חישוב אורך החיתוך — אין מאחורי האורך שלמטה פירוט.',
     'Confirmed':'מאומת','Add step':'הוסף שלב','Add check':'הוסף בדיקה','Remove':'הסר',
     'Editing':'מצב עריכה',
     'Tick Confirmed once a dimension is verified against a datasheet — the red TBC marking disappears from the sheet and the diagrams.':
@@ -7990,6 +8088,22 @@ const _CS_LABELS={
     'Print':'Печать','Export PDF':'Экспорт PDF','Back':'Назад','Delete':'Удалить','Re-analyse':'Проанализировать заново',
     'Translating…':'Перевод…','Page':'Стр.','of':'из',
     'Edit':'Редактировать','Save':'Сохранить','Cancel':'Отмена','Saving…':'Сохранение…',
+    'Cut length calculation':'Расчёт длины реза',
+    'Squaring the cut and re-doing a bad strip':
+      'Торцовка и переделка неудачной зачистки',
+    'Prove them on 3 sample pieces before the first production lot.':
+      'Проверьте на 3 образцах до первой партии.',
+    'Finished length (from the drawing)':'Готовая длина (по чертежу)',
+    'Allowance':'Припуск','Reason':'Обоснование','trim':'припуск на торцовку',
+    'CUT THIS LENGTH':'РЕЗАТЬ ЭТУ ДЛИНУ',
+    'Do NOT cut to the drawing length. Cable is consumed inside each connector and by squaring the end — cut the length below.':
+      'НЕ режьте по длине с чертежа. Часть кабеля уходит внутрь каждого разъёма и на торцовку — режьте по длине ниже.',
+    'What the drawing dimension measures':'Что измеряет размер на чертеже',
+    'Bare cable, connectors excluded':'Только кабель, без разъёмов',
+    'Whole assembly, connector face to connector face':'Вся сборка, от торца до торца разъёма',
+    'The drawing does not say — confirm before cutting':'Чертёж не указывает — уточните до реза',
+    'This specification predates the cut-length breakdown — the length below has no calculation behind it.':
+      'Эта спецификация создана до появления расчёта длины реза — за длиной ниже нет расчёта.',
     'Confirmed':'Подтверждено','Add step':'Добавить шаг','Add check':'Добавить проверку','Remove':'Удалить',
     'Editing':'Режим редактирования',
     'Tick Confirmed once a dimension is verified against a datasheet — the red TBC marking disappears from the sheet and the diagrams.':
@@ -8240,7 +8354,14 @@ Return ONLY a JSON object. No markdown fence, no commentary.
   "cable": {
     "part_number": "", "manufacturer": "", "description": "",
     "type": "coax" | "single_wire" | "multi_conductor",
+
+    "finished_length_mm": <number>,
+    "length_basis": "cable_only" | "over_connectors" | "unclear",
+    "allowances": [ {"ref":"P1","mm":4.0,"reason":"cable insertion depth into the connector body","confirmed":false} ],
+    "trim_allowance_mm": <number>,
+    "trim_allowance_confirmed": <true|false>,
     "cut_length_mm": <number>,
+
     "cut_length_tolerance_mm": <number>,
     "cut_length_tolerance_confirmed": <true|false>,
     "length_includes_connectors": <true|false>,
@@ -8267,7 +8388,7 @@ Return ONLY a JSON object. No markdown fence, no commentary.
   "markers":  [ {"part_number":"","label":"A","from_end":"P1","distance_mm":50,"confirmed":false,
                  "text_lines":["P/N. ...","Rev. ..."]} ],
   "materials":[ {"item":1,"part_number":"","manufacturer":"","description":"","qty":"1","ref":"J1"} ],
-  "steps":    [ {"n":1,"title":"short imperative title","body":"what to do, in plain language an operator can follow",
+  "steps":    [ {"n":1,"title":"short imperative title","body":"what to do, in plain language an operator can follow. The FIRST step must be the cut, and must state the cut length together with the sum it came from.",
                  "critical":"the one thing that ruins the part if they get it wrong, or \\"\\"",
                  "dimension_ref":"the dimension this step sets, e.g. \\"320 mm\\" or \\"A / B\\", or \\"\\""} ],
   "inspection":[ "one check per line, phrased so it can be ticked off" ],
@@ -8286,15 +8407,34 @@ RULES — these matter more than completeness:
 
 4. DISCREPANCIES. Report contradictions in the drawing rather than silently picking one: file name vs title block, balloon numbers vs BOM item numbers, dimensions that do not add up. Do not "fix" them.
 
-5. GEOMETRY. "distance_mm" for sleeves and markers is measured from the end named in "from_end". "cut_length_mm" is the cable length; if the drawing says the length excludes connectors, set length_includes_connectors:false.
+5. GEOMETRY. "distance_mm" for sleeves and markers is measured from the end named in "from_end".
 
-6. LAYERS run OUTERMOST FIRST. For single_wire there are two layers (insulation, conductor) and only strip code "A".
+6. CUT LENGTH vs FINISHED LENGTH — get this right, it is what the operator actually cuts.
+   "finished_length_mm" is the length AS DIMENSIONED ON THE DRAWING, and "length_basis" says what that dimension measures:
+     - "cable_only"       the dimension is the bare cable, connectors excluded (e.g. a note saying "length without connectors")
+     - "over_connectors"  the dimension spans the whole assembly, connector face to connector face
+     - "unclear"          the drawing does not say
+   "cut_length_mm" is what the operator cuts from the reel. It is ALWAYS
+       finished_length_mm + sum of allowances + trim_allowance_mm
+   and it must equal that sum exactly — do not report a cut length that contradicts its own parts.
 
-7. STRIP CODES. "A" is always measured from the cable end. "derived":true marks a dimension that is arithmetic from the others (like C = A − B) rather than an independent setting.
+   Put one entry in "allowances" per END that consumes cable beyond the dimensioned length. What consumes length:
+     - the cable seated INSIDE the connector body (insertion / bottoming depth) — normally the largest term
+     - material lost to squaring the cut and re-stripping a bad end (put that in trim_allowance_mm, not per end)
+   Rules for the numbers:
+     - If length_basis is "cable_only" and nothing else consumes cable, the allowances may legitimately be 0. Say so in "reason" rather than inventing a number.
+     - If length_basis is "over_connectors", the cable is SHORTER than the dimension by the part of each connector that sticks out beyond the cable end — use a NEGATIVE mm for that allowance and explain it in "reason".
+     - Insertion depth comes from the connector's assembly spec. If you do not have it, still give a defensible estimate, set confirmed:false, and say what it was derived from.
+     - Set confirmed:true only for a value printed on the drawing or from a datasheet you actually know.
+   Keep length_includes_connectors consistent with length_basis.
 
-8. STEPS. Write for someone holding the cable, not for an engineer. Include threading sleeves on BEFORE connectors if the assembly has sleeves — that mistake scraps the cable. Everything in English; it gets translated separately.
+7. LAYERS run OUTERMOST FIRST. For single_wire there are two layers (insulation, conductor) and only strip code "A".
 
-9. Units in millimetres throughout.`;
+8. STRIP CODES. "A" is always measured from the cable end. "derived":true marks a dimension that is arithmetic from the others (like C = A − B) rather than an independent setting.
+
+9. STEPS. Write for someone holding the cable, not for an engineer. Include threading sleeves on BEFORE connectors if the assembly has sleeves — that mistake scraps the cable. Everything in English; it gets translated separately.
+
+10. Units in millimetres throughout.`;
 }
 
 function _csParse(raw){
@@ -8320,7 +8460,9 @@ function _csParse(raw){
   obj.discrepancies = Array.isArray(obj.discrepancies) ? obj.discrepancies : [];
   obj.cable      = obj.cable && typeof obj.cable==='object' ? obj.cable : {};
   obj.cable.layers = Array.isArray(obj.cable.layers) ? obj.cable.layers : [];
+  obj.cable.allowances = Array.isArray(obj.cable.allowances) ? obj.cable.allowances : [];
   obj.ends.forEach(e=>{ e.strip = Array.isArray(e.strip) ? e.strip : []; });
+  _csSyncCutLength(obj);
   return obj;
 }
 
@@ -8495,17 +8637,37 @@ function _csHarnessSVG(spec){
     dimY+=26;
   });
 
-  // overall length
+  // Overall length. When the drawing dimension and the length to cut are
+  // different numbers, BOTH are drawn — the finished length where it is actually
+  // measured, and the cut length underneath with the sum that produced it. An
+  // operator reading only the figure must not be able to pick up the wrong one.
+  const cut=_csCutLength(spec);
   const dy=Math.max(258,dimY+14);
   g+=`<line x1="${x0}" y1="${dy}" x2="${x1}" y2="${dy}" stroke="#0F172A" stroke-width="1.3" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
       <line x1="${x0}" y1="146" x2="${x0}" y2="${dy+6}" stroke="#0F172A" stroke-width=".9"/>
       <line x1="${x1}" y1="146" x2="${x1}" y2="${dy+6}" stroke="#0F172A" stroke-width=".9"/>
-      <rect x="${(500-80)}" y="${dy-14}" width="160" height="26" fill="#fff"/>
-      <text x="500" y="${dy+5}" text-anchor="middle" font-size="16" font-weight="800" fill="#0F172A">${lenOK?L+' mm':'? mm'}</text>`;
-  if(spec.cable?.length_includes_connectors===false)
+      <rect x="${(500-100)}" y="${dy-14}" width="200" height="26" fill="#fff"/>
+      <text x="500" y="${dy+5}" text-anchor="middle" font-size="16" font-weight="800" fill="#0F172A">${
+        cut.hasBreakdown && cut.added!==0 ? cut.finished+' mm' : (lenOK?L+' mm':'? mm')}</text>`;
+  if(cut.hasBreakdown && cut.added!==0)
+    g+=`<text x="500" y="${dy+24}" text-anchor="middle" font-size="11" fill="#475569"${rtlAttr}>${_csSvgTxt(T('Finished length (from the drawing)'))}</text>`;
+  else if(spec.cable?.length_includes_connectors===false)
     g+=`<text x="500" y="${dy+28}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#DC2626"${rtlAttr}>${_csSvgTxt(T('Cut length — cable only, connectors NOT included'))}</text>`;
 
-  const h=dy+58;
+  let h=dy+58;
+  if(cut.hasBreakdown && cut.added!==0){
+    // A second, visually distinct dimension for the number actually cut.
+    const cy=dy+58, ext=Math.min(70, Math.abs(cut.added)/cut.finished*(x1-x0)/2 + 26);
+    const cx0=x0-ext, cx1=x1+ext;
+    g+=`<line x1="${cx0}" y1="${cy}" x2="${cx1}" y2="${cy}" stroke="#B45309" stroke-width="2" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
+        <line x1="${cx0}" y1="${cy-10}" x2="${cx0}" y2="${cy+10}" stroke="#B45309" stroke-width="1.6"/>
+        <line x1="${cx1}" y1="${cy-10}" x2="${cx1}" y2="${cy+10}" stroke="#B45309" stroke-width="1.6"/>
+        <rect x="${500-170}" y="${cy-16}" width="340" height="30" fill="#FEF3C7" stroke="#B45309" stroke-width="1"/>
+        <text x="500" y="${cy+6}" text-anchor="middle" font-size="16" font-weight="800" fill="#7C2D12"${rtlAttr}>${
+          _csSvgTxt(T('CUT THIS LENGTH'))} — ${cut.total} mm</text>
+        <text x="500" y="${cy+36}" text-anchor="middle" font-size="12.5" font-family="monospace" fill="#7C2D12">${_csSvgTxt(_csCutFormula(spec))}</text>`;
+    h=cy+72;
+  }
   return `<svg viewBox="0 0 1000 ${h}" xmlns="http://www.w3.org/2000/svg" font-family="Heebo, Public Sans, Arial, sans-serif" direction="ltr">
     <defs>
       <marker id="csAr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#0F172A"/></marker>
@@ -8896,6 +9058,7 @@ function _csCollectEdits(){
     }
   });
   (spec.ends||[]).forEach(_csRecomputeDerived);
+  _csSyncCutLength(spec);
 }
 
 function _csEnterEdit(){
@@ -9027,11 +9190,50 @@ function renderCutStripSheet(){
       ${spec.cable?.layers_confirmed===false?`<p class="cs-note">${_csTBC()}</p>`:''}
     </div>` : ''}
 
-    <h2 class="cs-h2"><span class="cs-n">02</span>${esc(T('Assembly overview — dimensions'))}</h2>
+    <h2 class="cs-h2"><span class="cs-n">02</span>${esc(T('Cut length calculation'))}</h2>
+    <div class="cs-pad">${(()=>{
+      const r=_csCutLength(spec);
+      if(!r.hasBreakdown) return `
+        <div class="cs-box cs-warn"><b>${esc(T('CUT THIS LENGTH'))}: <span class="cs-ltr" style="font-size:19px">${esc(_csMM(r.total))}</span></b>
+          <p>${esc(T('This specification predates the cut-length breakdown — the length below has no calculation behind it.'))}</p></div>`;
+      const BASIS={cable_only:'Bare cable, connectors excluded',
+                   over_connectors:'Whole assembly, connector face to connector face',
+                   unclear:'The drawing does not say — confirm before cutting'};
+      const basis=BASIS[spec.cable?.length_basis]||BASIS.unclear;
+      return `
+      ${r.added!==0 ? `<div class="cs-box cs-stop"><b>${esc(T('Do NOT cut to the drawing length. Cable is consumed inside each connector and by squaring the end — cut the length below.'))}</b></div>` : ''}
+      <table class="cs-tbl">
+        <tbody>
+          <tr><td style="width:300px">${esc(T('Finished length (from the drawing)'))}</td>
+              <td class="cs-ctr" style="width:190px">${_csFNum('cable.finished_length_mm', r.finished, ' mm')}</td>
+              <td>${esc(T('What the drawing dimension measures'))}: <b>${esc(T(basis))}</b></td></tr>
+          ${r.allowances.map((a,i)=>`<tr>
+            <td>${esc(T('Allowance'))} — <b class="cs-ltr">${esc(a.ref||'')}</b></td>
+            <td class="cs-ctr">${_csEditing
+                ? `${_csFNum(`cable.allowances.${i}.mm`, a.mm, ' mm')} ${_csFChk(`cable.allowances.${i}.confirmed`, a.confirmed, T('Confirmed'))}`
+                : `${_csDim(a.mm, a.confirmed)}`}</td>
+            <td style="font-size:12.5px">${_csFText(`cable.allowances.${i}.reason`, a.reason, true)}</td></tr>`).join('')}
+          ${(r.trim || _csEditing) ? `<tr>
+            <td>${esc(T('Allowance'))} — ${esc(T('trim'))}</td>
+            <td class="cs-ctr">${_csEditing
+                ? `${_csFNum('cable.trim_allowance_mm', r.trim, ' mm')} ${_csFChk('cable.trim_allowance_confirmed', spec.cable?.trim_allowance_confirmed===true, T('Confirmed'))}`
+                : _csDim(r.trim, spec.cable?.trim_allowance_confirmed)}</td>
+            <td style="font-size:12.5px">${esc(T('Squaring the cut and re-doing a bad strip'))}</td></tr>` : ''}
+          <tr class="cs-cut-row">
+            <td><b>${esc(T('CUT THIS LENGTH'))}</b></td>
+            <td class="cs-ctr"><b class="cs-ltr" style="font-size:19px">${esc(_csMM(r.total))}</b>
+              ${_csNum(spec.cable?.cut_length_tolerance_mm)!=null?`<span class="cs-ltr" style="font-size:12px"> ±${_csNum(spec.cable.cut_length_tolerance_mm)}</span>`:''}</td>
+            <td class="cs-ltr" style="font-size:13px">${esc(_csCutFormula(spec))}</td></tr>
+        </tbody>
+      </table>
+      ${!r.allConfirmed?`<p class="cs-note">${_csTBC()} — ${esc(T('Prove them on 3 sample pieces before the first production lot.'))}</p>`:''}`;
+    })()}</div>
+
+    <h2 class="cs-h2"><span class="cs-n">03</span>${esc(T('Assembly overview — dimensions'))}</h2>
     <div class="cs-pad"><figure class="cs-fig">${_csHarnessSVG(spec)}</figure></div>
 
     ${ends.length ? `
-    <h2 class="cs-h2"><span class="cs-n">03</span>${esc(T('Strip detail'))}</h2>
+    <h2 class="cs-h2"><span class="cs-n">04</span>${esc(T('Strip detail'))}</h2>
     <div class="cs-pad">
       ${ends.map(e=>{ const svg=_csStripSVG(spec,e); return svg?`<figure class="cs-fig">${svg}</figure>`:''; }).join('')}
       <h3 class="cs-h3">${esc(T('Strip dimensions'))}</h3>
@@ -9060,7 +9262,7 @@ function renderCutStripSheet(){
         `<p class="cs-note">${esc(e.ref||'')} — governed by <span class="cs-ltr">${esc(e.datasheet_ref)}</span></p>`).join('')}
     </div>` : ''}
 
-    <h2 class="cs-h2"><span class="cs-n">04</span>${esc(T('Operation sequence'))}</h2>
+    <h2 class="cs-h2"><span class="cs-n">05</span>${esc(T('Operation sequence'))}</h2>
     <div class="cs-pad">${(spec.steps||[]).map((s,i)=>`
       <div class="cs-step">
         <div class="cs-step-n">${esc(s.n??(i+1))}</div>
@@ -9073,13 +9275,13 @@ function renderCutStripSheet(){
       ${_csEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:12px" data-cs-act="add-step">＋ ${esc(T('Add step'))}</button>`:''}</div>
 
     ${(spec.inspection||[]).length ? `
-    <h2 class="cs-h2"><span class="cs-n">05</span>${esc(T('Inspection'))}${spec.standard?` — <span class="cs-ltr">${esc(spec.standard)}</span>`:''}</h2>
+    <h2 class="cs-h2"><span class="cs-n">06</span>${esc(T('Inspection'))}${spec.standard?` — <span class="cs-ltr">${esc(spec.standard)}</span>`:''}</h2>
     <div class="cs-pad"><ul class="cs-chk">${spec.inspection.map((c,i)=>
       `<li><span class="cs-b"></span><span>${_csDelBtn('del-chk',i)}${_csFText(`inspection.${i}`, c, true)}</span></li>`).join('')}</ul>
       ${_csEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:12px" data-cs-act="add-chk">＋ ${esc(T('Add check'))}</button>`:''}</div>` : ''}
 
     ${(spec.tools||[]).length ? `
-    <h2 class="cs-h2"><span class="cs-n">06</span>${esc(T('Tools & consumables'))}</h2>
+    <h2 class="cs-h2"><span class="cs-n">07</span>${esc(T('Tools & consumables'))}</h2>
     <div class="cs-pad"><table class="cs-tbl">
       <thead><tr><th style="width:240px">${esc(T('Tool'))}</th><th style="width:170px">${esc(T('Setting'))}</th>
         <th>${esc(T('Note'))}</th></tr></thead>
