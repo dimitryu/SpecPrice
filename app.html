@@ -482,11 +482,15 @@ const PROTECTED_VIEWS = ['settings','admin'];   // cannot be taken away from PRO
 // bugs: either deleted roles keep coming back, or an installation that already
 // has SOME roles never gets the rest.
 //
-// A marker document records that the seed has run. Any doc id starting with __
-// is bookkeeping, never a role, and is filtered out everywhere the roles are
-// listed.
-const ROLES_META_DOC = '__meta__';
-const _isRoleDocId = id => !String(id||'').startsWith('__');
+// A marker document records that the seed has run. Any doc id starting with an
+// underscore is bookkeeping, never a role, and is filtered out everywhere roles
+// are listed.
+//
+// NOT '__meta__': Firestore reserves every document id matching __.*__ and
+// rejects the write outright ("Resource id is invalid because it is reserved").
+// A single leading underscore is allowed and reads just as clearly.
+const ROLES_META_DOC = '_meta';
+const _isRoleDocId = id => !String(id||'').startsWith('_');
 let _rolesSeeded = false;
 let roleViewsMap = {}; // populated from Firestore 'roles' collection: {[roleKey]: {name, views:[...]}}
 async function loadRoles(){
@@ -587,7 +591,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.9.6';
+const APP_VER   = '1.9.7';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7678,10 +7682,20 @@ async function renderSettingsRolesSection(){
         saved[k]=rec;
         return setDoc(doc(db,'roles',k), rec);
       }));
-      await setDoc(doc(db,'roles',ROLES_META_DOC),
-                   {seeded:true, seededAt:serverTimestamp(), seededBy:currentUserEmail||''});
-      _rolesSeeded=true;
       if(missing.length) logAudit('roles_seeded',{roles:missing},true);
+      // The marker is an optimisation — it stops a deleted role from being
+      // re-seeded. Losing it must not cost the admin the whole screen, so a
+      // failure here is reported but not fatal: the roles above are already
+      // written, and the next visit simply finds nothing missing and retries
+      // the marker.
+      try{
+        await setDoc(doc(db,'roles',ROLES_META_DOC),
+                     {seeded:true, seededAt:serverTimestamp(), seededBy:currentUserEmail||''});
+        _rolesSeeded=true;
+      }catch(e){
+        console.warn('[Roles] seed marker not written:', e.message);
+        toast('Roles are set up, but the one-time marker could not be saved — a deleted role may reappear. '+e.message,'error');
+      }
     }
   }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${esc(e.message)}</p>`; return; }
   roleViewsMap=saved;   // keep the in-memory gate in step with what was just read
@@ -7804,7 +7818,11 @@ function openNewRoleModal(){
   </div>`);
   document.getElementById('btn-nr-save').addEventListener('click',async()=>{
     const name=document.getElementById('nr-name-inp').value.trim();
-    const key=document.getElementById('nr-key-inp').value.trim().toLowerCase().replace(/[^a-z0-9_]+/g,'_');
+    // Leading/trailing underscores are stripped so the sanitiser can never
+    // produce a bookkeeping-looking id, nor a Firestore-reserved one (any id
+    // matching __.*__ is rejected outright by the server).
+    const key=document.getElementById('nr-key-inp').value.trim().toLowerCase()
+                .replace(/[^a-z0-9_]+/g,'_').replace(/^_+|_+$/g,'');
     const views=[...document.querySelectorAll('.nr-view-chk:checked')].map(c=>c.value);
     if(!name||!key){ toast('Name and key are required','error'); return; }
     // "Create" on an existing key is really an overwrite — it would silently
@@ -7814,8 +7832,8 @@ function openNewRoleModal(){
       toast(`A role with the key "${key}" already exists — edit it in the table instead`,'error');
       return;
     }
-    // __-prefixed ids are bookkeeping documents, not roles.
-    if(!_isRoleDocId(key)){ toast('A role key cannot start with "__"','error'); return; }
+    // Underscore-prefixed ids are bookkeeping documents, not roles.
+    if(!_isRoleDocId(key)){ toast('A role key cannot start with an underscore','error'); return; }
     const btn=document.getElementById('btn-nr-save');
     btn.disabled=true; btn.textContent='Creating…';
     try{
