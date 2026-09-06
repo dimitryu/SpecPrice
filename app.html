@@ -420,7 +420,7 @@ import { initializeApp }       from 'https://www.gstatic.com/firebasejs/10.13.1/
 import { getAuth, onAuthStateChanged, signOut, sendPasswordResetEmail }
                                from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
 import { getFirestore, doc, getDoc, getDocs, setDoc, addDoc, arrayUnion, deleteField,
-         updateDoc, deleteDoc, collection, query, orderBy, limit, serverTimestamp,
+         updateDoc, deleteDoc, collection, query, where, orderBy, limit, serverTimestamp,
          writeBatch }
                                from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js';
 
@@ -450,15 +450,22 @@ let allParts    = [];
 let anthKey     = localStorage.getItem('anth_key') || '';
 let currentView = 'home';
 let currentUserRole = '';
-// Role → views visible as buttons on the Home screen. This is now admin-
-// configurable (Settings > Roles, persisted to the Firestore 'roles'
-// collection, loaded into roleViewsMap by loadRoles() at boot). The hardcoded
-// map below is only a SAFETY-NET FALLBACK — used when a role has no Firestore
-// doc yet (e.g. before an admin ever opens Settings > Roles), so nobody is
-// ever fully locked out due to missing seed data. Unknown/legacy (empty)
-// roles fall back to 'agent' — the pre-role-system behavior was "everyone sees
-// everything except Settings", which 'agent' already matches.
-const DEFAULT_ROLE_VIEWS = {
+// Role → views visible as buttons on the Home screen.
+//
+// There is no permanent "built-in" class of role. SEED_ROLE_VIEWS is only what a
+// brand-new installation STARTS with: the first time an admin opens
+// Settings > Roles these are written to Firestore as ordinary documents, after
+// which every role — seeded or created by hand — is listed, edited and deleted
+// exactly the same way. Having two kinds of role that behaved differently was
+// confusing and was the source of a real bug.
+//
+// The one exception is 'admin', and only because the alternative is
+// unrecoverable: an admin who removes their own access to Settings and Admin,
+// or deletes the admin role, locks administration out of the system permanently
+// with no way back through the UI. So the admin ROLE cannot be deleted and
+// cannot lose those two screens. Its name and everything else about it are
+// editable like any other role.
+const SEED_ROLE_VIEWS = {
   admin:  ['rfq','sales-desk','part-stock','cut-strip','customers','settings','admin'],
   agent:  ['rfq','sales-desk','part-stock','cut-strip','customers'],
   // 'viewer' gets cut-strip too: the whole point of a cut & strip sheet is that
@@ -467,6 +474,8 @@ const DEFAULT_ROLE_VIEWS = {
   viewer: ['part-stock','rfq','cut-strip'],
   sales:  ['sales-desk'],
 };
+const PROTECTED_ROLE  = 'admin';
+const PROTECTED_VIEWS = ['settings','admin'];   // cannot be taken away from PROTECTED_ROLE
 let roleViewsMap = {}; // populated from Firestore 'roles' collection: {[roleKey]: {name, views:[...]}}
 async function loadRoles(){
   try{
@@ -478,23 +487,30 @@ async function loadRoles(){
 }
 function allowedViews(){
   const r = roleViewsMap[currentUserRole];
-  if (r && Array.isArray(r.views)) return r.views;
-  return DEFAULT_ROLE_VIEWS[currentUserRole] || DEFAULT_ROLE_VIEWS['agent'];
+  let views = (r && Array.isArray(r.views)) ? r.views
+            // Not in Firestore yet (fresh install, before the seed is written) or
+            // the role was deleted while a user still had it. Either way, falling
+            // back beats showing an empty Home screen with no way out.
+            : (SEED_ROLE_VIEWS[currentUserRole] || SEED_ROLE_VIEWS['agent']);
+  // Belt and braces on top of the save-time guard: however the admin role's
+  // document ends up looking, an admin can always reach Settings and Admin.
+  if(currentUserRole===PROTECTED_ROLE) views=[...new Set([...views, ...PROTECTED_VIEWS])];
+  return views;
 }
 function canView(v){ return v==='home' || allowedViews().includes(v); }
-// All role names known to Settings (built-in defaults ∪ any custom roles
-// already saved to Firestore) — used to populate the role <select> dropdowns
-// in Invite/Edit User, and the row list in Settings > Roles.
-// The built-in roles are code constants, not Firestore documents — they only get
-// written when an admin edits one. So the list has to be the UNION of the two,
-// not "Firestore if it has anything, otherwise the defaults".
+// Every role key the app knows about.
 //
-// The old "if empty use defaults" version had a nasty failure: creating the very
-// first custom role made the collection non-empty, and admin/agent/viewer/sales
-// immediately disappeared from every role dropdown — leaving an admin unable to
-// assign the built-in roles to anyone.
+// Once the roles collection has anything in it, it IS the list — the seed does
+// not contribute. That is only safe because the Roles screen writes the whole
+// seed in one go the first time it loads, so a non-empty collection is always a
+// complete one. Without that guarantee this would be the bug that made every
+// role vanish the moment the first custom one was created.
+//
+// It matters that the seed does not leak back in: a role an admin deleted must
+// stay deleted, not reappear in the dropdowns on the next page load.
 function _mergedRoleKeys(){
-  return [...new Set([...Object.keys(DEFAULT_ROLE_VIEWS), ...Object.keys(roleViewsMap)])];
+  const saved=Object.keys(roleViewsMap);
+  return saved.length ? saved : Object.keys(SEED_ROLE_VIEWS);
 }
 function roleOptions(){
   return _mergedRoleKeys().map(k =>
@@ -556,7 +572,7 @@ function _buildPager(page,totalPages,idPrefix){
 }
 let sdItems     = [];
 let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.9.4';
+const APP_VER   = '1.9.5';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7611,36 +7627,44 @@ function openEditUserModal(u){
 }
 
 // ── Roles section ────────────────────────────────────────────────────────────
-// Admin-configurable role → button-visibility matrix. Persisted to the
-// Firestore 'roles' collection (doc id = role key), read into roleViewsMap by
-// loadRoles() at boot (see near the top of the script). If the collection is
-// still empty (nobody has saved via this UI yet), the 4 built-in roles are
-// shown pre-filled from DEFAULT_ROLE_VIEWS so an admin can review and save
-// them for real with one click per row.
+// Every role is one document in the Firestore 'roles' collection, listed,
+// edited and deleted the same way. On first use the seed roles are written in
+// so there is nothing that exists only in code, and no two-tier model for an
+// admin to reason about.
+//
+// 'admin' is the single exception, and only to prevent an unrecoverable state —
+// see PROTECTED_ROLE at the top of the script.
 async function renderSettingsRolesSection(){
   const body=document.getElementById('stg-roles-body');
   if(!body) return;
   body.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)"><div class="ring" style="margin:0 auto"></div></div>`;
-  // Built-in roles live in DEFAULT_ROLE_VIEWS and are only written to Firestore
-  // once an admin edits one. The table must therefore show the UNION: a saved
-  // role reads from Firestore, an untouched built-in reads from the constant.
-  //
-  // This replaces an "if the collection is empty, show the defaults" check that
-  // silently broke the moment the first custom role was created — the collection
-  // stopped being empty, so every built-in role vanished from this screen.
+
   let saved={};
   try{
     const snap=await getDocs(collection(db,'roles'));
     snap.docs.forEach(d=>{ saved[d.id]=d.data()||{}; });
+
+    // First run: materialise the seed roles as real documents. After this the
+    // collection is the single source of truth and the seed is never consulted
+    // again. Only missing keys are written, so an admin who has already deleted
+    // a seeded role does not get it resurrected on every visit.
+    const missing=Object.keys(SEED_ROLE_VIEWS).filter(k=>!(k in saved));
+    if(missing.length && !Object.keys(saved).length){
+      await Promise.all(missing.map(k=>{
+        const rec={name:k.charAt(0).toUpperCase()+k.slice(1), views:SEED_ROLE_VIEWS[k],
+                   createdAt:serverTimestamp(), updatedAt:serverTimestamp()};
+        saved[k]=rec;
+        return setDoc(doc(db,'roles',k), rec);
+      }));
+      logAudit('roles_seeded',{roles:missing},true);
+    }
   }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${esc(e.message)}</p>`; return; }
   roleViewsMap=saved;   // keep the in-memory gate in step with what was just read
 
-  const roles=[...new Set([...Object.keys(DEFAULT_ROLE_VIEWS), ...Object.keys(saved)])].map(k=>({
+  const roles=_mergedRoleKeys().map(k=>({
     _id:k,
     name: saved[k]?.name || (k.charAt(0).toUpperCase()+k.slice(1)),
-    views: Array.isArray(saved[k]?.views) ? saved[k].views : (DEFAULT_ROLE_VIEWS[k]||[]),
-    _builtin: k in DEFAULT_ROLE_VIEWS,
-    _saved:   k in saved,
+    views: Array.isArray(saved[k]?.views) ? saved[k].views : (SEED_ROLE_VIEWS[k]||[]),
   }));
   const viewKeys=Object.keys(HOME_BUTTONS);
   body.innerHTML=`
@@ -7648,34 +7672,85 @@ async function renderSettingsRolesSection(){
       <button class="btn btn-green btn-sm" id="btn-new-role" style="margin-left:auto">＋ New Role</button></div>
     <div class="table-wrap"><table id="stg-roles-table">
       <thead><tr><th>Role Name</th><th>Key</th>${viewKeys.map(v=>`<th style="text-align:center">${HOME_BUTTONS[v][0]} ${HOME_BUTTONS[v][1]}</th>`).join('')}<th></th></tr></thead>
-      <tbody>${roles.map(r=>`<tr data-key="${esc(r._id)}">
+      <tbody>${roles.map(r=>{
+        const locked = r._id===PROTECTED_ROLE;
+        return `<tr data-key="${esc(r._id)}">
         <td><input class="form-input role-name-inp" data-key="${esc(r._id)}" value="${esc(r.name||r._id)}" style="padding:4px 7px;font-size:12px;min-width:100px"></td>
-        <td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(r._id)}
-          ${r._builtin && !r._saved
-            ? `<div style="font-family:inherit;font-size:10px;color:#2E75B6;margin-top:2px"
-                    title="This is a built-in role using its default permissions. Saving it stores an editable copy.">built-in · default</div>`
-            : (r._builtin ? `<div style="font-family:inherit;font-size:10px;color:var(--muted);margin-top:2px">built-in · customised</div>` : '')}
+        <td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(r._id)}</td>
+        ${viewKeys.map(v=>{
+          const pin = locked && PROTECTED_VIEWS.includes(v);
+          return `<td style="text-align:center"><input type="checkbox" class="role-view-chk"
+            data-key="${esc(r._id)}" data-view="${v}"
+            ${(r.views||[]).includes(v)||pin?'checked':''} ${pin?'disabled':''}
+            ${pin?'title="Administrators must keep access to this screen — removing it would lock the system out of its own administration."':''}></td>`;
+        }).join('')}
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn btn-green btn-sm role-save" data-key="${esc(r._id)}">💾 Save</button>
+          ${locked
+            ? `<button class="btn btn-ghost btn-sm" disabled title="The administrator role cannot be deleted.">🔒</button>`
+            : `<button class="btn btn-ghost btn-sm role-del" data-key="${esc(r._id)}" data-name="${esc(r.name||r._id)}">🗑</button>`}
         </td>
-        ${viewKeys.map(v=>`<td style="text-align:center"><input type="checkbox" class="role-view-chk" data-key="${esc(r._id)}" data-view="${v}" ${(r.views||[]).includes(v)?'checked':''}></td>`).join('')}
-        <td style="text-align:right"><button class="btn btn-green btn-sm role-save" data-key="${esc(r._id)}">💾 Save</button></td>
-      </tr>`).join('')}</tbody>
+      </tr>`;}).join('')}</tbody>
     </table></div>`;
 
   document.getElementById('btn-new-role').addEventListener('click',()=>openNewRoleModal());
+
   body.querySelectorAll('.role-save').forEach(btn=>btn.addEventListener('click',async()=>{
     const key=btn.dataset.key;
     const name=(body.querySelector(`.role-name-inp[data-key="${key}"]`).value||'').trim()||key;
-    const views=[...body.querySelectorAll(`.role-view-chk[data-key="${key}"]:checked`)].map(c=>c.dataset.view);
+    let views=[...body.querySelectorAll(`.role-view-chk[data-key="${key}"]:checked`)].map(c=>c.dataset.view);
+    // A disabled checkbox is still checked but is NOT submitted by a form read,
+    // and more importantly the protected screens must survive regardless of what
+    // the DOM says — this is the write path, so it is where the guarantee has to
+    // hold.
+    if(key===PROTECTED_ROLE) views=[...new Set([...views, ...PROTECTED_VIEWS])];
     btn.disabled=true; btn.textContent='Saving…';
     try{
       await setDoc(doc(db,'roles',key),{name,views,updatedAt:serverTimestamp()},{merge:true});
       roleViewsMap[key]={name,views};
       toast(`Role "${name}" saved`,'success');
-      logAudit('role_saved',{name,views},true);
-    }catch(e){ toast('Error: '+e.message,'error'); logAudit('role_saved',{error:e.message},false); }
+      logAudit('role_saved',{role:key,name,views},true);
+      // The current user may have just changed their own permissions.
+      if(key===currentUserRole) renderHomeIfActive();
+    }catch(e){ toast('Error: '+e.message,'error'); logAudit('role_saved',{role:key,error:e.message},false); }
     btn.disabled=false; btn.textContent='💾 Save';
   }));
+
+  body.querySelectorAll('.role-del').forEach(btn=>btn.addEventListener('click',async()=>{
+    const key=btn.dataset.key, name=btn.dataset.name;
+    // Deleting a role that people are still assigned to would leave those
+    // accounts pointing at nothing. Rather than silently reassigning them or
+    // letting them fall back to a default they were never given, the delete is
+    // refused and the admin is told how many users to move first.
+    btn.disabled=true;
+    let inUse=0;
+    try{
+      const snap=await getDocs(query(collection(db,'users'), where('role','==',key)));
+      inUse=snap.size;
+    }catch(e){
+      toast('Could not check which users have this role: '+e.message,'error');
+      btn.disabled=false; return;
+    }
+    if(inUse){
+      toast(`"${name}" is assigned to ${inUse} user${inUse>1?'s':''} — reassign them first`,'error');
+      btn.disabled=false; return;
+    }
+    if(!confirm(`Delete the role "${name}"? No users are assigned to it.`)){ btn.disabled=false; return; }
+    try{
+      await deleteDoc(doc(db,'roles',key));
+      delete roleViewsMap[key];
+      toast(`Role "${name}" deleted`,'success');
+      logAudit('role_deleted',{role:key,name},true);
+      renderSettingsRolesSection();
+    }catch(e){
+      toast('Error: '+e.message,'error'); logAudit('role_deleted',{role:key,error:e.message},false);
+      btn.disabled=false;
+    }
+  }));
 }
+// The Home screen's buttons are role-gated, so it has to be redrawn when the
+// signed-in user's own role changes underneath it.
+function renderHomeIfActive(){ if(currentView==='home') renderHome(); }
 
 function openNewRoleModal(){
   const viewKeys=Object.keys(HOME_BUTTONS);
@@ -7707,10 +7782,10 @@ function openNewRoleModal(){
     const key=document.getElementById('nr-key-inp').value.trim().toLowerCase().replace(/[^a-z0-9_]+/g,'_');
     const views=[...document.querySelectorAll('.nr-view-chk:checked')].map(c=>c.value);
     if(!name||!key){ toast('Name and key are required','error'); return; }
-    // "Create" on an existing key is really an overwrite, and on a built-in key
-    // it would silently replace that role's permissions for everyone who has it.
-    // Neither is what "New Role" means, so it's refused rather than guessed at.
-    if(_mergedRoleKeys().includes(key)){
+    // "Create" on an existing key is really an overwrite — it would silently
+    // replace that role's permissions for everyone who has it. Checked against
+    // what actually exists, so a role the admin deleted CAN be re-created.
+    if(key in roleViewsMap || key===PROTECTED_ROLE){
       toast(`A role with the key "${key}" already exists — edit it in the table instead`,'error');
       return;
     }
