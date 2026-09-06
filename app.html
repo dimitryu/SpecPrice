@@ -451,6 +451,13 @@ let allParts    = [];
 // the page was reloaded and then silently disappeared — taking every AI
 // feature with it, with no error anywhere.
 let anthKey     = localStorage.getItem('anth_key') || '';
+// Anthropic is the only AI provider. A Gemini fallback used to sit behind every
+// call; it was removed because keeping two providers meant every prompt change
+// had to be verified twice, and the second path was rarely exercised — a
+// fallback nobody tests is not a safety net. The trade-off is deliberate and
+// worth stating: if this key stops working, every AI feature stops with it.
+const _AI_NO_KEY='No AI key configured — add an Anthropic key in Admin → AI API Keys';
+try{ localStorage.removeItem('gem_key'); }catch{}   // left over from the Gemini era
 let currentView = 'home';
 let currentUserRole = '';
 // Role → views visible as buttons on the Home screen.
@@ -593,8 +600,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-let geminiKey   = localStorage.getItem('gem_key') || '';
-const APP_VER   = '1.12.0';
+const APP_VER   = '1.13.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -664,7 +670,6 @@ async function initCompany(user) {
       // The company document is a fallback, not an override: a key saved in
       // Admin (localStorage) must not be wiped by a company doc that has none.
       anthKey   = anthKey   || cData.anthropic_key || '';
-      geminiKey = geminiKey || cData.gemini_key    || '';
       _sdLaborRateMin = parseFloat(cData.labor_rate_min) || 0.5;
       companyLogoB64 = cData.logo_b64 || '';
     }
@@ -1960,7 +1965,7 @@ async function renderRFQDetail(projectId, projectName, searchQ=''){
 // ADD DRAWING MODAL — PDF / Image → AI → BOM
 // ══════════════════════════════════════════════════════════════════════════════
 function openAddDrawingModal(projectId, projectName){
-  if(!anthKey && !geminiKey){ showSettingsModal(()=>openAddDrawingModal(projectId,projectName)); return; }
+  if(!anthKey){ showSettingsModal(()=>openAddDrawingModal(projectId,projectName)); return; }
 
   showModal(`<div class="modal">
     <div class="modal-head"><h3>Add Drawing to ${esc(projectName)}</h3><button class="close-modal" id="modal-close">✕</button></div>
@@ -2070,7 +2075,7 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
           setMsg('Sending text to AI…', 45);
           extractedRows = await aiExtractBOM(_pdfText, false, null, file.name);
         }
-        if((!extractedRows.length || _bomPageSparse) && (anthKey||geminiKey)){
+        if((!extractedRows.length || _bomPageSparse) && anthKey){
           setMsg('Text extraction found nothing — trying page vision…', 60);
           // Try the detected BOM sheet FIRST, then fall back to the rest of
           // the pages in order.
@@ -2118,7 +2123,7 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
       }
     } catch(e){
       const hint = e.message==='Failed to fetch'
-        ? 'network error — check your internet connection or Anthropic/Gemini key'
+        ? 'network error — check your internet connection or the Anthropic key'
         : e.message;
       errors.push(`"${file.name}" — ${hint}`);
     }
@@ -2484,7 +2489,7 @@ function fileToB64(file){
   });
 }
 
-// ── AI BOM extraction: Anthropic → Gemini fallback ────────────────────────────
+// ── AI BOM extraction (Anthropic) ─────────────────────────────────────────────
 // Text prompt — same as Windows app ai_extractor.py
 // ── Spreadsheet (.xlsx/.xls/.csv) BOM import ─────────────────────────────────
 // Matched on extension rather than MIME type: browsers report spreadsheets
@@ -2922,10 +2927,6 @@ function _parseAIJson(raw){
   catch(e){console.warn('[AI] parse error:',e.message,'at:',m[0].slice(0,200));return[];}
 }
 
-// Gemini first, Anthropic as fallback — per user feedback, Gemini reads
-// engineering drawings (BOM tables, pin counts, cable construction) noticeably
-// better than Anthropic for this task, so it's the preferred provider whenever
-// a Gemini key is configured.
 // Retries a fetch() once after a short delay if it fails at the network
 // level (a TypeError — connection refused, CORS block, DNS failure, offline)
 // rather than coming back with a normal HTTP response. That kind of failure
@@ -2969,19 +2970,9 @@ async function _fetchWithRetry(url, opts, timeoutMs){
 // (spreadsheet grid from extractExcelText, which needs its own prompt).
 async function aiExtractBOM(text, isImage, imgData, filename, sourceType='drawing'){
   try{
-    let rows, provider;
-    if(geminiKey){
-      try { rows=await _geminiBOM(text, isImage, imgData, filename, sourceType); provider='gemini'; }
-      catch(e){
-        if(!anthKey) throw e;
-        console.warn('Gemini failed, using Anthropic:', e.message);
-      }
-    }
-    if(rows===undefined){
-      if(!anthKey) throw new Error('No AI API key configured. Add a Gemini or Anthropic key in Settings.');
-      rows=await _anthropicBOM(text, isImage, imgData, filename, sourceType); provider='anthropic';
-    }
-    logSystemAudit('drawing_bom_search',{filename,provider,mode:sourceType==='excel'?'excel':(isImage?'vision':'text'),rowsFound:rows.length},true);
+    if(!anthKey) throw new Error(_AI_NO_KEY);
+    const rows=await _anthropicBOM(text, isImage, imgData, filename, sourceType);
+    logSystemAudit('drawing_bom_search',{filename,provider:'anthropic',mode:sourceType==='excel'?'excel':(isImage?'vision':'text'),rowsFound:rows.length},true);
     return rows;
   }catch(e){
     logSystemAudit('drawing_bom_search',{filename,error:e.message},false);
@@ -3013,23 +3004,6 @@ async function _anthropicBOM(text, isImage, imgData, filename, sourceType='drawi
   return _parseAIJson(data.content[0].text.trim());
 }
 
-async function _geminiBOM(text, isImage, imgData, filename, sourceType='drawing'){
-  const parts = isImage
-    ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:_BOM_VISION_PROMPT}]
-    : [{text: _bomTextPromptFor(sourceType,filename)+'\n'+text.slice(0,_bomTextLimitFor(sourceType))}];
-  const resp = await _fetchWithRetry(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-    {method:'POST',headers:{'content-type':'application/json'},
-     body:JSON.stringify({contents:[{parts}],generationConfig:{thinkingConfig:{thinkingBudget:0}}})}
-  );
-  if(!resp.ok){let m=`Gemini error ${resp.status}`;
-    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
-  const data=await resp.json();
-  const raw=(data.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
-  console.log('[Gemini] parts:',data.candidates?.[0]?.content?.parts?.length,'raw(200):',raw.slice(0,200));
-  _dbgLastAI=raw;
-  return _parseAIJson(raw.trim());
-}
 
 // ── Sales Desk only: AI cable-manufacturing-process analysis ─────────────────
 // Given the SAME drawing content already used for BOM extraction, ask the AI
@@ -3153,48 +3127,17 @@ async function _anthropicCableProcess(text, isImage, imgData, rowsList, hasDrawi
   const data=await resp.json();
   return _parseCableProcessJson(data.content[0].text.trim());
 }
-async function _geminiCableProcess(text, isImage, imgData, rowsList, hasDrawing=true){
-  const prompt=_cableProcessPrompt(rowsList, hasDrawing);
-  const parts = isImage
-    ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:prompt}]
-    : [{text: prompt + (hasDrawing ? '\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000) : '')}];
-  const resp = await _fetchWithRetry(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-    {method:'POST',headers:{'content-type':'application/json'},
-     // temperature 0 — see the note in _anthropicCableProcess.
-     body:JSON.stringify({contents:[{parts}],
-       generationConfig:{temperature:0, thinkingConfig:{thinkingBudget:0}}})}
-  );
-  if(!resp.ok){let m=`Gemini error ${resp.status}`;
-    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
-  const data=await resp.json();
-  const raw=(data.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
-  return _parseCableProcessJson(raw.trim());
-}
 async function aiAnalyzeCableProcess(text, isImage, imgData, rowsList, hasDrawing=true){
-  if(!rowsList) return null;
-  let proc, provider, firstError='';
-  if(geminiKey){
-    try { proc=await _geminiCableProcess(text, isImage, imgData, rowsList, hasDrawing); provider='gemini'; }
-    catch(e){
-      firstError=e.message;
-      // Deliberately NOT `return null` — let Anthropic try. This branch used to
-      // give up whenever Gemini produced anything unreadable, so a single bad
-      // reply from one provider silenced the other entirely.
-      if(!anthKey){ logSystemAudit('drawing_price_calculation',{error:e.message},false); throw e; }
-      console.warn('Gemini cable-process failed, falling back to Anthropic:', e.message);
-    }
-  }
-  if(!proc && anthKey){
-    try { proc=await _anthropicCableProcess(text, isImage, imgData, rowsList, hasDrawing); provider='anthropic'; }
-    catch(e){
-      console.warn('Cable-process analysis failed:', e.message);
-      logSystemAudit('drawing_price_calculation',{error:e.message},false);
-      throw new Error(firstError && firstError!==e.message ? `${e.message} (Gemini also failed: ${firstError})` : e.message);
-    }
+  if(!rowsList || !anthKey) return null;
+  let proc;
+  try { proc=await _anthropicCableProcess(text, isImage, imgData, rowsList, hasDrawing); }
+  catch(e){
+    console.warn('Cable-process analysis failed:', e.message);
+    logSystemAudit('drawing_price_calculation',{error:e.message},false);
+    throw e;
   }
   if(!proc) return null;
-  logSystemAudit('drawing_price_calculation',{provider,stepsFound:proc?.steps?.length||0},true);
+  logSystemAudit('drawing_price_calculation',{provider:'anthropic',stepsFound:proc?.steps?.length||0},true);
   return proc;
 }
 
@@ -3241,37 +3184,13 @@ async function _anthropicNotes(text, isImage, imgData){
   const data=await resp.json();
   return _parseNotesJson(data.content[0].text.trim());
 }
-async function _geminiNotes(text, isImage, imgData){
-  const prompt=_notesPrompt();
-  const parts = isImage
-    ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:prompt}]
-    : [{text: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000)}];
-  const resp = await _fetchWithRetry(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-    {method:'POST',headers:{'content-type':'application/json'},
-     body:JSON.stringify({contents:[{parts}],generationConfig:{thinkingConfig:{thinkingBudget:0}}})}
-  );
-  if(!resp.ok){let m=`Gemini error ${resp.status}`;
-    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
-  const data=await resp.json();
-  const raw=(data.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
-  return _parseNotesJson(raw.trim());
-}
 async function aiExtractDrawingNotes(text, isImage, imgData){
-  let notes, provider;
-  if(geminiKey){
-    try { notes=await _geminiNotes(text, isImage, imgData); provider='gemini'; }
-    catch(e){
-      if(!anthKey){ logSystemAudit('drawing_notes_search',{error:e.message},false); return []; }
-      console.warn('Gemini notes extraction failed, using Anthropic:', e.message);
-    }
-  }
-  if(notes===undefined && anthKey){
-    try { notes=await _anthropicNotes(text, isImage, imgData); provider='anthropic'; }
-    catch(e){ console.warn('Notes extraction failed:', e.message); logSystemAudit('drawing_notes_search',{error:e.message},false); return []; }
-  }
+  if(!anthKey) return [];
+  let notes;
+  try { notes=await _anthropicNotes(text, isImage, imgData); }
+  catch(e){ console.warn('Notes extraction failed:', e.message); logSystemAudit('drawing_notes_search',{error:e.message},false); return []; }
   if(notes===undefined) return [];
-  logSystemAudit('drawing_notes_search',{provider,notesFound:notes.length},true);
+  logSystemAudit('drawing_notes_search',{provider:'anthropic',notesFound:notes.length},true);
   return notes;
 }
 // Broad match for "this note references a document or standard" — spec/dwg/
@@ -4722,7 +4641,7 @@ function _sdCellHTML(k,r,i){
 const SD_LABOR_AUTO_LIMIT = 20;
 
 async function _sdAutoMatchLabor(onProgress, opts={}){
-  if(!anthKey && !geminiKey){
+  if(!anthKey){
     return {applied:0, minutes:0, reason:'No AI key configured — add one in Admin → AI API Keys'};
   }
 
@@ -4950,7 +4869,7 @@ async function _lbTranslateOperations(texts, lang){
   const bucket=_lbCache[lang] || (_lbCache[lang]={});
   const todo=[...new Set(texts.map(t=>String(t||'').trim()).filter(t=>t && !bucket[t]))];
   if(!todo.length) return true;
-  if(!anthKey && !geminiKey) throw new Error('No AI key configured — add one in Admin → AI API Keys');
+  if(!anthKey) throw new Error(_AI_NO_KEY);
 
   const langName = lang==='ru' ? 'Russian' : 'Hebrew';
   const prompt=`Translate each of these manufacturing operation descriptions from English to ${langName}.\n`
@@ -4960,30 +4879,16 @@ async function _lbTranslateOperations(texts, lang){
     +'- Return ONLY a JSON array of the translated strings, same order, same length. No commentary.\n\n'
     +JSON.stringify(todo, null, 0);
 
-  let raw='';
-  if(anthKey){
-    const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
-               'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-      body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:2048,
-                           messages:[{role:'user',content:prompt}]})
-    });
-    if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
-      try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
-    raw=(await resp.json()).content[0].text;
-  } else {
-    const resp=await _fetchWithRetry(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-      {method:'POST',headers:{'content-type':'application/json'},
-       body:JSON.stringify({contents:[{parts:[{text:prompt}]}],
-                            generationConfig:{thinkingConfig:{thinkingBudget:0}}})});
-    if(!resp.ok){ let m=`Gemini error ${resp.status}`;
-      try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
-    const d=await resp.json();
-    raw=(d.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
-  }
-
+  const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
+             'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
+    body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:2048,
+                         messages:[{role:'user',content:prompt}]})
+  });
+  if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
+    try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
+  const raw=(await resp.json()).content[0].text;
   const m=String(raw).match(/\[[\s\S]*\]/);
   if(!m) throw new Error('Translation came back in an unexpected format');
   const arr=JSON.parse(m[0]);
@@ -5796,7 +5701,7 @@ async function renderSalesDesk(){
 
   // From File (BOM extraction for Sales Desk)
   document.getElementById('btn-sd-file').addEventListener('click',()=>{
-    if(!anthKey && !geminiKey){ showSettingsModal(()=>document.getElementById('btn-sd-file')?.click()); return; }
+    if(!anthKey){ showSettingsModal(()=>document.getElementById('btn-sd-file')?.click()); return; }
     openSDFileModal();
   });
 }
@@ -6009,7 +5914,7 @@ async function handleSDFiles(files){
           setM('Sending text to AI…',45);
           extractedRows=await aiExtractBOM(_pdfText,false,null,file.name);
         }
-        if((!extractedRows.length||_bomPageSparse)&&(anthKey||geminiKey)){
+        if((!extractedRows.length||_bomPageSparse)&&anthKey){
           setM('Text extraction found nothing — trying page vision…',60);
           // Try the detected BOM sheet FIRST, then fall back to the rest of
           // the pages in order.
@@ -6069,7 +5974,7 @@ async function handleSDFiles(files){
       // _sdActiveGeneralLaborMinutes). The full
       // breakdown (+ a single-unit reference time) is kept in
       // _sdLaborBreakdowns for the Cost Summary breakdown modal.
-      if(extractedRows.length && (anthKey||geminiKey)){
+      if(extractedRows.length && anthKey){
         try{
           setM('Analyzing cable manufacturing process…',95);
           const rowsList=extractedRows.map((r,idx)=>`${idx}: ${r.description||r.part_number||''} (qty=${r.qty||''}${r.unit?' '+r.unit:''})`).join('\n');
@@ -6154,7 +6059,7 @@ async function handleSDFiles(files){
       // the drawing carries (separate from the BOM table) — shown below the
       // BOM table (see _sdRenderNotesPanel). Runs even if no BOM rows were
       // found, since a drawing can still have notes worth surfacing.
-      if(anthKey||geminiKey){
+      if(anthKey){
         try{
           setM('Checking for Notes / Manufacturing Instructions…',97);
           const notes=await aiExtractDrawingNotes(_procIsImage?'':_pdfText, _procIsImage, _procImgData);
@@ -6902,10 +6807,6 @@ function renderAdminPage(){
         <label>Anthropic API Key</label>
         <input class="form-input" id="adm-anth-key" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
       </div>
-      <div class="form-field" style="margin-top:12px">
-        <label>Gemini API Key</label>
-        <input class="form-input" id="adm-gem-key" type="password" placeholder="AIza…" value="${esc(geminiKey)}">
-      </div>
       <p style="font-size:11px;color:var(--muted);margin-top:10px">Keys are stored in your browser (localStorage) and never sent to our servers.</p>
       <button class="btn btn-green" id="btn-adm-save-keys" style="margin-top:14px">💾 Save API Keys</button>
     </div>
@@ -6959,11 +6860,9 @@ function renderAdminPage(){
 
   document.getElementById('btn-adm-save-keys').addEventListener('click',()=>{
     anthKey=document.getElementById('adm-anth-key').value.trim();
-    geminiKey=document.getElementById('adm-gem-key').value.trim();
     localStorage.setItem('anth_key',anthKey);
-    localStorage.setItem('gem_key',geminiKey);
     toast('API keys saved','success');
-    logAudit('ai_keys_updated',{anthropic:!!anthKey,gemini:!!geminiKey},true);
+    logAudit('ai_keys_updated',{anthropic:!!anthKey},true);
   });
   renderAdminDistributorApiSection();
   renderAdminTicketsSection();
@@ -6972,7 +6871,7 @@ function renderAdminPage(){
 }
 
 // ── Distributor API credentials (Mouser / DigiKey) ───────────────────────────
-// Unlike the Anthropic/Gemini keys above, these never live in the browser: they
+// Unlike the Anthropic key above, these never live in the browser: they
 // are POSTed to the apiConfig Cloud Function, which stores them where no client
 // can read them back. The UI therefore shows status, never values.
 const API_CONFIG_URL='https://us-central1-specprice-236a2.cloudfunctions.net/apiConfig';
@@ -7472,10 +7371,6 @@ function showSettingsModal(onSaved){
         <label>Anthropic API Key</label>
         <input class="form-input" id="inp-anth-key" type="password" placeholder="sk-ant-…" value="${esc(anthKey)}">
       </div>
-      <div class="form-field" style="margin-top:12px">
-        <label>Gemini API Key</label>
-        <input class="form-input" id="inp-gem-key" type="password" placeholder="AIza…" value="${esc(geminiKey)}">
-      </div>
       <p style="font-size:11px;color:var(--muted);margin-top:10px">Keys are stored in your browser (localStorage) and never sent to our servers.</p>
     </div>
     <div class="modal-foot">
@@ -7486,9 +7381,7 @@ function showSettingsModal(onSaved){
 
   document.getElementById('btn-save-settings').addEventListener('click',()=>{
     anthKey=document.getElementById('inp-anth-key').value.trim();
-    geminiKey=document.getElementById('inp-gem-key').value.trim();
     localStorage.setItem('anth_key',anthKey);
-    localStorage.setItem('gem_key',geminiKey);
     toast('API keys saved','success');
     closeModal();
     if(onSaved) onSaved();
@@ -8361,7 +8254,7 @@ async function _csTranslate(texts, lang, onProgress){
   const bucket=_csCache[lang] || (_csCache[lang]={});
   const todo=[...new Set(texts.map(t=>String(t||'').trim()).filter(t=>t && !bucket[t]))];
   if(!todo.length) return true;
-  if(!anthKey && !geminiKey) throw new Error('No AI key configured — add one in Admin → AI API Keys');
+  if(!anthKey) throw new Error(_AI_NO_KEY);
 
   const chunks=[];
   for(let i=0;i<todo.length;i+=_CS_TR_CHUNK) chunks.push(todo.slice(i,i+_CS_TR_CHUNK));
@@ -8392,30 +8285,16 @@ async function _csTranslateChunk(todo, lang, bucket){
     +'- Return ONLY a JSON array of the translated strings, same order, same length. No commentary.\n\n'
     +JSON.stringify(todo, null, 0);
 
-  let raw='';
-  if(anthKey){
-    const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
-               'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-      body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:16000,temperature:0,
-                           messages:[{role:'user',content:prompt}]})
-    });
-    if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
-      try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
-    raw=(await resp.json()).content[0].text;
-  } else {
-    const resp=await _fetchWithRetry(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-      {method:'POST',headers:{'content-type':'application/json'},
-       body:JSON.stringify({contents:[{parts:[{text:prompt}]}],
-                            generationConfig:{temperature:0, thinkingConfig:{thinkingBudget:0}}})});
-    if(!resp.ok){ let m=`Gemini error ${resp.status}`;
-      try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
-    const d=await resp.json();
-    raw=(d.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
-  }
-
+  const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
+             'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
+    body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:16000,temperature:0,
+                         messages:[{role:'user',content:prompt}]})
+  });
+  if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
+    try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
+  const raw=(await resp.json()).content[0].text;
   const m=String(raw).match(/\[[\s\S]*\]/);
   if(!m) throw new Error('Translation came back in an unexpected format');
   const arr=JSON.parse(m[0]);
@@ -8719,24 +8598,6 @@ async function _csAnthropic(text, isImage, imgData, lang){
   if(data.stop_reason==='max_tokens') throw new Error(_CS_TRUNCATED);
   return _csParse(data.content[0].text);
 }
-async function _csGemini(text, isImage, imgData, lang){
-  const prompt=_csPrompt(lang);
-  const parts = isImage
-    ? [{inlineData:{mimeType:imgData.mimeType,data:imgData.b64}},{text:prompt}]
-    : [{text: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,24000)}];
-  const resp=await _fetchWithRetry(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-    {method:'POST',headers:{'content-type':'application/json'},
-     body:JSON.stringify({contents:[{parts}],
-       generationConfig:{temperature:0, maxOutputTokens:_CS_MAX_TOKENS, thinkingConfig:{thinkingBudget:0}}})},
-    _CS_ANALYSIS_TIMEOUT);
-  if(!resp.ok){let m=`Gemini error ${resp.status}`;
-    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(_csProviderHint('Gemini', m));}
-  const d=await resp.json();
-  if(d.candidates?.[0]?.finishReason==='MAX_TOKENS') throw new Error(_CS_TRUNCATED);
-  const raw=(d.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('');
-  return _csParse(raw);
-}
 // A rejected KEY is not a transient failure — it will be rejected identically on
 // every subsequent drawing. Retrying it each time just spends a round-trip
 // before the fallback, on a screen where the total wait already matters. So a
@@ -8748,48 +8609,14 @@ function _csIsKeyError(msg){
   return /service account is deleted or disabled|API key not valid|API_KEY_INVALID|invalid x-api-key|authentication_error|401|403/i.test(String(msg||''));
 }
 
-// Provider order for THIS screen, deliberately the reverse of BOM extraction.
-//
-// Elsewhere in the app Gemini goes first because it is cheaper and faster and
-// the task is small. That ordering was inherited here without being reconsidered,
-// and it is the wrong default for this screen: a cut & strip analysis is the
-// hardest thing the app asks for — read a dense engineering drawing, get every
-// connector and cable run, and emit a large structured document in Hebrew — and
-// its output is a work instruction whose dimensions are safety-relevant.
-// Accuracy is worth more than the cost difference, so the stronger model leads
-// and the cheaper one is the fallback rather than the other way round.
-const _CS_PROVIDER_ORDER=['anthropic','gemini'];
-
 async function aiAnalyzeCutStrip(text, isImage, imgData, lang){
-  const runner={
-    anthropic:{key:()=>anthKey, call:()=>_csAnthropic(text,isImage,imgData,lang)},
-    gemini:   {key:()=>geminiKey, call:()=>_csGemini(text,isImage,imgData,lang)},
-  };
-  let spec, errors=[];
-  for(const name of _CS_PROVIDER_ORDER){
-    const p=runner[name];
-    if(!p.key()) continue;
-    if(_csDeadProviders[name]){ errors.push(_csDeadProviders[name]); continue; }
-    try{ spec=await p.call(); break; }
-    catch(e){
-      errors.push(e.message);
-      if(_csIsKeyError(e.message)){
-        _csDeadProviders[name]=e.message;
-        console.warn(`[CutStrip] ${name} key rejected — skipping it for this session:`, e.message);
-      } else {
-        console.warn(`[CutStrip] ${name} failed, trying the next provider:`, e.message);
-      }
-    }
-  }
-  if(!spec){
-    if(!errors.length) throw new Error('No AI key configured — add one in Admin → AI API Keys');
-    // Lead with whichever failure the user can act on. A rejected key has a fix;
-    // a timeout is just "try again", so it should not be the headline when the
-    // other provider told us something concrete.
-    const actionable=errors.find(_csIsKeyError);
-    throw new Error(actionable && errors.length>1
-      ? `${actionable} The other provider also failed: ${errors.find(m=>m!==actionable)}`
-      : errors.join(' | '));
+  if(!anthKey) throw new Error(_AI_NO_KEY);
+  if(_csDeadProviders.anthropic) throw new Error(_csDeadProviders.anthropic);
+  let spec;
+  try{ spec=await _csAnthropic(text,isImage,imgData,lang); }
+  catch(e){
+    if(_csIsKeyError(e.message)) _csDeadProviders.anthropic=e.message;
+    throw e;
   }
   // Records which language the prose is written in, so _csP knows when there is
   // nothing to translate and the sheet can be reopened years later without
