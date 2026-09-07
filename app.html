@@ -600,7 +600,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.20.0';
+const APP_VER   = '1.21.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7918,7 +7918,33 @@ function _csNormalize(spec){
 // The sum is computed HERE from its parts rather than taken from the model's own
 // cut_length_mm. If the two disagree, the parts win: an operator can check
 // 150 + 25 + 4 + 5, and cannot check a single number that arrived out of nowhere.
-function _csCutLength(seg){
+// Radion's convention, confirmed by Dima: the length dimensioned on a drawing runs
+// to where the JACKET ends, not to the connector face. So every end costs the
+// jacket strip plus a fixed handling margin, and a 180 mm run is cut at
+//   180 + (8 + 1.5) + (8 + 1.5) = 199 mm.
+//
+// The strip term is READ FROM THE STRIP DIMENSIONS, never from "allowances". That
+// is what makes the double count structurally impossible rather than merely
+// forbidden: the analysis supplies the strip once, in the one place it belongs,
+// and the app does the adding.
+const _CS_END_MARGIN_MM = 1.5;
+const _CS_BASIS_JACKET  = 'to_jacket_end';
+
+function _csEndMargin(seg, spec){
+  const v=_csNum(seg?.end_margin_mm);
+  if(v!=null) return v;
+  const g=_csNum(spec?.end_margin_mm);
+  return g!=null ? g : _CS_END_MARGIN_MM;
+}
+// The jacket strip at one end: the outermost cut, which by the layer rule is the
+// first non-derived entry. Derived values (C = A − B and friends) are consequences
+// of the others and would double-count if included.
+function _csJacketStrip(end){
+  const first=(end?.strip||[]).find(x=>!x.derived && _csNum(x.value_mm)!=null);
+  return first ? {mm:_csNum(first.value_mm), code:first.code||'', confirmed:first.confirmed===true} : null;
+}
+
+function _csCutLength(seg, spec){
   const finished=_csNum(seg?.finished_length_mm);
   const allowances=(Array.isArray(seg?.allowances)?seg.allowances:[])
     .map(a=>({ref:String(a?.ref||''), mm:_csNum(a?.mm)||0,
@@ -7926,14 +7952,38 @@ function _csCutLength(seg){
     .filter(a=>a.mm!==0 || a.reason);
   const trim=_csNum(seg?.trim_allowance_mm)||0;
 
+  // Under the jacket-end convention the per-end cost is derived here rather than
+  // taken from the analysis. Specs saved under the old basis keep their stored
+  // allowances so their numbers do not move under anyone's feet.
+  const basis=String(seg?.length_basis||'');
+  if(basis===_CS_BASIS_JACKET && finished!=null){
+    const margin=_csEndMargin(seg, spec);
+    const ends=[];
+    (seg.ends||[]).forEach(e=>{
+      const js=_csJacketStrip(e);
+      if(!js) return;
+      ends.push({ref:e.ref||'', mm:_csR(js.mm+margin), strip:js.mm, margin,
+                 code:js.code, confirmed:js.confirmed});
+    });
+    // Anything the analysis still put in "allowances" is kept and shown, so a
+    // genuine extra (a service loop) survives — and a strip smuggled in there is
+    // visible in the sum instead of hiding inside one total.
+    const extra=allowances;
+    const added=_csR(ends.reduce((s,e)=>s+e.mm,0) + extra.reduce((s,a)=>s+a.mm,0) + trim);
+    return {finished, allowances:extra, endCosts:ends, trim, added, basis,
+            total:_csR(finished+added), hasBreakdown:true,
+            allConfirmed: ends.every(e=>e.confirmed) && extra.every(a=>a.confirmed)
+                          && (!trim || seg.trim_allowance_confirmed===true)};
+  }
+
   if(finished==null){
-    return {finished:null, allowances:[], trim:0,
+    return {finished:null, allowances:[], endCosts:[], trim:0, basis,
             total:_csNum(seg?.cut_length_mm), hasBreakdown:false,
             allConfirmed:false, added:0};
   }
   const added=_csR(allowances.reduce((s,a)=>s+a.mm,0)+trim);
   return {
-    finished, allowances, trim, added,
+    finished, allowances, endCosts:[], trim, added, basis,
     total:_csR(finished+added),
     hasBreakdown:true,
     allConfirmed: allowances.every(a=>a.confirmed) && (!trim || seg.trim_allowance_confirmed===true),
@@ -7941,16 +7991,19 @@ function _csCutLength(seg){
 }
 function _csSyncCutLength(spec){
   _csSegments(spec).forEach(seg=>{
-    const r=_csCutLength(seg);
+    const r=_csCutLength(seg, spec);
     if(r.hasBreakdown) seg.cut_length_mm=r.total;
   });
 }
 // Human-readable arithmetic, e.g. "150 + 25 (P1) + 4 (WSRV1) + 5 (trim) = 184 mm".
 // Deliberately spelled out: a worker who can see the sum can spot a wrong term.
-function _csCutFormula(seg){
-  const r=_csCutLength(seg);
+function _csCutFormula(seg, spec){
+  const r=_csCutLength(seg, spec);
   if(!r.hasBreakdown) return '';
   const parts=[`${r.finished}`]
+    // Each end is spelled out as strip + margin, so the operator can see both
+    // numbers and check them against the strip table rather than trusting a total.
+    .concat((r.endCosts||[]).map(e=>`+ ${e.strip} + ${e.margin} (${e.ref||e.code})`))
     .concat(r.allowances.map(a=>`${a.mm<0?'−':'+'} ${Math.abs(a.mm)}${a.ref?` (${a.ref})`:''}`))
     .concat(r.trim ? [`+ ${r.trim} (${_csT('trim')})`] : []);
   return `${parts.join(' ')} = ${r.total} mm`;
@@ -8043,7 +8096,7 @@ function _csCableTotals(spec){
   const by={};
   _csSegments(spec).forEach(seg=>{
     const k=seg.cable_part_number||seg.cable_description||'—';
-    const mm=_csCutLength(seg).total;
+    const mm=_csCutLength(seg, spec).total;
     if(mm==null) return;
     (by[k]=by[k]||{pn:k, mm:0, runs:0}); by[k].mm=_csR(by[k].mm+mm); by[k].runs++;
   });
@@ -8083,7 +8136,7 @@ function _csOverall(spec){
   let longest=null, span=null;
   _csRoutes(spec).forEach(r=>{ if(r.mm!=null && (longest==null||r.mm>longest)){ longest=r.mm; span=r.from+' → '+r.to; } });
   if(longest==null) _csSegments(spec).forEach(seg=>{
-    const f=_csCutLength(seg).finished ?? _csNum(seg.finished_length_mm);
+    const f=_csCutLength(seg, spec).finished ?? _csNum(seg.finished_length_mm);
     if(f!=null && (longest==null||f>longest)){ longest=f; span=_csSegLabel(seg); } });
   const value = stated ?? longest;
   const mismatch = (stated!=null && longest!=null && Math.abs(stated-longest)>0.5)
@@ -8095,7 +8148,7 @@ function _csOverall(spec){
   // allowances included, so both are reported and the cut one is the headline.
   let cut=null, cutSpan=null, added=0;
   _csSegments(spec).forEach(seg=>{
-    const cl=_csCutLength(seg);
+    const cl=_csCutLength(seg, spec);
     if(cl.total!=null && (cut==null || cl.total>cut)){
       cut=cl.total; cutSpan=_csSegLabel(seg); added=cl.added||0;
     }
@@ -8146,6 +8199,8 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "jacket strip":"חשיפת מעטה",
+    "handling margin":"תוספת קצה",
     "A strip dimension looks like it was also counted as an allowance":"נראה שמידת חשיפה נספרה גם כתוספת אורך",
     "the allowance":"התוספת",
     "is the same as strip dimension":"זהה למידת החשיפה",
@@ -8300,6 +8355,8 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    "jacket strip":"зачистка оболочки",
+    "handling margin":"припуск на конец",
     "A strip dimension looks like it was also counted as an allowance":"Похоже, размер зачистки посчитан и как припуск",
     "the allowance":"припуск",
     "is the same as strip dimension":"совпадает с размером зачистки",
@@ -8923,11 +8980,21 @@ RULES — these matter more than completeness:
 13. CUT LENGTH vs FINISHED LENGTH — per segment, and it is what the operator actually cuts.
    "finished_length_mm" is the length AS DIMENSIONED ON THE DRAWING for that run, and "length_basis"
    says what that dimension measures:
+     - "to_jacket_end"    the dimension runs to where the JACKET ends at each end. THIS IS THE DEFAULT
+                          for this shop — use it unless the drawing plainly says otherwise.
      - "cable_only"       the dimension is the bare cable, connectors excluded
      - "over_connectors"  the dimension spans the whole run, connector face to connector face
      - "unclear"          the drawing does not say
    "cut_length_mm" is ALWAYS finished_length_mm + sum of allowances + trim_allowance_mm, and must equal
    that sum exactly — do not report a cut length that contradicts its own parts.
+   UNDER "to_jacket_end" THE APP DOES THE ADDING, NOT YOU. Each end costs the jacket strip plus a fixed
+   1.5 mm handling margin, and the app reads the strip straight out of "strip" on that end. So a 180 mm
+   run with an 8 mm jacket strip at both ends is cut at 180 + (8 + 1.5) + (8 + 1.5) = 199 mm, and you
+   supply only the 180 and the 8s. Do NOT also put those 8s in "allowances" — you would be handing over
+   the same number twice and the app would add it twice.
+   Leave "allowances" for something genuinely extra that the drawing calls for and that nothing else
+   accounts for, such as a service loop. Most runs have none, and an empty list is the right answer.
+
    AN ALLOWANCE IS CABLE YOU WOULD NOT OTHERWISE HAVE. Ask one question of every entry: does this make
    the piece coming off the reel LONGER? Only two things do — cable that disappears inside the connector
    body (insertion depth), and slack the drawing calls for. Squaring and re-stripping is material cut
@@ -9081,7 +9148,7 @@ async function aiAnalyzeCutStrip(text, isImage, imgData, lang){
 // rendered in full — so every run is accounted for whether it got a pin or not.
 function _csCallouts(spec){
   return _csSegments(spec).map((seg,i)=>
-    ({n:i+1, seg, cut:_csCutLength(seg), label:_csSegLabel(seg)}));
+    ({n:i+1, seg, cut:_csCutLength(seg, spec), label:_csSegLabel(seg)}));
 }
 
 function _csSourceFigure(spec){
@@ -9109,7 +9176,7 @@ function _csSourceFigure(spec){
         <td class="cs-ltr">${esc(c.seg.id||'')} · ${esc(c.label)}</td>
         <td class="cs-ctr cs-ltr">${esc(_csMM(c.cut.finished))}</td>
         <td class="cs-ctr cs-ltr"><b style="color:#7C2D12">${esc(_csMM(c.cut.total))}</b></td>
-        <td class="cs-ltr" style="font:12px/1.4 monospace">${esc(_csCutFormula(c.seg))}</td></tr>`).join('')}
+        <td class="cs-ltr" style="font:12px/1.4 monospace">${esc(_csCutFormula(c.seg, spec))}</td></tr>`).join('')}
       </tbody></table>
     <figcaption style="font-size:11.5px;color:#64748B;margin-top:6px"${rtl}>${
       esc(T('The drawing exactly as supplied — nothing is drawn over it. The cut lengths it does not carry are in the table above.'))}</figcaption>
@@ -9189,7 +9256,7 @@ function _csHarnessSVG(spec){
   const attached=segs.filter(sg=>String(sg.from)===hub||String(sg.to)===hub);
   const rest    =segs.filter(sg=>!attached.includes(sg));
   const row=sg=>{ const far=String(sg.from)===hub?sg.to:sg.from;
-                  return {seg:sg, far, len:_csCutLength(sg).total, fin:_csNum(sg.finished_length_mm)}; };
+                  return {seg:sg, far, len:_csCutLength(sg, spec).total, fin:_csNum(sg.finished_length_mm)}; };
   let rows=attached.map(row);
   // Stack the branches in the order the DRAWING lists them, not by length. The
   // connector list is read off the assembly view top to bottom, so following it
@@ -9204,7 +9271,7 @@ function _csHarnessSVG(spec){
   const trunk = (hubIsBreakout && rows.length>1)
     ? rows.splice(rows.reduce((bi,r,i,arr)=>(_csNum(r.len)||0)>(_csNum(arr[bi].len)||0)?i:bi,0),1)[0]
     : null;
-  const branches=rows.concat(rest.map(sg=>({seg:sg, far:sg.to, len:_csCutLength(sg).total, fin:_csNum(sg.finished_length_mm), _loose:true})));
+  const branches=rows.concat(rest.map(sg=>({seg:sg, far:sg.to, len:_csCutLength(sg, spec).total, fin:_csNum(sg.finished_length_mm), _loose:true})));
 
   const bundled = !hubIsBreakout && branches.length>1;
   const bundleMarks = bundled
@@ -9216,7 +9283,7 @@ function _csHarnessSVG(spec){
     marksBySeg[k]=marksBySeg[k].filter(m=>!bundleMarks.includes(m));
   });
 
-  const maxLen=Math.max(...segs.map(sg=>_csNum(_csCutLength(sg).total)||0), 1);
+  const maxLen=Math.max(...segs.map(sg=>_csNum(_csCutLength(sg, spec).total)||0), 1);
   const TOP=76, HUBX=560, LEFT=150;
   // A run carrying five label dimensions needs more vertical room than one
   // carrying none. A fixed row height was letting the lower annotations of one
@@ -9224,7 +9291,7 @@ function _csHarnessSVG(spec){
   // ended up looking like it belonged to the 180 mm branch below it.
   const rowH=r=>{
     const marks=(marksBySeg[r.seg.id]||[]).length;
-    const cut=_csCutLength(r.seg);
+    const cut=_csCutLength(r.seg, spec);
     // Room for: the length dimension (y+46), the annotation stack starting at
     // y+70, one line per label, and clearance for the NEXT run's own caption,
     // which is drawn 16px above its cable. Too small and the last note lands on
@@ -9341,7 +9408,7 @@ function _csHarnessSVG(spec){
 // Everything drawn along one run: its id and cable, the sleeves and markers
 // that sit on it, the dimensioned length, and the cut length when they differ.
 function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, showFormula, marks){
-  const seg=r.seg, cut=_csCutLength(seg);
+  const seg=r.seg, cut=_csCutLength(seg, spec);
   const len=_csNum(r.len)||0;
   const xa=Math.min(xFarEnd,xHubEnd), xb=Math.max(xFarEnd,xHubEnd);
   const scale=len>0 ? (xb-xa)/len : 0;
@@ -9383,7 +9450,7 @@ function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, showForm
     // it for. On a breakout harness four formulas would bury the drawing, and
     // each run's cut-length table carries its own arithmetic anyway.
     if(showFormula){
-      g+=`<text x="${((xa+xb)/2).toFixed(1)}" y="${dimY}" text-anchor="middle" font-size="11.5" font-family="monospace" fill="#7C2D12">${_csSvgTxt(_csCutFormula(seg))}</text>`;
+      g+=`<text x="${((xa+xb)/2).toFixed(1)}" y="${dimY}" text-anchor="middle" font-size="11.5" font-family="monospace" fill="#7C2D12">${_csSvgTxt(_csCutFormula(seg, spec))}</text>`;
       dimY+=22;
     }
   }
@@ -9972,7 +10039,7 @@ function renderCutStripSheet(){
         <th style="width:130px">${esc(T('Cut length'))}</th><th>${esc(T('How it adds up'))}</th></tr></thead>
         <tbody>${calls.map(c=>`<tr><td class="cs-ltr">${esc(c.seg.id||'')} · ${esc(c.label)}</td>
           <td class="cs-ctr cs-ltr"><b style="font-size:15px;color:#7C2D12">${esc(_csMM(c.cut.total))}</b></td>
-          <td class="cs-ltr" style="font:12px/1.4 monospace">${esc(_csCutFormula(c.seg))}</td></tr>`).join('')}
+          <td class="cs-ltr" style="font:12px/1.4 monospace">${esc(_csCutFormula(c.seg, spec))}</td></tr>`).join('')}
         </tbody></table>
       ${ov.cut!=null&&ov.added ? `<p style="font-size:12.5px;color:#7C2D12"><b>${
         esc(T('Longest piece to cut'))}: <span class="cs-ltr">${esc(_csMM(ov.cut))}</span></b>
@@ -10138,7 +10205,7 @@ function renderCutStripSheet(){
     </div>
 
     ${_csSegments(spec).map((seg,si)=>{
-      const cut=_csCutLength(seg);
+      const cut=_csCutLength(seg, spec);
       const ends=_csSegEnds(seg, spec);
       const BASIS={cable_only:'Bare cable, connectors excluded',
                    over_connectors:'Whole assembly, connector face to connector face',
@@ -10174,7 +10241,11 @@ function renderCutStripSheet(){
         <tr class="cs-cut-row"><td><b>${esc(T('CUT THIS LENGTH'))}</b></td>
           <td class="cs-ctr"><b class="cs-ltr" style="font-size:19px">${esc(_csMM(cut.total))}</b>
             ${_csNum(seg.cut_length_tolerance_mm)!=null?`<span class="cs-ltr" style="font-size:12px"> ±${_csNum(seg.cut_length_tolerance_mm)}</span>`:''}</td>
-          <td class="cs-ltr" style="font-size:13px">${esc(_csCutFormula(seg))}</td></tr>
+          <td class="cs-ltr" style="font-size:13px">${esc(_csCutFormula(seg, spec))}</td></tr>
+        ${(cut.endCosts||[]).map(e=>`<tr><td>${esc(T('End'))} <b class="cs-ltr">${esc(e.ref)}</b>
+          — ${esc(T('jacket strip'))} <span class="cs-ltr">${esc(e.code)}</span> + ${esc(T('handling margin'))}</td>
+          <td class="cs-ctr cs-ltr">${esc(_csMM(e.mm))}</td>
+          <td class="cs-ltr" style="font-size:12.5px">${e.strip} + ${e.margin}</td></tr>`).join('')}
       </tbody></table>`}
 
       ${(seg.layers||[]).length ? `
