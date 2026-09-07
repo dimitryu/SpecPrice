@@ -624,7 +624,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.23.0';
+const APP_VER   = '1.24.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7979,7 +7979,8 @@ function _csCutLength(seg, spec){
   // Under the jacket-end convention the per-end cost is derived here rather than
   // taken from the analysis. Specs saved under the old basis keep their stored
   // allowances so their numbers do not move under anyone's feet.
-  const basis=String(seg?.length_basis||'');
+  const declared=String(seg?.length_basis||'');
+  const basis = (declared==='' || declared==='unclear') ? _CS_BASIS_JACKET : declared;
   if(basis===_CS_BASIS_JACKET && finished!=null){
     const margin=_csEndMargin(seg, spec);
     const ends=[];
@@ -7989,25 +7990,30 @@ function _csCutLength(seg, spec){
       ends.push({ref:e.ref||'', mm:_csR(js.mm+margin), strip:js.mm, margin,
                  code:js.code, confirmed:js.confirmed});
     });
-    // Anything the analysis still put in "allowances" is kept and shown, so a
-    // genuine extra (a service loop) survives — and a strip smuggled in there is
-    // visible in the sum instead of hiding inside one total.
-    const extra=allowances;
+    // An end whose cost this convention already derives must not ALSO carry an
+    // allowance: the analysis's 4 mm insertion depth and the 1.5 mm margin are two
+    // accounts of the same millimetres, and adding both is the double count in a
+    // new costume. The per-end ones are superseded and reported; anything left —
+    // a service loop, an allowance at no particular end — is genuinely extra and
+    // still counts.
+    const costed=new Set(ends.map(e=>String(e.ref||'').toUpperCase()).filter(Boolean));
+    const extra=allowances.filter(a=>!costed.has(String(a.ref||'').toUpperCase()));
+    const superseded=allowances.filter(a=>costed.has(String(a.ref||'').toUpperCase()));
     const added=_csR(ends.reduce((s,e)=>s+e.mm,0) + extra.reduce((s,a)=>s+a.mm,0) + trim);
-    return {finished, allowances:extra, endCosts:ends, trim, added, basis,
+    return {finished, allowances:extra, superseded, endCosts:ends, trim, added, basis,
             total:_csR(finished+added), hasBreakdown:true,
             allConfirmed: ends.every(e=>e.confirmed) && extra.every(a=>a.confirmed)
                           && (!trim || seg.trim_allowance_confirmed===true)};
   }
 
   if(finished==null){
-    return {finished:null, allowances:[], endCosts:[], trim:0, basis,
+    return {finished:null, allowances:[], superseded:[], endCosts:[], trim:0, basis,
             total:_csNum(seg?.cut_length_mm), hasBreakdown:false,
             allConfirmed:false, added:0};
   }
   const added=_csR(allowances.reduce((s,a)=>s+a.mm,0)+trim);
   return {
-    finished, allowances, endCosts:[], trim, added, basis,
+    finished, allowances, superseded:[], endCosts:[], trim, added, basis,
     total:_csR(finished+added),
     hasBreakdown:true,
     allConfirmed: allowances.every(a=>a.confirmed) && (!trim || seg.trim_allowance_confirmed===true),
@@ -8240,6 +8246,7 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "superseded by the jacket-strip rule":"מבוטל — מוחלף בכלל חשיפת המעטה",
     "each conductor":"כל מוליך",
     "The letter in front of each line is the code used on the strip figure above.":"האות שלפני כל שורה היא הקוד שמופיע בסרטוט החשיפה שמעל.",
     "The drawing as supplied, with the title block masked. Nothing is drawn over the harness; the cut lengths are in the table above.":"הסרטוט כפי שנמסר, כשאזור הכותרת מוסתר. לא צויר דבר על הצמה; אורכי החיתוך נמצאים בטבלה שמעל.",
@@ -8402,6 +8409,7 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    "superseded by the jacket-strip rule":"заменён правилом зачистки оболочки",
     "each conductor":"каждый проводник",
     "The letter in front of each line is the code used on the strip figure above.":"Буква перед строкой — код, показанный на рисунке зачистки выше.",
     "The drawing as supplied, with the title block masked. Nothing is drawn over the harness; the cut lengths are in the table above.":"Чертёж как получен, штамп закрыт. Поверх жгута ничего не нанесено; длины реза — в таблице выше.",
@@ -9097,7 +9105,8 @@ RULES — these matter more than completeness:
    "finished_length_mm" is the length AS DIMENSIONED ON THE DRAWING for that run, and "length_basis"
    says what that dimension measures:
      - "to_jacket_end"    the dimension runs to where the JACKET ends at each end. THIS IS THE DEFAULT
-                          for this shop — use it unless the drawing plainly says otherwise.
+                          for this shop — use it unless the drawing plainly says otherwise. Leaving the
+                          field out, or saying "unclear", is treated as this too.
      - "cable_only"       the dimension is the bare cable, connectors excluded
      - "over_connectors"  the dimension spans the whole run, connector face to connector face
      - "unclear"          the drawing does not say
@@ -9110,6 +9119,9 @@ RULES — these matter more than completeness:
    the same number twice and the app would add it twice.
    Leave "allowances" for something genuinely extra that the drawing calls for and that nothing else
    accounts for, such as a service loop. Most runs have none, and an empty list is the right answer.
+   A genuine extra belongs to the RUN, so leave its "ref" empty. An allowance naming an END is taken to
+   be another attempt at that end's cost, which the app has already worked out — it is struck through on
+   the sheet rather than added, because adding both is the same double count wearing a different name.
 
    AN ALLOWANCE IS CABLE YOU WOULD NOT OTHERWISE HAVE. Ask one question of every entry: does this make
    the piece coming off the reel LONGER? Only two things do — cable that disappears inside the connector
@@ -10164,17 +10176,17 @@ function renderCutStripSheet(){
         esc(T('is a finished length — it does not include the connector allowances'))})</span></p>` : ''}
 
       ${strips.length ? `<h3 class="cs-h3">2 · ${esc(T('Strip'))}</h3>
-      <table class="cs-tbl"><thead><tr><th style="width:180px">${esc(T('End'))}</th>
-        <th style="width:80px">${esc(T('Code'))}</th><th style="width:120px">${esc(T('Value'))}</th></tr></thead>
+      <table class="cs-tbl"><thead><tr><th style="width:47%">${esc(T('End'))}</th>
+        <th style="width:21%">${esc(T('Code'))}</th><th style="width:32%">${esc(T('Value'))}</th></tr></thead>
         <tbody>${strips.map(x=>`<tr><td class="cs-ltr">${esc(x.seg)} · ${esc(x.ref)}</td>
           <td class="cs-ctr cs-ltr"><b>${esc(x.code)}</b></td>
           <td class="cs-ctr cs-ltr"><b>${esc(_csMM(x.mm))}</b>${x.ok?'':` <span class="cs-tag cs-tbc">${esc(T('TBC'))}</span>`}</td></tr>`).join('')}
         </tbody></table>` : ''}
 
       ${labels.length ? `<h3 class="cs-h3">3 · ${esc(T('Label table'))}</h3>
-      <table class="cs-tbl"><thead><tr><th style="width:64px">${esc(T('Label'))}</th>
-        <th style="width:150px">${esc(T('Part number'))}</th>
-        <th style="width:30%">${esc(T('Text'))}</th><th>${esc(T('Where it goes'))}</th></tr></thead>
+      <table class="cs-tbl"><thead><tr><th style="width:9%">${esc(T('Label'))}</th>
+        <th style="width:21%">${esc(T('Part number'))}</th>
+        <th style="width:25%">${esc(T('Text'))}</th><th style="width:45%">${esc(T('Where it goes'))}</th></tr></thead>
         <tbody>${labels.map((m,i)=>{ const gi=(spec.markers||[]).indexOf(m); return `<tr>
           <td class="cs-ctr cs-ltr"><b>${esc(m.label)}</b></td>
           <td>${_csFRaw(`markers.${gi}.part_number`, m.part_number)}</td>
@@ -10196,9 +10208,9 @@ function renderCutStripSheet(){
 
     <h2 class="cs-h2"><span class="cs-n">01</span>${esc(T('Material list'))}</h2>
     <div class="cs-pad"><table class="cs-tbl">
-      <thead><tr><th style="width:38px">#</th><th style="width:170px">${esc(T('Part number'))}</th>
-        <th style="width:100px">${esc(T('Manufacturer'))}</th><th>${esc(T('Description'))}</th>
-        <th style="width:80px">${esc(T('Qty'))}</th><th style="width:64px">${esc(T('Ref'))}</th></tr></thead>
+      <thead><tr><th style="width:5%">#</th><th style="width:22%">${esc(T('Part number'))}</th>
+        <th style="width:13%">${esc(T('Manufacturer'))}</th><th style="width:41%">${esc(T('Description'))}</th>
+        <th style="width:11%">${esc(T('Qty'))}</th><th style="width:8%">${esc(T('Ref'))}</th></tr></thead>
       <tbody>${spec.materials.map(m=>`<tr>
         <td>${esc(m.item??'')}</td><td class="cs-ltr">${esc(m.part_number||'')}</td>
         <td class="cs-ltr">${esc(m.manufacturer||'')}</td><td>${_csP(m.description||'')}</td>
@@ -10208,11 +10220,11 @@ function renderCutStripSheet(){
     ${_csConnectors(spec).length ? `
     <h2 class="cs-h2"><span class="cs-n">02</span>${esc(T('Connectors'))}</h2>
     <div class="cs-pad"><table class="cs-tbl">
-      <thead><tr><th style="width:80px">${esc(T('Ref'))}</th><th style="width:100px">${esc(T('Kind'))}</th>
-        <th style="width:170px">${esc(T('Part number'))}</th>
-        <th style="width:100px">${esc(T('Manufacturer'))}</th><th style="width:70px">${esc(T('Positions'))}</th>
-        <th style="width:90px">${esc(T('Termination'))}</th><th style="width:160px">${esc(T('Contact P/N'))}</th>
-        <th>${esc(T('Description'))}</th></tr></thead>
+      <thead><tr><th style="width:7%">${esc(T('Ref'))}</th><th style="width:9%">${esc(T('Kind'))}</th>
+        <th style="width:16%">${esc(T('Part number'))}</th>
+        <th style="width:9%">${esc(T('Manufacturer'))}</th><th style="width:7%">${esc(T('Positions'))}</th>
+        <th style="width:8%">${esc(T('Termination'))}</th><th style="width:15%">${esc(T('Contact P/N'))}</th>
+        <th style="width:29%">${esc(T('Description'))}</th></tr></thead>
       <tbody>${_csConnectors(spec).map((c,i)=>`<tr>
         <td class="cs-ctr cs-ltr"><b>${esc(c.ref||'')}</b></td>
         <td class="cs-ctr" style="font-size:12px">${esc(T(c.kind==='open_wires'?'Open wires':(c.kind||'connector')))}</td>
@@ -10269,8 +10281,8 @@ function renderCutStripSheet(){
       </div>` : ''}
       ${(spec.route_dimensions||[]).length ? `
       <h3 class="cs-h3">${esc(T('Lengths as dimensioned on the drawing'))}</h3>
-      <table class="cs-tbl"><thead><tr><th style="width:200px">${esc(T('Span'))}</th>
-        <th style="width:130px">${esc(T('Value'))}</th><th>${esc(T('Note'))}</th></tr></thead>
+      <table class="cs-tbl"><thead><tr><th style="width:29%">${esc(T('Span'))}</th>
+        <th style="width:19%">${esc(T('Value'))}</th><th style="width:52%">${esc(T('Note'))}</th></tr></thead>
         <tbody>${spec.route_dimensions.map((d,i)=>`<tr>
           <td class="cs-ltr"><b>${esc(d.from||'')} → ${esc(d.to||'')}</b></td>
           <td class="cs-ctr">${_csFNum(`route_dimensions.${i}.mm`, d.mm, ' mm')}</td>
@@ -10293,8 +10305,8 @@ function renderCutStripSheet(){
       </div>` : ''}
       ${_csCableTotals(spec).length>1||(_csCableTotals(spec)[0]&&_csCableTotals(spec)[0].runs>1) ? `
       <h3 class="cs-h3">${esc(T('Cable to draw from stores'))}</h3>
-      <table class="cs-tbl"><thead><tr><th>${esc(T('Part number'))}</th>
-        <th style="width:90px">${esc(T('Runs'))}</th><th style="width:150px">${esc(T('Total length'))}</th></tr></thead>
+      <table class="cs-tbl"><thead><tr><th style="width:53%">${esc(T('Part number'))}</th>
+        <th style="width:18%">${esc(T('Runs'))}</th><th style="width:29%">${esc(T('Total length'))}</th></tr></thead>
         <tbody>${_csCableTotals(spec).map(t=>`<tr><td class="cs-ltr">${esc(t.pn)}</td>
           <td class="cs-ctr">${t.runs}</td><td class="cs-ctr cs-ltr"><b>${esc(_csMM(t.mm))}</b></td></tr>`).join('')}
         </tbody></table>` : ''}
@@ -10338,6 +10350,10 @@ function renderCutStripSheet(){
           <td class="cs-ctr"><b class="cs-ltr" style="font-size:19px">${esc(_csMM(cut.total))}</b>
             ${_csNum(seg.cut_length_tolerance_mm)!=null?`<span class="cs-ltr" style="font-size:12px"> ±${_csNum(seg.cut_length_tolerance_mm)}</span>`:''}</td>
           <td class="cs-ltr" style="font-size:13px">${esc(_csCutFormula(seg, spec))}</td></tr>
+        ${(cut.superseded||[]).map(a=>`<tr><td style="opacity:.65">${esc(T('Allowance'))}
+          <b class="cs-ltr">${esc(a.ref)}</b> — ${esc(T('superseded by the jacket-strip rule'))}</td>
+          <td class="cs-ctr cs-ltr" style="opacity:.65;text-decoration:line-through">${esc(_csMM(a.mm))}</td>
+          <td style="font-size:12.5px;opacity:.65">${esc(_csP(a.reason||''))}</td></tr>`).join('')}
         ${(cut.endCosts||[]).map(e=>`<tr><td>${esc(T('End'))} <b class="cs-ltr">${esc(e.ref)}</b>
           — ${esc(T('jacket strip'))} <span class="cs-ltr">${esc(e.code)}</span> + ${esc(T('handling margin'))}</td>
           <td class="cs-ctr cs-ltr">${esc(_csMM(e.mm))}</td>
@@ -10347,8 +10363,8 @@ function renderCutStripSheet(){
       ${(seg.layers||[]).length ? `
       <h3 class="cs-h3">${esc(T('Cable cross-section'))}</h3>
       <table class="cs-tbl">
-        <thead><tr><th style="width:200px">${esc(T('Layer'))}</th><th style="width:140px">${esc(T('Nominal Ø'))}</th>
-          <th style="width:120px">${esc(T('Material'))}</th><th>${esc(T('Note'))}</th></tr></thead>
+        <thead><tr><th style="width:24%">${esc(T('Layer'))}</th><th style="width:17%">${esc(T('Nominal Ø'))}</th>
+          <th style="width:15%">${esc(T('Material'))}</th><th style="width:44%">${esc(T('Note'))}</th></tr></thead>
         <tbody>${seg.layers.map((l,li)=>`<tr>
           <td>${_csFText(`segments.${si}.layers.${li}.name`, l.name)}</td>
           <td class="cs-ctr">${_csFNum(`segments.${si}.layers.${li}.od_mm`, l.od_mm, ' mm')}</td>
@@ -10389,11 +10405,11 @@ function renderCutStripSheet(){
       ${(seg.conductors||[]).length ? `
       <h3 class="cs-h3">${esc(T('Wiring table'))} — <span class="cs-ltr">${esc(_csSegLabel(seg))}</span></h3>
       <table class="cs-tbl">
-        <thead><tr><th style="width:44px">#</th>
-          <th style="width:90px" class="cs-ctr"><span class="cs-ltr">${esc(seg.from||'')}</span> ${esc(T('pin'))}</th>
-          <th style="width:90px" class="cs-ctr"><span class="cs-ltr">${esc(seg.to||'')}</span> ${esc(T('pin'))}</th>
-          <th>${esc(T('Signal'))}</th><th style="width:90px">${esc(T('Colour'))}</th>
-          <th style="width:70px">${esc(T('AWG'))}</th><th>${esc(T('Note'))}</th></tr></thead>
+        <thead><tr><th style="width:6%">#</th>
+          <th style="width:13%" class="cs-ctr"><span class="cs-ltr">${esc(seg.from||'')}</span> ${esc(T('pin'))}</th>
+          <th style="width:13%" class="cs-ctr"><span class="cs-ltr">${esc(seg.to||'')}</span> ${esc(T('pin'))}</th>
+          <th style="width:22%">${esc(T('Signal'))}</th><th style="width:13%">${esc(T('Colour'))}</th>
+          <th style="width:10%">${esc(T('AWG'))}</th><th style="width:23%">${esc(T('Note'))}</th></tr></thead>
         <tbody>${seg.conductors.map((w,wi)=>`<tr>
           <td class="cs-ctr">${wi+1}</td>
           <td class="cs-ctr">${_csFRaw(`segments.${si}.conductors.${wi}.from_pin`, w.from_pin)}</td>
@@ -10426,8 +10442,8 @@ function renderCutStripSheet(){
     ${(spec.tools||[]).length ? `
     <h2 class="cs-h2"><span class="cs-n">${String(6+_csSegments(spec).length).padStart(2,'0')}</span>${esc(T('Tools & consumables'))}</h2>
     <div class="cs-pad"><table class="cs-tbl">
-      <thead><tr><th style="width:240px">${esc(T('Tool'))}</th><th style="width:170px">${esc(T('Setting'))}</th>
-        <th>${esc(T('Note'))}</th></tr></thead>
+      <thead><tr><th style="width:29%">${esc(T('Tool'))}</th><th style="width:20%">${esc(T('Setting'))}</th>
+        <th style="width:51%">${esc(T('Note'))}</th></tr></thead>
       <tbody>${spec.tools.map((t,i)=>`<tr><td>${_csDelBtn('del-tool',i)}${_csFText(`tools.${i}.tool`, t.tool)}</td>
         <td class="cs-ctr">${_csEditing?_csFRaw(`tools.${i}.setting`, t.setting):esc(t.setting||'—')}</td>
         <td>${_csFText(`tools.${i}.note`, t.note, true)}</td></tr>`).join('')}
