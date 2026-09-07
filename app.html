@@ -181,7 +181,19 @@
     .cs-ltr { direction:ltr; unicode-bidi:isolate; display:inline-block;
               font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; }
     .cs-ctr { text-align:center; }
-    .cs-tbl { width:100%; border-collapse:collapse; font-size:13px; }
+    .cs-tbl { width:100%; border-collapse:collapse; font-size:13px;
+              table-layout:fixed; }
+    /* Long part numbers and formulas wrap inside their own cell instead of
+       widening it past the header it belongs under. */
+    .cs-tbl td, .cs-tbl th { overflow-wrap:anywhere; word-break:break-word; }
+    /* A dimension must never break across two lines — "190" above "mm" reads as
+       two numbers. */
+    .cs-tbl td.cs-nowrap { white-space:nowrap; }
+    /* The strip codes now live inline with their description instead of in a
+       column of their own, which was pushing every row onto two lines. */
+    .cs-code { display:inline-block; min-width:18px; padding:1px 5px; margin-inline-end:5px;
+               background:#1E293B; color:#fff; border-radius:3px; font:700 11px/1.5 monospace;
+               text-align:center; direction:ltr; }
     .cs-tbl th { background:#F1F2F3; padding:8px 10px; font-weight:700; font-size:12px;
                  color:#334155; border:1px solid #E4E5E7; }
     .cs-sheet[dir="ltr"] .cs-tbl th { text-align:left; }
@@ -612,7 +624,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.22.0';
+const APP_VER   = '1.23.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -8228,6 +8240,8 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "each conductor":"כל מוליך",
+    "The letter in front of each line is the code used on the strip figure above.":"האות שלפני כל שורה היא הקוד שמופיע בסרטוט החשיפה שמעל.",
     "The drawing as supplied, with the title block masked. Nothing is drawn over the harness; the cut lengths are in the table above.":"הסרטוט כפי שנמסר, כשאזור הכותרת מוסתר. לא צויר דבר על הצמה; אורכי החיתוך נמצאים בטבלה שמעל.",
     "A run names a connector as its cable":"ריצה מציינת מחבר ככבל שלה",
     "is the part number of connector":"הוא המק\"ט של מחבר",
@@ -8388,6 +8402,8 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    "each conductor":"каждый проводник",
+    "The letter in front of each line is the code used on the strip figure above.":"Буква перед строкой — код, показанный на рисунке зачистки выше.",
     "The drawing as supplied, with the title block masked. Nothing is drawn over the harness; the cut lengths are in the table above.":"Чертёж как получен, штамп закрыт. Поверх жгута ничего не нанесено; длины реза — в таблице выше.",
     "A run names a connector as its cable":"Линия указывает разъём как свой кабель",
     "is the part number of connector":"— это парт-номер разъёма",
@@ -9269,14 +9285,14 @@ function _csSourceFigure(spec){
       <p>${esc(T('Stripping removes jacket, not length — a bared conductor is still where it was. If this is the strip counted twice, the cut length is too long by that much at each end. Check before cutting.'))}</p>
     </div>` : ''}
     <table class="cs-tbl" style="margin-top:10px"><thead><tr>
-      <th style="width:44px">#</th><th style="width:180px">${esc(T('Cable run'))}</th>
-      <th style="width:120px">${esc(T('Finished'))}</th><th style="width:130px">${esc(T('Cut length'))}</th>
-      <th>${esc(T('How it adds up'))}</th></tr></thead>
+      <th style="width:6%">#</th><th style="width:22%">${esc(T('Cable run'))}</th>
+      <th style="width:14%">${esc(T('Finished'))}</th><th style="width:15%">${esc(T('Cut length'))}</th>
+      <th style="width:43%">${esc(T('How it adds up'))}</th></tr></thead>
       <tbody>${calls.map(c=>`<tr>
         <td class="cs-ctr cs-ltr"><b>${c.n}</b></td>
         <td class="cs-ltr">${esc(c.seg.id||'')} · ${esc(c.label)}</td>
-        <td class="cs-ctr cs-ltr">${esc(_csMM(c.cut.finished))}</td>
-        <td class="cs-ctr cs-ltr"><b style="color:#7C2D12">${esc(_csMM(c.cut.total))}</b></td>
+        <td class="cs-ctr cs-ltr cs-nowrap">${esc(_csMM(c.cut.finished))}</td>
+        <td class="cs-ctr cs-ltr cs-nowrap"><b style="color:#7C2D12">${esc(_csMM(c.cut.total))}</b></td>
         <td class="cs-ltr" style="font:12px/1.4 monospace">${esc(_csCutFormula(c.seg, spec))}</td></tr>`).join('')}
       </tbody></table>
     <figcaption style="font-size:11.5px;color:#64748B;margin-top:6px"${rtl}>${
@@ -10136,10 +10152,10 @@ function renderCutStripSheet(){
       </div>
 
       <h3 class="cs-h3">1 · ${esc(T('Cut'))}</h3>
-      <table class="cs-tbl"><thead><tr><th style="width:180px">${esc(T('Cable run'))}</th>
-        <th style="width:130px">${esc(T('Cut length'))}</th><th>${esc(T('How it adds up'))}</th></tr></thead>
+      <table class="cs-tbl"><thead><tr><th style="width:26%">${esc(T('Cable run'))}</th>
+        <th style="width:18%">${esc(T('Cut length'))}</th><th style="width:56%">${esc(T('How it adds up'))}</th></tr></thead>
         <tbody>${calls.map(c=>`<tr><td class="cs-ltr">${esc(c.seg.id||'')} · ${esc(c.label)}</td>
-          <td class="cs-ctr cs-ltr"><b style="font-size:15px;color:#7C2D12">${esc(_csMM(c.cut.total))}</b></td>
+          <td class="cs-ctr cs-ltr cs-nowrap"><b style="font-size:15px;color:#7C2D12">${esc(_csMM(c.cut.total))}</b></td>
           <td class="cs-ltr" style="font:12px/1.4 monospace">${esc(_csCutFormula(c.seg, spec))}</td></tr>`).join('')}
         </tbody></table>
       ${ov.cut!=null&&ov.added ? `<p style="font-size:12.5px;color:#7C2D12"><b>${
@@ -10343,25 +10359,26 @@ function renderCutStripSheet(){
       <h3 class="cs-h3">${esc(T('Strip detail'))}</h3>
       ${ends.map(e=>{ const svg=_csStripSVG(seg,e); return svg?`<figure class="cs-fig">${svg}</figure>`:''; }).join('')}
       <table class="cs-tbl">
-        <thead><tr><th style="width:80px">${esc(T('End'))}</th><th style="width:56px">#</th>
-          <th>${esc(T('Description'))}</th><th style="width:190px">${esc(T('Value'))}</th>
-          <th style="width:250px">${esc(T('Basis'))}</th></tr></thead>
+        <thead><tr><th style="width:15%">${esc(T('End'))}</th>
+          <th style="width:38%">${esc(T('Description'))}</th><th style="width:20%">${esc(T('Value'))}</th>
+          <th style="width:27%">${esc(T('Basis'))}</th></tr></thead>
         <tbody>${(seg.ends||[]).flatMap((e,ei)=>(e.strip||[]).map((st,i)=>`<tr>
-          <td class="cs-ctr cs-ltr"><b>${i===0?esc(e.ref||''):''}</b></td>
-          <td class="cs-ctr cs-ltr"><b>${esc(st.code||'')}</b></td>
-          <td>${_csFText(`segments.${si}.ends.${ei}.strip.${i}.label`, st.label)}${st.derived?' <i style="opacity:.6">(derived)</i>':''}</td>
+          <td class="cs-ctr cs-ltr cs-nowrap"><b>${i===0?esc(e.ref||''):''}</b></td>
+          <td>${st.code?`<span class="cs-code">${esc(st.code)}</span> `:''}${
+            _csFText(`segments.${si}.ends.${ei}.strip.${i}.label`, st.label)}${st.derived?' <i style="opacity:.6">(derived)</i>':''}</td>
           <td class="cs-ctr">${(_csEditing && !st.derived)
             ? `${_csFNum(`segments.${si}.ends.${ei}.strip.${i}.value_mm`, st.value_mm, ' mm')} ${_csFChk(`segments.${si}.ends.${ei}.strip.${i}.confirmed`, st.confirmed===true, T('Confirmed'))}`
             : _csDim(st.value_mm, st.confirmed)}</td>
           <td style="font-size:12px">${_csFText(`segments.${si}.ends.${ei}.strip.${i}.basis`, st.basis, true)}</td></tr>`)).join('')}
         ${(_csNum(seg.conductor_strip_mm)!=null || _csEditing) ? `<tr>
-          <td class="cs-ctr">${esc(T('each'))}</td><td class="cs-ctr cs-ltr"><b>W</b></td>
-          <td>${esc(T('Insulation removed from each individual conductor for its contact'))}</td>
+          <td class="cs-ctr cs-nowrap">${esc(T('each conductor'))}</td>
+          <td><span class="cs-code">W</span> ${esc(T('Insulation removed from each individual conductor for its contact'))}</td>
           <td class="cs-ctr">${_csEditing
             ? `${_csFNum(`segments.${si}.conductor_strip_mm`, seg.conductor_strip_mm, ' mm')} ${_csFChk(`segments.${si}.conductor_strip_confirmed`, seg.conductor_strip_confirmed===true, T('Confirmed'))}`
             : _csDim(seg.conductor_strip_mm, seg.conductor_strip_confirmed)}</td>
           <td style="font-size:12px">${esc(T('From the contact datasheet — a much smaller number than the jacket strip.'))}</td></tr>` : ''}
         </tbody></table>
+      <p class="cs-note"${_csRTL()?' dir="rtl"':''}>${esc(T('The letter in front of each line is the code used on the strip figure above.'))}</p>
       ${ends.filter(e=>e._breakout).map(e=>`<p class="cs-note">
         <b class="cs-ltr">${esc(e.ref)}</b> — ${esc(T('junction — nothing is terminated here'))}</p>`).join('')}
       ${ends.filter(e=>e._missing).map(e=>`<p class="cs-note" style="color:#B91C1C">
