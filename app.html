@@ -600,7 +600,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.16.0';
+const APP_VER   = '1.17.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -8627,6 +8627,11 @@ RULES — these matter more than completeness:
    fault nobody catches until the unit is running.
    Only invent a name (DB9, RJ45, OPEN) when the drawing genuinely prints none.
 
+   LIST THE CONNECTORS IN THE ORDER THEY APPEAR ON THE DRAWING, top to bottom on the assembly view
+   (so P2, P3, P4 if that is how they are stacked). The generated figure stacks its branches in this
+   order, so listing them in a different order silently redraws the harness in a shape the operator
+   cannot match against the drawing in front of them.
+
 2. BUNDLING IS NOT A BREAKOUT. Get this right before you assign any length.
    Wires that simply run side by side — laced, taped, tied or sleeved together — are still SEPARATE runs.
    Each one goes the whole way from its connector to its connector, and each carries its OWN full length.
@@ -8872,9 +8877,26 @@ function _csConnBoxPlain(x, y, ref, pn, side){
   return g + (pn ? `<text x="${bx+bw/2}" y="${y+bh/2+15}" text-anchor="middle" font-size="10" font-family="monospace" fill="#64748B">${_csSvgTxt(pn)}</text>` : '');
 }
 
+// Each marker is placed on exactly one run: the one it names, else the first run
+// that actually touches the end it is measured from, else the first run. Returns
+// a map keyed by segment id so the renderer never has to guess twice.
+function _csMarkersBySeg(spec){
+  const segs=_csSegments(spec), by={};
+  segs.forEach(sg=>{ by[sg.id]=[]; });
+  const eq=(a,b)=>String(a||'').toUpperCase()===String(b||'').toUpperCase();
+  (spec.markers||[]).forEach(mk=>{
+    let sg = mk.segment && segs.find(x=>x.id===mk.segment);
+    if(!sg) sg = segs.find(x=>eq(x.from,mk.from_end)||eq(x.to,mk.from_end));
+    if(!sg) sg = segs[0];
+    if(sg) (by[sg.id]=by[sg.id]||[]).push(mk);
+  });
+  return by;
+}
+
 function _csHarnessSVG(spec){
   const T=_csT, rtlAttr=_csRTL()?' direction="rtl"':'';
   const segs=_csSegments(spec), conns=_csConnectors(spec);
+  const marksBySeg=_csMarkersBySeg(spec);
   const pnOf=ref=>(conns.find(c=>String(c.ref||'').toUpperCase()===String(ref||'').toUpperCase())||{}).part_number||'';
   const kindOf=ref=>(conns.find(c=>String(c.ref||'').toUpperCase()===String(ref||'').toUpperCase())||{}).kind||'connector';
   if(!segs.length) return `<svg viewBox="0 0 1000 60" xmlns="http://www.w3.org/2000/svg"><text x="500" y="35" text-anchor="middle" font-size="13" fill="#64748B">—</text></svg>`;
@@ -8895,9 +8917,19 @@ function _csHarnessSVG(spec){
   const row=sg=>{ const far=String(sg.from)===hub?sg.to:sg.from;
                   return {seg:sg, far, len:_csCutLength(sg).total, fin:_csNum(sg.finished_length_mm)}; };
   let rows=attached.map(row);
-  // The trunk is the longest run off the hub; it is drawn to the right on its own.
-  rows.sort((a,b)=>(_csNum(b.len)||0)-(_csNum(a.len)||0));
-  const trunk = (hubIsBreakout && rows.length>1) ? rows.shift() : null;
+  // Stack the branches in the order the DRAWING lists them, not by length. The
+  // connector list is read off the assembly view top to bottom, so following it
+  // puts P2/P3/P4 where the operator expects them; sorting by length reshuffled
+  // them to P2/P4/P3 and stopped the figure matching the drawing it came from.
+  const ordOf=ref=>{
+    const i=conns.findIndex(c=>String(c.ref||'').toUpperCase()===String(ref||'').toUpperCase());
+    return i<0 ? 999 : i;
+  };
+  rows.sort((a,b)=>ordOf(a.far)-ordOf(b.far));
+  // The trunk is the longest run off a breakout; it is drawn to the right alone.
+  const trunk = (hubIsBreakout && rows.length>1)
+    ? rows.splice(rows.reduce((bi,r,i,arr)=>(_csNum(r.len)||0)>(_csNum(arr[bi].len)||0)?i:bi,0),1)[0]
+    : null;
   const branches=rows.concat(rest.map(sg=>({seg:sg, far:sg.to, len:_csCutLength(sg).total, fin:_csNum(sg.finished_length_mm), _loose:true})));
 
   const maxLen=Math.max(...segs.map(sg=>_csNum(_csCutLength(sg).total)||0), 1);
@@ -8907,9 +8939,13 @@ function _csHarnessSVG(spec){
   // run land on top of the next run's cable — which is how a 200 mm dimension
   // ended up looking like it belonged to the 180 mm branch below it.
   const rowH=r=>{
-    const marks=(spec.markers||[]).filter(m=>!m.segment||m.segment===r.seg.id).length;
+    const marks=(marksBySeg[r.seg.id]||[]).length;
     const cut=_csCutLength(r.seg);
-    return 74 + marks*20 + ((cut.hasBreakdown&&cut.added!==0)?32:0);
+    // Room for: the length dimension (y+46), the annotation stack starting at
+    // y+70, one line per label, and clearance for the NEXT run's own caption,
+    // which is drawn 16px above its cable. Too small and the last note lands on
+    // the next run's title — which is what "F" was doing to "S2 · MR3010E".
+    return 96 + marks*20 + ((cut.hasBreakdown&&cut.added!==0)?32:0);
   };
   const heights=branches.map(rowH);
   const rowY=[]; let acc=TOP+16;
@@ -8939,7 +8975,7 @@ function _csHarnessSVG(spec){
         <path d="M ${HUBX-18} ${hubY} Q ${HUBX-70} ${hubY} ${HUBX-90} ${(hubY+y)/2} Q ${HUBX-110} ${y} ${HUBX-150} ${y} L ${x0+52} ${y}"
           fill="none" stroke="#CBD5E1" stroke-width="3.4" stroke-linecap="round"/>`;
     g+=_csConnBox(x0+52, y, r.far, pnOf(r.far), 'right2', kindOf(r.far));
-    g+=_csRunAnnot(spec, r, x0+52, HUBX-150, y, rtlAttr, T, false, segs.length===1);
+    g+=_csRunAnnot(spec, r, x0+52, HUBX-150, y, rtlAttr, T, false, segs.length===1, marksBySeg[r.seg.id]);
   });
 
   // trunk runs right
@@ -8948,7 +8984,7 @@ function _csHarnessSVG(spec){
     g+=`<line x1="${HUBX+18}" y1="${y}" x2="${RIGHT}" y2="${y}" stroke="#475569" stroke-width="9" stroke-linecap="round"/>
         <line x1="${HUBX+18}" y1="${y}" x2="${RIGHT}" y2="${y}" stroke="#CBD5E1" stroke-width="5" stroke-linecap="round"/>`;
     g+=_csConnBox(RIGHT, y, trunk.far, pnOf(trunk.far), 'right', kindOf(trunk.far));
-    g+=_csRunAnnot(spec, trunk, HUBX+18, RIGHT, y, rtlAttr, T, true, segs.length===1);
+    g+=_csRunAnnot(spec, trunk, HUBX+18, RIGHT, y, rtlAttr, T, true, segs.length===1, marksBySeg[trunk.seg.id]);
   }
 
   // The overall length, spanning the picture the way the drawing dimensions it.
@@ -8956,10 +8992,10 @@ function _csHarnessSVG(spec){
   if(ov.value!=null){
     const oy=H-58;
     g+=`<line x1="60" y1="${oy}" x2="${W-60}" y2="${oy}" stroke="#0F172A" stroke-width="1.4" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
-        <rect x="${W/2-190}" y="${oy-15}" width="380" height="26" fill="#fff"/>
-        <text x="${W/2-8}" y="${oy+5}" text-anchor="end" font-size="13" font-weight="800" fill="#0F172A"${rtlAttr}>${
+        <rect x="${W/2-150}" y="${oy-13}" width="300" height="22" fill="#fff"/>
+        <text x="${W/2}" y="${oy-19}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#64748B"${rtlAttr}>${
           _csSvgTxt(T('Overall length'))}</text>
-        <text x="${W/2}" y="${oy+5}" text-anchor="start" font-size="13" font-weight="800" fill="#0F172A" font-family="monospace">${ov.value} mm${
+        <text x="${W/2}" y="${oy+5}" text-anchor="middle" font-size="13.5" font-weight="800" fill="#0F172A" font-family="monospace">${ov.value} mm${
           ov.span?`  (${_csSvgTxt(ov.span)})`:''}</text>`;
   }
   // A label the model could not place on any run still has to reach the operator.
@@ -8987,7 +9023,7 @@ function _csHarnessSVG(spec){
 
 // Everything drawn along one run: its id and cable, the sleeves and markers
 // that sit on it, the dimensioned length, and the cut length when they differ.
-function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, showFormula){
+function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, showFormula, marks){
   const seg=r.seg, cut=_csCutLength(seg);
   const len=_csNum(r.len)||0;
   const xa=Math.min(xFarEnd,xHubEnd), xb=Math.max(xFarEnd,xHubEnd);
@@ -9006,6 +9042,7 @@ function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, showForm
     _csSvgTxt(seg.id||'')}${seg.cable_part_number?` · ${_csSvgTxt(seg.cable_part_number)}`:''}</text>`;
 
   (spec.sleeves||[]).filter(sl=>!sl.segment||sl.segment===seg.id).forEach(sl=>{
+    // (sleeves stay per-segment: unlike labels they are always dimensioned)
     const w=Math.max(6,(_csNum(sl.length_mm)||0)*scale);
     // The sleeve starts at its distance and occupies w INWARDS from that end.
     const x0s=at(sl.from_end, sl.distance_mm);
@@ -9033,17 +9070,28 @@ function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, showForm
       dimY+=22;
     }
   }
-  (spec.markers||[]).filter(m=>!m.segment||m.segment===seg.id).forEach(mk=>{
-    const x=at(mk.from_end, mk.distance_mm);
+  const undim=(marks||[]).filter(m=>_csNum(m.distance_mm)==null);
+  (marks||[]).forEach((mk,mi)=>{
     const anchor=anchorOf(mk.from_end), bad=mk.confirmed===false, col=bad?'#DC2626':'#334155';
+    let x;
+    if(_csNum(mk.distance_mm)==null){
+      // No dimension: park it a readable step in from its end, clear of the
+      // connector body, and step each further one along so they do not stack.
+      const k=undim.indexOf(mk);
+      x = anchor + ((anchor===xFarEnd) ? dir : -dir) * (46 + k*30);
+    } else {
+      x = at(mk.from_end, mk.distance_mm);
+    }
     g+=`<rect x="${(x-7).toFixed(1)}" y="${y-13}" width="14" height="26" fill="#fff" stroke="#1E293B" stroke-width="1.2"/>
         <text x="${x.toFixed(1)}" y="${y+4}" text-anchor="middle" font-size="10.5" font-weight="800" fill="#0F172A">${_csSvgTxt(mk.label||'')}</text>`;
-    if(_csNum(mk.distance_mm)==null && mk.position){
-      // No dimension on the drawing — print the placement note instead of an
-      // arrow to nowhere, so the operator still knows where the label goes.
-      g+=`<text x="${x.toFixed(1)}" y="${dimY+3}" text-anchor="middle" font-size="10" font-weight="700" fill="#B45309"${rtlAttr}>${
-        _csSvgTxt(_csP(mk.position))}</text>`;
-      dimY+=18; return;
+    if(_csNum(mk.distance_mm)==null){
+      // No dimension on the drawing — a tick to the cable plus the placement
+      // note in words, so the operator still knows where the label goes.
+      g+=`<line x1="${x.toFixed(1)}" y1="${y+13}" x2="${x.toFixed(1)}" y2="${(dimY-9).toFixed(1)}" stroke="#B45309" stroke-width="1" stroke-dasharray="2,2"/>`;
+      if(mk.position)
+        g+=`<text x="${x.toFixed(1)}" y="${dimY+3}" text-anchor="middle" font-size="10" font-weight="700" fill="#B45309"${rtlAttr}>${
+          _csSvgTxt(_csP(mk.position))}</text>`;
+      dimY+=20; return;
     }
     g+=`<line x1="${Math.min(anchor,x).toFixed(1)}" y1="${dimY}" x2="${Math.max(anchor,x).toFixed(1)}" y2="${dimY}" stroke="${col}" stroke-width="1" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
         <rect x="${((anchor+x)/2-22).toFixed(1)}" y="${dimY-10}" width="44" height="17" fill="#fff"/>
