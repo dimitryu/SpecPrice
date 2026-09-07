@@ -600,7 +600,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.19.0';
+const APP_VER   = '1.20.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -8016,6 +8016,29 @@ function _csRouteMismatches(spec){
 }
 
 // Total cable to draw off the reel, per cable part number — what stores issues.
+// The failure this catches: an 8 mm jacket strip written into "allowances" as
+// well as into "strip", so the same end is paid for twice and the cut length
+// comes out 8 mm long per end. Reported, never silently corrected — which of the
+// two numbers is wrong is a question about the drawing, not about arithmetic.
+function _csAllowanceDoubles(spec){
+  const out=[];
+  _csSegments(spec).forEach(seg=>{
+    const ends={};
+    (seg.ends||[]).forEach(e=>{
+      ends[String(e.ref||'').toUpperCase()]=(e.strip||[])
+        .filter(x=>!x.derived).map(x=>({code:x.code, mm:_csNum(x.value_mm)}))
+        .filter(x=>x.mm!=null);
+    });
+    (seg.allowances||[]).forEach(a=>{
+      const mm=_csNum(a.mm), ref=String(a.ref||'').toUpperCase();
+      if(mm==null || !ends[ref]) return;
+      const hit=ends[ref].find(x=>Math.abs(x.mm-mm)<0.01);
+      if(hit) out.push({seg:seg.id, ref:a.ref, mm, code:hit.code, reason:a.reason||''});
+    });
+  });
+  return out;
+}
+
 function _csCableTotals(spec){
   const by={};
   _csSegments(spec).forEach(seg=>{
@@ -8123,6 +8146,11 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "A strip dimension looks like it was also counted as an allowance":"נראה שמידת חשיפה נספרה גם כתוספת אורך",
+    "the allowance":"התוספת",
+    "is the same as strip dimension":"זהה למידת החשיפה",
+    "Stripping removes jacket, not length \u2014 a bared conductor is still where it was. If this is the strip counted twice, the cut length is too long by that much at each end. Check before cutting.":"חשיפה מסירה מעטה, לא אורך — מוליך חשוף נשאר בדיוק במקום שהיה. אם זו החשיפה שנספרה פעמיים, אורך החיתוך ארוך מדי בכמות הזו בכל קצה. לבדוק לפני חיתוך.",
+    "The drawing exactly as supplied \u2014 nothing is drawn over it. The cut lengths it does not carry are in the table above.":"הסרטוט בדיוק כפי שנמסר — לא צויר עליו כלום. אורכי החיתוך שאין בו נמצאים בטבלה שמעל.",
     "Work sheet \u2014 read this first":"דף עבודה — לקרוא קודם",
     "Everything below is repeated in full later in this document. This page is the short version.":"כל מה שכאן מופיע במלואו בהמשך המסמך. הדף הזה הוא הגרסה הקצרה.",
     "Cut":"חיתוך",
@@ -8272,6 +8300,11 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    "A strip dimension looks like it was also counted as an allowance":"Похоже, размер зачистки посчитан и как припуск",
+    "the allowance":"припуск",
+    "is the same as strip dimension":"совпадает с размером зачистки",
+    "Stripping removes jacket, not length \u2014 a bared conductor is still where it was. If this is the strip counted twice, the cut length is too long by that much at each end. Check before cutting.":"Зачистка снимает изоляцию, а не длину — оголённый проводник остаётся на месте. Если это двойной счёт, длина реза завышена на эту величину с каждого конца. Проверьте до реза.",
+    "The drawing exactly as supplied \u2014 nothing is drawn over it. The cut lengths it does not carry are in the table above.":"Чертёж точно как получен — поверх ничего не нанесено. Длины реза — в таблице выше.",
     "Work sheet \u2014 read this first":"Рабочий лист — читать первым",
     "Everything below is repeated in full later in this document. This page is the short version.":"Всё это повторяется полностью далее. Эта страница — краткая версия.",
     "Cut":"Рез",
@@ -8630,52 +8663,13 @@ function _csShrinkJpeg(b64, maxDim, quality){
   });
 }
 
-// Paint the customer's branding out before the drawing is stored. Boxes are
-// normalised (0..1 of width/height, origin top-left) so they survive the resize
-// that follows. Returns null on any failure — the caller treats that as "do not
-// store the image", because a half-redacted drawing is worse than none.
-function _csRedact(b64, boxes){
-  return new Promise(resolve=>{
-    const img=new Image();
-    img.onload=()=>{
-      try{
-        const c=document.createElement('canvas');
-        c.width=img.width; c.height=img.height;
-        const ctx=c.getContext('2d');
-        ctx.drawImage(img,0,0);
-        ctx.fillStyle='#FFFFFF';
-        let painted=0;
-        (boxes||[]).forEach(b=>{
-          const x=_csNum(b.x), y=_csNum(b.y), w=_csNum(b.w), h=_csNum(b.h);
-          if(x==null||y==null||w==null||h==null) return;
-          // A box covering most of the sheet is a misread, not a logo. Painting
-          // it would hide the harness, so drop it and let the count check show
-          // that fewer boxes were applied than were asked for.
-          if(w<=0||h<=0||w>0.5||h>0.5||x<0||y<0||x>1||y>1) return;
-          ctx.fillRect(x*img.width, y*img.height, w*img.width, h*img.height);
-          painted++;
-        });
-        if(!painted){ resolve(null); return; }
-        resolve(c.toDataURL('image/jpeg', 0.9).split(',')[1]);
-      }catch{ resolve(null); }
-    };
-    img.onerror=()=>resolve(null);
-    img.src='data:image/jpeg;base64,'+b64;
-  });
-}
-
 // A reference copy of the drawing, small enough to travel inside the Firestore
 // document. Returns null rather than an oversized string: a spec that fails to
 // save is far worse than a spec without the picture attached.
-async function _csRefImage(b64, redactions){
+async function _csRefImage(b64){
   try{
-    // No boxes, no stored copy. The caller checks this too; it is repeated here
-    // because the cost of getting it wrong is publishing a customer's logo, and
-    // that should not depend on one call site remembering.
-    if(!b64 || !redactions || !redactions.length) return null;
-    const masked = await _csRedact(b64, redactions);
-    if(!masked) return null;
-    const small=await _csShrinkJpeg(masked, _CS_REF_MAXDIM, _CS_REF_QUALITY);
+    if(!b64) return null;
+    const small=await _csShrinkJpeg(b64, _CS_REF_MAXDIM, _CS_REF_QUALITY);
     if(!small || small.length > _CS_REF_MAX_BYTES){
       console.log('[CutStrip] reference image dropped —',
         small?(small.length/1e3).toFixed(0)+' kB over budget':'shrink failed');
@@ -8730,8 +8724,6 @@ Return ONLY a JSON object. No markdown fence, no commentary.
              "connectors_on_drawing": <how many distinct connector refs the assembly view and part list show>,
              "cable_runs": <how many separate cable runs there are>},
 
-  "redactions": [ {"x":0.72,"y":0.88,"w":0.18,"h":0.07,"what":"company logo | company name"} ],
-
   "topology": "point_to_point | breakout | multi_branch",
   "route_dimensions": [ {"from":"P1","to":"P4","mm":200,"what":"what the arrow spans, as drawn"} ],
   "overall_length_mm": <the longest end-to-end dimension on the drawing — the harness's own overall length>,
@@ -8756,7 +8748,6 @@ Return ONLY a JSON object. No markdown fence, no commentary.
 
   "segments": [
     { "id":"S1", "from":"P1", "to":"WSRV1",
-      "anchor": {"x":0.42,"y":0.31,"confident":true},
       "cable_part_number":"", "cable_description":"",
       "type":"coax|single_wire|multi_conductor|twisted_pair",
 
@@ -8937,11 +8928,18 @@ RULES — these matter more than completeness:
      - "unclear"          the drawing does not say
    "cut_length_mm" is ALWAYS finished_length_mm + sum of allowances + trim_allowance_mm, and must equal
    that sum exactly — do not report a cut length that contradicts its own parts.
-   One "allowances" entry per END that consumes cable beyond the dimensioned length: the cable seated
-   inside the connector body, and on a crimped multi-conductor cable the jacket strip that lets the
-   conductors fan out to their pins. Squaring and re-stripping goes in trim_allowance_mm, not per end.
+   AN ALLOWANCE IS CABLE YOU WOULD NOT OTHERWISE HAVE. Ask one question of every entry: does this make
+   the piece coming off the reel LONGER? Only two things do — cable that disappears inside the connector
+   body (insertion depth), and slack the drawing calls for. Squaring and re-stripping is material cut
+   off, so it goes in trim_allowance_mm.
+   A STRIP DIMENSION IS NOT AN ALLOWANCE. Stripping removes jacket; it removes no length. A conductor
+   bared 8 mm back from the end is still in the same place it was — the cable is not one millimetre
+   shorter for it, so nothing has to be added to compensate. Putting an 8 mm strip into "allowances"
+   alongside the 4 mm insertion depth counts the same end twice and sends the operator 8 mm of scrap
+   per end. Strip dimensions belong in "strip" on the end, and nowhere else.
      - length_basis "cable_only" with nothing else consuming cable may legitimately give 0 allowances —
-       say so in "reason" rather than inventing a number.
+       say so in "reason" rather than inventing a number. Zero is a real answer here and often the right
+       one; a fabricated allowance is worse than an honest zero with an open item against it.
      - length_basis "over_connectors" means the cable is SHORTER than the dimension: use NEGATIVE mm.
      - Insertion depth comes from the connector's assembly spec. Without it, give a defensible estimate,
        set confirmed:false, and say what it was derived from.
@@ -8966,21 +8964,7 @@ RULES — these matter more than completeness:
     Include threading sleeves on BEFORE connectors if the assembly has sleeves — that mistake scraps
     the cable. Every segment must be covered by the steps, not just the first one.
 
-18. REDACT THE CUSTOMER'S BRANDING. The sheet goes to the shop floor, so the stored copy of the drawing
-   must not carry the customer's identity. Give the normalised box (x, y, w, h as fractions of the image,
-   origin top-left) of the company LOGO and of the company NAME wherever they appear — usually in the
-   title block, sometimes as a watermark. Leave the drawing number, revision, project and description
-   alone: those are what the sheet is filed under.
-   If you genuinely cannot see a logo or company name, return an empty "redactions" array. Do not guess a
-   box: a box in the wrong place hides part of the harness, and an empty array is handled safely.
-
-19. ANCHOR EACH RUN ON THE DRAWING. For every segment give "anchor": the normalised point on the drawing
-   image where that run's own dimension line sits, and set "confident" to true ONLY if you are sure.
-   The sheet places a small cut-length callout there. When "confident" is false, or the anchor is missing,
-   the callout moves to a list under the drawing instead — which is fine. An unsure anchor that lands on
-   top of the harness is worse than no anchor at all, so say false whenever you hesitate.
-
-20. Units in millimetres throughout.`;
+18. Units in millimetres throughout.`;
 }
 
 const _CS_TRUNCATED='The analysis was cut off before it finished — this drawing produces more detail than one reply can hold. Try again; if it keeps happening, split the drawing or analyse it in English (Hebrew costs about twice the space).';
@@ -9096,31 +9080,26 @@ async function aiAnalyzeCutStrip(text, isImage, imgData, lang){
 // was sure. Otherwise it drops to the numbered list underneath, which is always
 // rendered in full — so every run is accounted for whether it got a pin or not.
 function _csCallouts(spec){
-  return _csSegments(spec).map((seg,i)=>{
-    const cut=_csCutLength(seg), a=seg.anchor||{};
-    const x=_csNum(a.x), y=_csNum(a.y);
-    const pinned = a.confident===true && x!=null && y!=null && x>0 && x<1 && y>0 && y<1;
-    return {n:i+1, seg, cut, pinned, x, y, label:_csSegLabel(seg)};
-  });
+  return _csSegments(spec).map((seg,i)=>
+    ({n:i+1, seg, cut:_csCutLength(seg), label:_csSegLabel(seg)}));
 }
 
 function _csSourceFigure(spec){
   if(!spec || !spec.source_image) return '';
   const T=_csT, rtl=_csRTL()?' dir="rtl"':'';
   const calls=_csCallouts(spec);
-  const pins=calls.filter(c=>c.pinned).map(c=>`
-    <div style="position:absolute;left:${(c.x*100).toFixed(2)}%;top:${(c.y*100).toFixed(2)}%;
-                transform:translate(-50%,-50%);background:#FEF3C7;border:1.5px solid #B45309;
-                border-radius:3px;padding:2px 7px;font:700 11.5px/1.25 monospace;color:#7C2D12;
-                white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.25)">
-      ${c.n}. ${esc(T('CUT'))} ${esc(_csMM(c.cut.total))}</div>`).join('');
   return `
   <figure class="cs-fig" style="margin:0">
-    <div style="position:relative;display:inline-block;max-width:100%">
-      <img src="data:image/jpeg;base64,${esc(spec.source_image)}" alt=""
-           style="display:block;max-width:100%;height:auto;border:1px solid #CBD5E1;border-radius:4px"/>
-      ${pins}
-    </div>
+    <img src="data:image/jpeg;base64,${esc(spec.source_image)}" alt=""
+         style="display:block;max-width:100%;height:auto;border:1px solid #CBD5E1;border-radius:4px"/>
+    ${_csAllowanceDoubles(spec).length ? `
+    <div class="cs-box cs-stop" style="margin-bottom:10px">
+      <b>${esc(T('A strip dimension looks like it was also counted as an allowance'))}</b>
+      <ul>${_csAllowanceDoubles(spec).map(d=>`<li><span class="cs-ltr"><b>${esc(d.seg)} · ${esc(d.ref)}</b>:
+        ${esc(T('the allowance'))} <b>${d.mm} mm</b> ${esc(T('is the same as strip dimension'))}
+        <b>${esc(d.code)}</b></span>${d.reason?` — ${esc(_csP(d.reason))}`:''}</li>`).join('')}</ul>
+      <p>${esc(T('Stripping removes jacket, not length — a bared conductor is still where it was. If this is the strip counted twice, the cut length is too long by that much at each end. Check before cutting.'))}</p>
+    </div>` : ''}
     <table class="cs-tbl" style="margin-top:10px"><thead><tr>
       <th style="width:44px">#</th><th style="width:180px">${esc(T('Cable run'))}</th>
       <th style="width:120px">${esc(T('Finished'))}</th><th style="width:130px">${esc(T('Cut length'))}</th>
@@ -9133,7 +9112,7 @@ function _csSourceFigure(spec){
         <td class="cs-ltr" style="font:12px/1.4 monospace">${esc(_csCutFormula(c.seg))}</td></tr>`).join('')}
       </tbody></table>
     <figcaption style="font-size:11.5px;color:#64748B;margin-top:6px"${rtl}>${
-      esc(T('The drawing as supplied, with the cut lengths added. The drawing gives FINISHED lengths — the cut length is longer by the connector allowances.'))}</figcaption>
+      esc(T('The drawing exactly as supplied — nothing is drawn over it. The cut lengths it does not carry are in the table above.'))}</figcaption>
   </figure>`;
 }
 
@@ -9694,12 +9673,9 @@ async function handleCSFile(file){
     // branding is. No boxes, no stored copy — the sheet says so rather than
     // quietly publishing someone else's logo to the shop floor.
     if(rawImage){
-      const boxes=Array.isArray(spec.redactions) ? spec.redactions : [];
-      const img=boxes.length ? await _csRefImage(rawImage, boxes) : null;
+      const img=await _csRefImage(rawImage);
       if(img) spec.source_image=img;
-      else spec.source_image_skipped = boxes.length
-        ? 'the branding could not be masked, so the drawing was not stored'
-        : 'the analysis found no company logo or name to mask, so the drawing was not stored';
+      else spec.source_image_skipped='the drawing was too large to store alongside the analysis';
     }
 
     // A drawing number is what the sheet is filed and found under. Falling back
@@ -9979,7 +9955,6 @@ function renderCutStripSheet(){
       // only place a number appears, so nothing is lost by skipping it.
       const ov=_csOverall(spec), calls=_csCallouts(spec);
       const labels=(spec.markers||[]).filter(m=>m.label);
-      const criticals=(spec.steps||[]).filter(st=>String(st.critical||'').trim());
       const strips=[];
       _csSegments(spec).forEach(seg=>(seg.ends||[]).forEach(e=>{
         (e.strip||[]).filter(x=>!x.derived && _csNum(x.value_mm)!=null).forEach(x=>
@@ -10022,9 +9997,6 @@ function renderCutStripSheet(){
             : esc(_csP(m.position||''))}</td></tr>`).join('')}
         </tbody></table>` : ''}
 
-      ${criticals.length ? `<h3 class="cs-h3">4 · ${esc(T('Do not get these wrong'))}</h3>
-      <div class="cs-box cs-stop"><ul>${criticals.map(st=>
-        `<li><b>${esc(_csP(st.title||''))}</b> — ${esc(_csP(st.critical))}</li>`).join('')}</ul></div>` : ''}
 
       ${_csTBCCount(spec) ? `<div class="cs-box cs-stop" style="margin-top:10px">
         <b>${esc(T('This sheet still has'))} ${_csTBCCount(spec)} ${esc(T('unverified dimension(s)'))}.</b>
