@@ -600,7 +600,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.14.0';
+const APP_VER   = '1.15.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7848,6 +7848,7 @@ function _csNormalize(spec){
   spec.connectors = Array.isArray(spec.connectors) ? spec.connectors : [];
   spec.segments   = Array.isArray(spec.segments)   ? spec.segments   : [];
   spec.breakouts  = Array.isArray(spec.breakouts)  ? spec.breakouts  : [];
+  spec.route_dimensions = Array.isArray(spec.route_dimensions) ? spec.route_dimensions : [];
 
   if(!spec.segments.length && spec.cable){
     const c=spec.cable, legacyEnds=Array.isArray(spec.ends)?spec.ends:[];
@@ -7949,6 +7950,66 @@ function _csCutFormula(seg){
     .concat(r.trim ? [`+ ${r.trim} (${_csT('trim')})`] : []);
   return `${parts.join(' ')} = ${r.total} mm`;
 }
+// ── End-to-end routes ────────────────────────────────────────────────────────
+// A drawing dimensions from connector to connector. When a harness genuinely has
+// a breakout, the run the operator reads on the paper is trunk + branch, which
+// is NOT any single segment. Computing it here lets the sheet show the same
+// number the drawing shows, next to the per-run length that gets cut.
+//
+// It also catches the mistake this was written for: a "200 mm" that only reaches
+// the breakout. If a route the drawing dimensions at 200 adds up to something
+// else here, the two disagree in the open and somebody notices, instead of a
+// wire being cut short.
+function _csRoutes(spec){
+  const segs=_csSegments(spec);
+  const isTerm=ref=>!!ref && !_csIsBreakout(spec, ref);
+  const adj={};
+  segs.forEach(sg=>{
+    if(!sg.from||!sg.to||sg.from===sg.to) return;
+    (adj[sg.from]=adj[sg.from]||[]).push({to:sg.to, seg:sg});
+    (adj[sg.to]  =adj[sg.to]  ||[]).push({to:sg.from, seg:sg});
+  });
+  const terminals=[...new Set(segs.flatMap(sg=>[sg.from,sg.to]).filter(isTerm))];
+  const out=[], seen=new Set();
+  terminals.forEach(start=>{
+    // Walk outward, passing THROUGH breakouts and stopping at the first terminal.
+    const stack=[{node:start, mm:0, via:[]}];
+    let guard=0;
+    while(stack.length && guard++<5000){
+      const cur=stack.pop();
+      (adj[cur.node]||[]).forEach(edge=>{
+        if(cur.via.includes(edge.seg.id)) return;      // never reuse a run
+        const mm=cur.mm + (_csNum(edge.seg.finished_length_mm)||0);
+        const via=[...cur.via, edge.seg.id];
+        if(isTerm(edge.to)){
+          if(edge.to===start) return;
+          const key=[start,edge.to].sort().join('|')+'#'+via.slice().sort().join(',');
+          if(!seen.has(key)){ seen.add(key); out.push({from:start,to:edge.to,mm:_csR(mm),via}); }
+          return;
+        }
+        stack.push({node:edge.to, mm, via});
+      });
+    }
+  });
+  return out;
+}
+// A dimension the drawing gives that our own run lengths do not reproduce.
+// Reported, never reconciled: the drawing is the authority, and quietly adjusting
+// a length to match would hide which of the two is wrong.
+function _csRouteMismatches(spec){
+  const dims=Array.isArray(spec?.route_dimensions)?spec.route_dimensions:[];
+  if(!dims.length) return [];
+  const routes=_csRoutes(spec);
+  const key=(a,b)=>[String(a||'').toUpperCase(),String(b||'').toUpperCase()].sort().join('|');
+  const best={};
+  routes.forEach(r=>{ const k=key(r.from,r.to); if(best[k]==null||r.mm>best[k]) best[k]=r.mm; });
+  return dims.map(d=>{
+    const drawn=_csNum(d.mm), got=best[key(d.from,d.to)];
+    if(drawn==null || got==null) return null;
+    return Math.abs(drawn-got)>0.5 ? {from:d.from,to:d.to,drawn,got:_csR(got),what:d.what||''} : null;
+  }).filter(Boolean);
+}
+
 // Total cable to draw off the reel, per cable part number — what stores issues.
 function _csCableTotals(spec){
   const by={};
@@ -8035,6 +8096,13 @@ const _CS_LABELS={
     'Translating…':'מתרגם…','Page':'עמוד','of':'מתוך',
     'Edit':'עריכה','Save':'שמירה','Cancel':'ביטול','Saving…':'שומר…',
     'Cut length calculation':'חישוב אורך החיתוך',
+    'Lengths as dimensioned on the drawing':'אורכים כפי שממודדים בסרטוט',
+    'Span':'טווח',
+    'A dimension on the drawing does not match the runs below':'מידה בסרטוט לא תואמת את המקטעים שלמטה',
+    'drawing says':'בסרטוט',
+    'the runs add up to':'סכום המקטעים',
+    'The drawing is the authority. Fix the run lengths before cutting — a run split at the wrong point cuts wire short, and short wire is scrap.':'הסרטוט הוא הקובע. יש לתקן את אורכי המקטעים לפני החיתוך — מקטע שפוצל בנקודה שגויה גורם לחיתוך קצר מדי, וכבל קצר הוא פסולת.',
+    'End to end':'מקצה לקצה',
     'Breakout':'נקודת פיצול',
     'from':'מ-',
     'Open wires':'חוטים חשופים',
@@ -8130,6 +8198,13 @@ const _CS_LABELS={
     'Translating…':'Перевод…','Page':'Стр.','of':'из',
     'Edit':'Редактировать','Save':'Сохранить','Cancel':'Отмена','Saving…':'Сохранение…',
     'Cut length calculation':'Расчёт длины реза',
+    'Lengths as dimensioned on the drawing':'Длины по размерам чертежа',
+    'Span':'Участок',
+    'A dimension on the drawing does not match the runs below':'Размер на чертеже не совпадает с участками ниже',
+    'drawing says':'по чертежу',
+    'the runs add up to':'сумма участков',
+    'The drawing is the authority. Fix the run lengths before cutting — a run split at the wrong point cuts wire short, and short wire is scrap.':'Чертёж — источник истины. Исправьте длины до реза: участок, разделённый не в том месте, режется коротким, а короткий провод — брак.',
+    'End to end':'От края до края',
     'Breakout':'Точка разветвления',
     'from':'от',
     'Open wires':'Открытые провода',
@@ -8430,6 +8505,7 @@ Return ONLY a JSON object. No markdown fence, no commentary.
   "standard": "workmanship standard called out on the drawing, else \\"\\"",
 
   "topology": "point_to_point | breakout | multi_branch",
+  "route_dimensions": [ {"from":"P1","to":"P4","mm":200,"what":"what the arrow spans, as drawn"} ],
   "breakouts": [ {"id":"BR1","note":"where the trunk fans out into the branches"} ],
 
   "connectors": [
@@ -8499,25 +8575,39 @@ RULES — these matter more than completeness:
    them by their real reference designator (J1, P1, WSRV1) or, when the drawing gives none, by what they
    are (DB9, RJ45, CIRC-22). A label letter that happens to sit next to a connector does not rename it.
 
-2. BREAKOUT HARNESSES. Look at the assembly view: does one cable run out of a connector and then FAN OUT
-   into several branches, each ending somewhere different? That is a breakout, and it is common.
-   Model it with a node: put one entry in "breakouts" (e.g. "BR1"), then make the trunk a segment from
-   the far connector to "BR1", and each branch a segment from "BR1" to whatever it ends at.
-   A segment's "from"/"to" may therefore name either a connector ref or a breakout id.
-   Do NOT chain the connectors together (A→B→C) when the drawing shows them fanning from one point —
-   that describes a different harness from the one on the paper.
+2. BUNDLING IS NOT A BREAKOUT. Get this right before you assign any length.
+   Wires that simply run side by side — laced, taped, tied or sleeved together — are still SEPARATE runs.
+   Each one goes the whole way from its connector to its connector, and each carries its OWN full length.
+   Model that as one segment per destination, from connector to connector, with no breakout at all.
+   A drawing that shows three fans on one plug with lengths 180, 180 and 200 has THREE runs of 180, 180
+   and 200 — not a shared trunk with stubs hanging off it.
+   Use a "breakouts" node ONLY when a SINGLE jacketed cable physically splits and its conductors leave in
+   different directions — and in that case the drawing dimensions the trunk separately from the branches.
+   When in doubt, do not create a breakout: separate full-length runs are always safe to cut, whereas a
+   wrongly split run tells the operator to cut a wire far too short, and short wire is scrap.
+   And when there IS a breakout, model it as a node: the trunk is a segment from the far connector to the
+   breakout id, and each branch is a segment from that id to whatever it ends at. Do NOT chain the
+   connectors together (A→B→C) when the drawing shows them fanning from one point — that describes a
+   different harness from the one on the paper.
 
 3. NOT EVERY BRANCH ENDS IN A CONNECTOR. A branch can finish as OPEN WIRES, a splice, or ring terminals.
    Give it a connectors[] entry with the matching "kind" and a ref like "OPEN", so the run has somewhere
    to end and the operator is told how to finish it. For open wires, say in the segment's
    "shield_treatment" or the steps what is stripped, tinned and how far the wires are separated.
 
-4. READ EVERY DIMENSION ON THE DRAWING AND SAY WHAT IT SPANS.
-   A harness drawing usually carries an overall length AND intermediate ones (2500 mm overall, 1250 mm to
-   the breakout, 200 mm of fan-out, 50 mm to each marker). Assign each to the right segment's
-   "finished_length_mm", or to a marker's "distance_mm" — do not put the overall length on every segment,
-   and do not invent a length for a branch the drawing dimensions separately.
-   If two dimensions cannot both be true, put it in "discrepancies" rather than picking one.
+4. LENGTHS ON A DRAWING ARE END TO END. This is the single most common way to get a harness wrong.
+   A dimension arrow runs from one connector to another connector. "200 mm" means: from THAT connector to
+   THAT connector, the whole way. It never means "as far as the point where the bundle separates".
+   So "finished_length_mm" on a segment is the FULL length of that run, connector to connector, exactly as
+   the arrow measures it — and a wiring-table "Length (mm)" column is the same thing, per wire.
+   Record every dimension you can see in "route_dimensions" as it appears, saying what it spans:
+     "route_dimensions":[ {"from":"P1","to":"P4","mm":200,"what":"overall, longest run"},
+                          {"from":"P1","to":"P2","mm":180,"what":""} ]
+   Then make each segment's finished_length_mm agree with the dimension that measures it. Never put the
+   overall length on every run, and never leave a run without the length that is actually drawn for it.
+   If a genuine trunk exists, the trunk gets its own dimension and the branches get theirs; if the drawing
+   only gives end-to-end figures, model separate full-length runs (see rule 2) so nothing has to be guessed.
+   Contradictory dimensions go in "discrepancies" — do not silently pick one.
 
 5. COUNT THE CABLES AND THE CONNECTORS FIRST, AND COVER ALL OF THEM.
    Look at the assembly view and count every connector body and every separate cable run. A harness with
@@ -9430,6 +9520,23 @@ function renderCutStripSheet(){
         <p>${_csSegments(spec).map(s=>`<span class="cs-ltr">${esc(s.id)}: ${esc(_csSegLabel(s))}</span>`).join(' &nbsp;·&nbsp; ')}</p>
       </div>
       <figure class="cs-fig">${_csHarnessSVG(spec)}</figure>
+      ${(spec.route_dimensions||[]).length ? `
+      <h3 class="cs-h3">${esc(T('Lengths as dimensioned on the drawing'))}</h3>
+      <table class="cs-tbl"><thead><tr><th style="width:200px">${esc(T('Span'))}</th>
+        <th style="width:130px">${esc(T('Value'))}</th><th>${esc(T('Note'))}</th></tr></thead>
+        <tbody>${spec.route_dimensions.map((d,i)=>`<tr>
+          <td class="cs-ltr"><b>${esc(d.from||'')} → ${esc(d.to||'')}</b></td>
+          <td class="cs-ctr">${_csFNum(`route_dimensions.${i}.mm`, d.mm, ' mm')}</td>
+          <td style="font-size:12.5px">${_csFText(`route_dimensions.${i}.what`, d.what)}</td></tr>`).join('')}
+        </tbody></table>` : ''}
+      ${_csRouteMismatches(spec).length ? `
+      <div class="cs-box cs-stop" style="margin-top:12px">
+        <b>${esc(T('A dimension on the drawing does not match the runs below'))}</b>
+        <ul>${_csRouteMismatches(spec).map(m=>`<li><span class="cs-ltr"><b>${esc(m.from)} → ${esc(m.to)}</b>:
+          ${esc(T('drawing says'))} <b>${m.drawn} mm</b>, ${esc(T('the runs add up to'))} <b>${m.got} mm</b></span>
+          ${m.what?` — ${esc(T(m.what))}`:''}</li>`).join('')}</ul>
+        <p>${esc(T('The drawing is the authority. Fix the run lengths before cutting — a run split at the wrong point cuts wire short, and short wire is scrap.'))}</p>
+      </div>` : ''}
       ${_csCableTotals(spec).length>1||(_csCableTotals(spec)[0]&&_csCableTotals(spec)[0].runs>1) ? `
       <h3 class="cs-h3">${esc(T('Cable to draw from stores'))}</h3>
       <table class="cs-tbl"><thead><tr><th>${esc(T('Part number'))}</th>
