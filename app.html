@@ -178,8 +178,17 @@
     /* Part numbers, dimensions and codes must not be reordered by the bidi
        algorithm when the sheet is shown in Hebrew — an SMP part number printed
        backwards is a wrong part number. */
-    .cs-ltr { direction:ltr; unicode-bidi:isolate; display:inline-block;
+    /* THE table bug. This class exists to hold a Latin part number upright inside
+       Hebrew text, and it was doing that with display:inline-block. Put it on a
+       <td> — which 65 cells in the sheet do — and the cell stops being a table
+       cell: the row falls apart and every cell lands on its own line, keeping its
+       column but dropping a step each time. unicode-bidi:isolate already does the
+       whole job on any display type, so the display override goes, and the cells
+       that need it get it explicitly. */
+    .cs-ltr { direction:ltr; unicode-bidi:isolate;
               font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; }
+    span.cs-ltr, b.cs-ltr, i.cs-ltr { display:inline-block; }
+    .cs-tbl td.cs-ltr, .cs-tbl th.cs-ltr { display:table-cell; }
     .cs-ctr { text-align:center; }
     .cs-tbl { width:100%; border-collapse:collapse; font-size:13px;
               table-layout:fixed; }
@@ -624,7 +633,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.24.0';
+const APP_VER   = '1.25.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
