@@ -600,7 +600,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.17.0';
+const APP_VER   = '1.18.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7849,6 +7849,11 @@ function _csNormalize(spec){
   spec.segments   = Array.isArray(spec.segments)   ? spec.segments   : [];
   spec.breakouts  = Array.isArray(spec.breakouts)  ? spec.breakouts  : [];
   spec.route_dimensions = Array.isArray(spec.route_dimensions) ? spec.route_dimensions : [];
+  // Specs saved before these fields existed load straight from Firestore without
+  // passing through the parser, so the defaults have to live here as well.
+  spec.engineering_notes = Array.isArray(spec.engineering_notes) ? spec.engineering_notes : [];
+  spec.markers    = Array.isArray(spec.markers)  ? spec.markers  : [];
+  if(spec.bundle && typeof spec.bundle!=='object') spec.bundle=null;
 
   if(!spec.segments.length && spec.cable){
     const c=spec.cable, legacyEnds=Array.isArray(spec.ends)?spec.ends:[];
@@ -8084,6 +8089,17 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    'Laced into one bundle':'שזור לצרור אחד',
+    'These runs are laced into one bundle':'הריצות האלה שזורות לצרור אחד',
+    'into':'אל',
+    'Bundling changes how the harness is assembled — it never changes how long a wire is cut.':'שזירה משנה איך מרכיבים את הצמה — היא לעולם לא משנה באיזה אורך חותכים חוט.',
+    'Engineering notes from the drawing':'הערות הנדסיות מהסרטוט',
+    'These come from the drawing itself. A part that measures correctly and ignores these is still rejected.':'אלה מגיעות מהסרטוט עצמו. חלק שהמידות שלו נכונות אבל מתעלם מהן — עדיין נפסל.',
+    'Note':'הערה',
+    'Applies to':'חל על',
+    'What the operator must do':'מה על העובד לעשות',
+    'background — nothing to do':'רקע — אין פעולה',
+    "The original drawing, as supplied. The figure below is this sheet's reading of it — if the two disagree, the drawing wins.":'הסרטוט המקורי כפי שנמסר. הסרטוט שלמטה הוא הקריאה של הדף הזה — אם השניים לא מסכימים, הסרטוט המקורי קובע.',
     'Overall length':'אורך כולל',
     'Overall length of the whole harness':'אורך כולל של כל הצמה',
     'The drawing states':'בסרטוט רשום',
@@ -8192,6 +8208,17 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    'Laced into one bundle':'Связано в один жгут',
+    'These runs are laced into one bundle':'Эти линии связаны в один жгут',
+    'into':'в',
+    'Bundling changes how the harness is assembled — it never changes how long a wire is cut.':'Связывание меняет сборку жгута — но никогда не меняет длину реза провода.',
+    'Engineering notes from the drawing':'Инженерные примечания с чертежа',
+    'These come from the drawing itself. A part that measures correctly and ignores these is still rejected.':'Они взяты с самого чертежа. Деталь с верными размерами, но без их учёта, всё равно бракуется.',
+    'Note':'Примечание',
+    'Applies to':'Относится к',
+    'What the operator must do':'Что должен сделать оператор',
+    'background — nothing to do':'фон — действий нет',
+    "The original drawing, as supplied. The figure below is this sheet's reading of it — if the two disagree, the drawing wins.":'Исходный чертёж как получен. Ниже — его прочтение этим листом; при расхождении верен чертёж.',
     'Overall length':'Общая длина',
     'Overall length of the whole harness':'Общая длина всего жгута',
     'The drawing states':'На чертеже указано',
@@ -8361,8 +8388,13 @@ async function _csEnsureLang(spec, lang, onProgress){
 // the label table. Collected in one place so translation is a single batched
 // request instead of one call per sentence.
 function _csProseStrings(spec){
+  const _extra=[];
+  (spec?.engineering_notes||[]).forEach(n=>{ _extra.push(n.text, n.action); });
+  (spec?.markers||[]).forEach(m=>_extra.push(m.position));
+  if(spec?.bundle){ _extra.push(spec.bundle.note, spec.bundle.method); }
   const out=[];
   const push=v=>{ const t=String(v||'').trim(); if(t) out.push(t); };
+  _extra.forEach(push);
   (spec.steps||[]).forEach(s=>{ push(s.title); push(s.body); push(s.critical); });
   (spec.inspection||[]).forEach(push);
   (spec.open_items||[]).forEach(o=>{ push(o.what); push(o.why); push(o.action); });
@@ -8462,6 +8494,11 @@ const _CS_MAX_TOKENS = 32000;
 // analysis image can be smaller than the one BOM extraction uses. Less to
 // upload is less time spent before the model even starts.
 const _CS_IMG_MAXDIM = 1800, _CS_IMG_QUALITY = 0.82;
+// A second, smaller copy is kept ON the spec as the reference figure. It has to
+// live inside the Firestore document, which caps at 1 MB for everything else
+// too, so it is deliberately smaller than the one sent for analysis and is
+// dropped rather than risking a save that fails.
+const _CS_REF_MAXDIM = 1400, _CS_REF_QUALITY = 0.68, _CS_REF_MAX_BYTES = 420000;
 
 // Provider errors are quoted verbatim, but a few of them have a specific fix
 // the user would otherwise have to go and look up.
@@ -8497,6 +8534,21 @@ function _csShrinkJpeg(b64, maxDim, quality){
     img.onerror=()=>resolve(b64);     // never let a resize failure block the analysis
     img.src='data:image/jpeg;base64,'+b64;
   });
+}
+
+// A reference copy of the drawing, small enough to travel inside the Firestore
+// document. Returns null rather than an oversized string: a spec that fails to
+// save is far worse than a spec without the picture attached.
+async function _csRefImage(b64){
+  try{
+    const small=await _csShrinkJpeg(b64, _CS_REF_MAXDIM, _CS_REF_QUALITY);
+    if(!small || small.length > _CS_REF_MAX_BYTES){
+      console.log('[CutStrip] reference image dropped —',
+        small?(small.length/1e3).toFixed(0)+' kB over budget':'shrink failed');
+      return null;
+    }
+    return small;
+  }catch(e){ console.log('[CutStrip] reference image skipped:', e.message); return null; }
 }
 
 // The analysis writes its prose DIRECTLY in the language the sheet will be read
@@ -8544,6 +8596,13 @@ Return ONLY a JSON object. No markdown fence, no commentary.
   "route_dimensions": [ {"from":"P1","to":"P4","mm":200,"what":"what the arrow spans, as drawn"} ],
   "overall_length_mm": <the longest end-to-end dimension on the drawing — the harness's own overall length>,
   "breakouts": [ {"id":"BR1","note":"where the trunk fans out into the branches"} ],
+  "bundle": {"at":"P1","length_mm":<how far back from that connector the runs are laced/taped into ONE bundle, or null>,
+             "method":"lacing cord | spiral wrap | tape | braided sleeve", "part_number":"",
+             "note":"what the drawing says about tying them together"},
+
+  "engineering_notes": [ {"n":"1","text":"the note, copied from the drawing and written for the operator",
+                          "applies_to":"P1 | S1 | labels | glue | whole harness",
+                          "action":"what the operator must actually DO because of it, or \"\" if it is background"} ],
 
   "connectors": [
     { "ref":"J1", "kind":"connector | open_wires | splice | ring_terminal",
@@ -8665,6 +8724,10 @@ RULES — these matter more than completeness:
    If a genuine trunk exists, the trunk gets its own dimension and the branches get theirs; if the drawing
    only gives end-to-end figures, model separate full-length runs (see rule 2) so nothing has to be guessed.
    Contradictory dimensions go in "discrepancies" — do not silently pick one.
+   When several runs are laced, taped or sleeved together over their common stretch, that is a BUNDLE:
+   fill in "bundle" with the connector they run into, how far back the lacing goes, and what holds them.
+   The runs stay separate full-length cables in "segments" — bundling changes how the harness is
+   assembled and drawn, never how long any wire is cut.
    Set "overall_length_mm" to the largest end-to-end dimension the drawing gives: the length of the whole
    harness, the figure a planner quotes and a stores clerk checks against. On the fan harness above that
    is 200, the longest run — not the sum of the runs, and not the shortest one.
@@ -8683,23 +8746,35 @@ RULES — these matter more than completeness:
    "drawing_number" is this harness's own part number (DRAWING NO). "drawing_name" is its description.
    "project" is the programme it belongs to. Never put the project name in drawing_number.
 
-7. CONFIRMED vs DERIVED. Set "confirmed": true ONLY when the value is printed on the drawing, or comes
+7. READ THE ENGINEERING NOTES BLOCK. Almost every drawing carries one, and it is where the
+   instructions live that are nowhere else on the sheet: the workmanship standard, whether the stated
+   length includes the connectors, which item is the lacing cord, where each label goes, where glue may
+   and may not reach, what to check afterwards. An operator working only from the dimensions will get a
+   part that measures correctly and is still rejected.
+   Put EVERY note in "engineering_notes", keeping its number. Then, for each note that tells the operator
+   to DO something, also write it into "steps" at the point in the sequence where it happens — a note
+   saying "tie all wires together at these points" is a step, not a footnote — and into "inspection" when
+   it is something to check. A note that only gives background (what "##" stands for, "see PIC 1") stays
+   in "engineering_notes" alone with "action":"".
+   If a note contradicts a dimension or a table, that goes in "discrepancies".
+
+8. CONFIRMED vs DERIVED. Set "confirmed": true ONLY when the value is printed on the drawing, or comes
    from a manufacturer datasheet you actually know for that exact part number. If you calculated it,
    inferred it from connector geometry, or took it from a similar part, set "confirmed": false and say
    so plainly in "basis". A wrong strip dimension destroys parts — never dress up a guess as a fact.
 
-8. Still give a number. When a dimension is not confirmed, provide your best engineering proposal anyway
+9. Still give a number. When a dimension is not confirmed, provide your best engineering proposal anyway
    with confirmed:false, so the sheet is usable while engineering verifies it. Only use null when you
    have no defensible basis at all.
 
-9. OPEN ITEMS. Every unconfirmed dimension gets an entry in "open_items" naming what is unverified, why,
+10. OPEN ITEMS. Every unconfirmed dimension gets an entry in "open_items" naming what is unverified, why,
    and the action that closes it.
 
-10. DISCREPANCIES. Report contradictions in the drawing rather than silently picking one: file name vs
+11. DISCREPANCIES. Report contradictions in the drawing rather than silently picking one: file name vs
    title block, balloon numbers vs part-list item numbers, dimensions that do not add up, a wiring table
    with more wires than the connector has positions. Do not "fix" them.
 
-11. CUT LENGTH vs FINISHED LENGTH — per segment, and it is what the operator actually cuts.
+12. CUT LENGTH vs FINISHED LENGTH — per segment, and it is what the operator actually cuts.
    "finished_length_mm" is the length AS DIMENSIONED ON THE DRAWING for that run, and "length_basis"
    says what that dimension measures:
      - "cable_only"       the dimension is the bare cable, connectors excluded
@@ -8716,7 +8791,7 @@ RULES — these matter more than completeness:
      - Insertion depth comes from the connector's assembly spec. Without it, give a defensible estimate,
        set confirmed:false, and say what it was derived from.
 
-12. MULTI-CONDUCTOR CABLE. Fill in "conductors" from the wiring table: one entry per wire, with its
+13. MULTI-CONDUCTOR CABLE. Fill in "conductors" from the wiring table: one entry per wire, with its
    signal name, colour, AWG and the pin it lands on at each end. This table IS the work instruction for
    a crimped harness — an operator cannot terminate without it, so do not leave it empty when the
    drawing has a wiring table. "conductor_strip_mm" is how much insulation comes off each individual
@@ -8725,18 +8800,18 @@ RULES — these matter more than completeness:
    cut back and insulated, or terminated to a ferrule. Getting this wrong is a functional failure that
    inspection will not catch.
 
-13. LAYERS run OUTERMOST FIRST. For single_wire there are two layers (insulation, conductor) and only
+14. LAYERS run OUTERMOST FIRST. For single_wire there are two layers (insulation, conductor) and only
    strip code "A". For a shielded multi-conductor cable list jacket, shield, and conductor insulation.
 
-14. STRIP CODES. "A" is always measured from the cable end. "derived":true marks a dimension that is
+15. STRIP CODES. "A" is always measured from the cable end. "derived":true marks a dimension that is
     arithmetic from the others (like C = A − B) rather than an independent setting.
 
-15. STEPS. Write for someone holding the cable, not for an engineer. Tag each step with the "segment"
+16. STEPS. Write for someone holding the cable, not for an engineer. Tag each step with the "segment"
     it belongs to when the harness has more than one, so the operator knows which run they are on.
     Include threading sleeves on BEFORE connectors if the assembly has sleeves — that mistake scraps
     the cable. Every segment must be covered by the steps, not just the first one.
 
-16. Units in millimetres throughout.`;
+17. Units in millimetres throughout.`;
 }
 
 const _CS_TRUNCATED='The analysis was cut off before it finished — this drawing produces more detail than one reply can hold. Try again; if it keeps happening, split the drawing or analyse it in English (Hebrew costs about twice the space).';
@@ -8777,6 +8852,8 @@ function _csParse(raw){
   obj.ends       = Array.isArray(obj.ends) ? obj.ends : [];
   obj.sleeves    = Array.isArray(obj.sleeves) ? obj.sleeves : [];
   obj.markers    = Array.isArray(obj.markers) ? obj.markers : [];
+  obj.engineering_notes = Array.isArray(obj.engineering_notes) ? obj.engineering_notes : [];
+  if(obj.bundle && typeof obj.bundle!=='object') obj.bundle=null;
   obj.materials  = Array.isArray(obj.materials) ? obj.materials : [];
   obj.inspection = Array.isArray(obj.inspection) ? obj.inspection : [];
   obj.tools      = Array.isArray(obj.tools) ? obj.tools : [];
@@ -8932,6 +9009,16 @@ function _csHarnessSVG(spec){
     : null;
   const branches=rows.concat(rest.map(sg=>({seg:sg, far:sg.to, len:_csCutLength(sg).total, fin:_csNum(sg.finished_length_mm), _loose:true})));
 
+  const bundled = !hubIsBreakout && branches.length>1;
+  const bundleMarks = bundled
+    ? (spec.markers||[]).filter(m=>
+        String(m.from_end||'').toUpperCase()===String(hub||'').toUpperCase() && _csNum(m.distance_mm)==null)
+    : [];
+  // Drawn once, on the bundle — so they must not also be drawn on a run.
+  Object.keys(marksBySeg).forEach(k=>{
+    marksBySeg[k]=marksBySeg[k].filter(m=>!bundleMarks.includes(m));
+  });
+
   const maxLen=Math.max(...segs.map(sg=>_csNum(_csCutLength(sg).total)||0), 1);
   const TOP=76, HUBX=560, LEFT=150;
   // A run carrying five label dimensions needs more vertical room than one
@@ -8957,6 +9044,24 @@ function _csHarnessSVG(spec){
   const W=1180, RIGHT=W-120;
   let g='';
 
+  // Where two or more runs arrive at the same connector and the drawing says
+  // they are laced together, the common stretch is ONE bundle. Draw it as one.
+  const MERGEX = HUBX-150;
+  if(bundled){
+    g+=`<line x1="${MERGEX}" y1="${hubY}" x2="${HUBX-18}" y2="${hubY}" stroke="#334155" stroke-width="15" stroke-linecap="round"/>
+        <line x1="${MERGEX}" y1="${hubY}" x2="${HUBX-18}" y2="${hubY}" stroke="#94A3B8" stroke-width="9" stroke-linecap="round"/>`;
+    const bn=spec.bundle||{};
+    const meth=[_csP(bn.method||''), bn.part_number||''].filter(Boolean).join(' · ');
+    // Clear of the connector's own ref, which _csConnBoxPlain sets at y-bh/2-8.
+    g+=`<text x="${(MERGEX+HUBX)/2}" y="${hubY-44}" text-anchor="middle" font-size="11" font-weight="700" fill="#334155"${rtlAttr}>${
+      _csSvgTxt(T('Laced into one bundle'))}${meth?` — ${_csSvgTxt(meth)}`:''}</text>`;
+    if(_csNum(bn.length_mm)!=null)
+      // Under the caption, not under the cable: the connector's part number is
+      // already printed below the bundle line.
+      g+=`<text x="${(MERGEX+HUBX)/2}" y="${hubY-28}" text-anchor="middle" font-size="10.5" font-family="monospace" fill="#64748B">${
+        _csNum(bn.length_mm)} mm</text>`;
+  }
+
   // hub itself
   if(hubIsBreakout){
     g+=`<ellipse cx="${HUBX}" cy="${hubY}" rx="15" ry="26" fill="#E2E8F0" stroke="#1E293B" stroke-width="1.6"/>
@@ -8970,12 +9075,12 @@ function _csHarnessSVG(spec){
   branches.forEach((r,i)=>{
     const y=rowY[i];
     const x0=LEFT;
-    g+=`<path d="M ${HUBX-18} ${hubY} Q ${HUBX-70} ${hubY} ${HUBX-90} ${(hubY+y)/2} Q ${HUBX-110} ${y} ${HUBX-150} ${y} L ${x0+52} ${y}"
-          fill="none" stroke="#475569" stroke-width="6" stroke-linecap="round"/>
-        <path d="M ${HUBX-18} ${hubY} Q ${HUBX-70} ${hubY} ${HUBX-90} ${(hubY+y)/2} Q ${HUBX-110} ${y} ${HUBX-150} ${y} L ${x0+52} ${y}"
-          fill="none" stroke="#CBD5E1" stroke-width="3.4" stroke-linecap="round"/>`;
+    const sx = bundled ? MERGEX : HUBX-18;
+    const path=`M ${sx} ${hubY} Q ${sx-40} ${hubY} ${sx-60} ${(hubY+y)/2} Q ${sx-80} ${y} ${sx-110} ${y} L ${x0+52} ${y}`;
+    g+=`<path d="${path}" fill="none" stroke="#475569" stroke-width="6" stroke-linecap="round"/>
+        <path d="${path}" fill="none" stroke="#CBD5E1" stroke-width="3.4" stroke-linecap="round"/>`;
     g+=_csConnBox(x0+52, y, r.far, pnOf(r.far), 'right2', kindOf(r.far));
-    g+=_csRunAnnot(spec, r, x0+52, HUBX-150, y, rtlAttr, T, false, segs.length===1, marksBySeg[r.seg.id]);
+    g+=_csRunAnnot(spec, r, x0+52, sx-110, y, rtlAttr, T, false, segs.length===1, marksBySeg[r.seg.id]);
   });
 
   // trunk runs right
@@ -8985,6 +9090,21 @@ function _csHarnessSVG(spec){
         <line x1="${HUBX+18}" y1="${y}" x2="${RIGHT}" y2="${y}" stroke="#CBD5E1" stroke-width="5" stroke-linecap="round"/>`;
     g+=_csConnBox(RIGHT, y, trunk.far, pnOf(trunk.far), 'right', kindOf(trunk.far));
     g+=_csRunAnnot(spec, trunk, HUBX+18, RIGHT, y, rtlAttr, T, true, segs.length===1, marksBySeg[trunk.seg.id]);
+  }
+
+  // Labels measured from the shared connector belong on the bundle, not hanging
+  // off one arbitrary branch — that is where the drawing prints them.
+  if(bundled){
+    bundleMarks.forEach((mk,k)=>{
+      const x=HUBX-95-k*34;      // clear of the connector body at HUBX
+      if(x<=MERGEX+8) return;
+      g+=`<rect x="${(x-8).toFixed(1)}" y="${hubY-14}" width="16" height="28" fill="#fff" stroke="#1E293B" stroke-width="1.2"/>
+          <text x="${x.toFixed(1)}" y="${hubY+5}" text-anchor="middle" font-size="10.5" font-weight="800" fill="#0F172A">${_csSvgTxt(mk.label||'')}</text>`;
+      if(mk.position)
+        g+=`<line x1="${x.toFixed(1)}" y1="${hubY+15}" x2="${x.toFixed(1)}" y2="${hubY+34+k*17}" stroke="#B45309" stroke-width="1" stroke-dasharray="2,2"/>
+            <text x="${x.toFixed(1)}" y="${hubY+46+k*17}" text-anchor="middle" font-size="10" font-weight="700" fill="#B45309"${rtlAttr}>${
+              _csSvgTxt(_csP(mk.position))}</text>`;
+    });
   }
 
   // The overall length, spanning the picture the way the drawing dimensions it.
@@ -9322,7 +9442,7 @@ async function handleCSFile(file){
                       const b=document.getElementById('cs-prog'); if(b)b.style.width=p+'%'; };
 
   try{
-    let text='', isImage=false, imgData=null;
+    let text='', isImage=false, imgData=null, srcImage=null;
     if(isPDF){
       setM('Extracting drawing…',20);
       const {pageTexts,pageImages}=await extractPDFPages(file);
@@ -9335,10 +9455,12 @@ async function handleCSFile(file){
         console.log('[CutStrip] drawing image',(pageImages[0].length/1e6).toFixed(2),'MB →',
                     (small.length/1e6).toFixed(2),'MB base64');
         isImage=true; imgData={mimeType:'image/jpeg', b64:small};
+        srcImage=await _csRefImage(pageImages[0]);
       }
     } else {
       setM('Reading image…',20);
       imgData=await encodeImage(file); isImage=true;
+      if(imgData && imgData.b64) srcImage=await _csRefImage(imgData.b64);
     }
 
     // Generated straight into the display language. No translation pass on the
@@ -9350,6 +9472,7 @@ async function handleCSFile(file){
     // buttons, exactly like each other.
     setM('Analysing cut & strip requirements… a dense drawing can take up to 2 minutes — leave this open',55);
     const spec=await aiAnalyzeCutStrip(text, isImage, imgData, _CS_SOURCE_LANG);
+    if(srcImage) spec.source_image=srcImage;
 
     // A drawing number is what the sheet is filed and found under. Falling back
     // to the file name is better than an "UNTITLED" doc, but it is recorded as a
@@ -9669,6 +9792,25 @@ function renderCutStripSheet(){
              : `${_csDim(m.distance_mm, m.confirmed)} <span class="cs-ltr" style="font-size:11px">${esc(T('from'))} ${esc(m.from_end||'')}</span>`)}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
 
+    ${(spec.engineering_notes||[]).length ? `
+    <h2 class="cs-h2"><span class="cs-n">2b</span>${esc(T('Engineering notes from the drawing'))}</h2>
+    <div class="cs-pad">
+      <div class="cs-box cs-info" style="border-color:#B45309;background:#FFFBEB;color:#7C2D12">
+        ${esc(T('These come from the drawing itself. A part that measures correctly and ignores these is still rejected.'))}
+      </div>
+      <table class="cs-tbl"><thead><tr><th style="width:52px">#</th>
+        <th>${esc(T('Note'))}</th><th style="width:130px">${esc(T('Applies to'))}</th>
+        <th style="width:34%">${esc(T('What the operator must do'))}</th></tr></thead>
+        <tbody>${spec.engineering_notes.map((nt,i)=>`<tr>
+          <td class="cs-ctr cs-ltr"><b>${_csFRaw(`engineering_notes.${i}.n`, nt.n)}</b></td>
+          <td>${_csFText(`engineering_notes.${i}.text`, nt.text, true)}</td>
+          <td class="cs-ltr" style="font-size:12px">${_csFRaw(`engineering_notes.${i}.applies_to`, nt.applies_to)}</td>
+          <td>${nt.action||_csEditing
+            ? `<b>${_csFText(`engineering_notes.${i}.action`, nt.action)}</b>`
+            : `<span style="color:#94A3B8">${esc(T('background — nothing to do'))}</span>`}</td></tr>`).join('')}
+        </tbody></table>
+    </div>` : ''}
+
     <h2 class="cs-h2"><span class="cs-n">03</span>${esc(T('Harness layout'))}</h2>
     <div class="cs-pad">
       <div class="cs-box cs-info" style="border-color:#2563EB;background:#EFF6FF;color:#1E3A8A">
@@ -9684,7 +9826,22 @@ function renderCutStripSheet(){
             <span class="cs-ltr">${ov.mismatch.stated} mm</span>, ${esc(T('but the longest route through this harness is'))}
             <span class="cs-ltr">${ov.mismatch.longest} mm</span> — ${esc(T('confirm before cutting.'))}</p>`:''}
         </div>`; })()}
+      ${spec.source_image ? `
+      <figure class="cs-fig" style="text-align:center">
+        <img src="data:image/jpeg;base64,${esc(spec.source_image)}" alt=""
+             style="max-width:100%;height:auto;border:1px solid #CBD5E1;border-radius:4px"/>
+        <figcaption style="font-size:11.5px;color:#64748B;margin-top:6px"${_csRTL()?' dir="rtl"':''}>${
+          esc(T('The original drawing, as supplied. The figure below is this sheet\'s reading of it — if the two disagree, the drawing wins.'))}</figcaption>
+      </figure>` : ''}
       <figure class="cs-fig">${_csHarnessSVG(spec)}</figure>
+      ${spec.bundle && (spec.bundle.method||spec.bundle.length_mm!=null||spec.bundle.note) ? `
+      <div class="cs-box cs-info">
+        <b>${esc(T('These runs are laced into one bundle'))}${spec.bundle.at?` — ${esc(T('into'))} ${esc(spec.bundle.at)}`:''}</b>
+        <p>${[_csP(spec.bundle.method||''), spec.bundle.part_number||'',
+              _csNum(spec.bundle.length_mm)!=null?_csMM(spec.bundle.length_mm):''].filter(Boolean).map(esc).join(' · ')}</p>
+        ${spec.bundle.note?`<p>${esc(_csP(spec.bundle.note))}</p>`:''}
+        <p style="color:#475569">${esc(T('Bundling changes how the harness is assembled — it never changes how long a wire is cut.'))}</p>
+      </div>` : ''}
       ${(spec.route_dimensions||[]).length ? `
       <h3 class="cs-h3">${esc(T('Lengths as dimensioned on the drawing'))}</h3>
       <table class="cs-tbl"><thead><tr><th style="width:200px">${esc(T('Span'))}</th>
