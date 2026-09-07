@@ -8022,6 +8022,25 @@ function _csCableTotals(spec){
   return Object.values(by);
 }
 
+// The harness's own overall length — the single number a planner quotes and a
+// stores clerk checks. Three candidates can disagree: what the drawing states,
+// the longest end-to-end route through the model, and the longest single run.
+// We report all three rather than picking one, for the same reason
+// _csRouteMismatches reports instead of reconciling: which one is wrong is
+// exactly the thing a human has to decide.
+function _csOverall(spec){
+  const stated=_csNum(spec&&spec.overall_length_mm);
+  let longest=null, span=null;
+  _csRoutes(spec).forEach(r=>{ if(r.mm!=null && (longest==null||r.mm>longest)){ longest=r.mm; span=r.from+' → '+r.to; } });
+  if(longest==null) _csSegments(spec).forEach(seg=>{
+    const f=_csCutLength(seg).finished ?? _csNum(seg.finished_length_mm);
+    if(f!=null && (longest==null||f>longest)){ longest=f; span=_csSegLabel(seg); } });
+  const value = stated ?? longest;
+  const mismatch = (stated!=null && longest!=null && Math.abs(stated-longest)>0.5)
+    ? {stated, longest, span} : null;
+  return {value, stated, longest, span, mismatch};
+}
+
 // ── Translation ───────────────────────────────────────────────────────────────
 // This screen behaves differently from the Labor Breakdown dialog, on purpose.
 // A breakdown is read by whoever is quoting; a cut & strip sheet is read at the
@@ -8065,6 +8084,12 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    'Overall length':'אורך כולל',
+    'Overall length of the whole harness':'אורך כולל של כל הצמה',
+    'The drawing states':'בסרטוט רשום',
+    'but the longest route through this harness is':'אך המסלול הארוך ביותר בצמה הוא',
+    'confirm before cutting.':'לאמת לפני חיתוך.',
+    'Labels not placed on the figure':'תוויות שלא מוקמו בסרטוט',
     'Cut & Strip Specification':'מפרט חיתוך וחשיפה',
     'Drawing':'סרטוט','Revision':'מהדורה','Spec no.':'מספר מפרט','Workmanship':'תקן עבודה',
     'Cable':'כבל','Cut length':'אורך חיתוך','Issued':'הונפק','Status':'סטטוס',
@@ -8167,6 +8192,12 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    'Overall length':'Общая длина',
+    'Overall length of the whole harness':'Общая длина всего жгута',
+    'The drawing states':'На чертеже указано',
+    'but the longest route through this harness is':'но самый длинный маршрут в жгуте',
+    'confirm before cutting.':'подтвердить перед резкой.',
+    'Labels not placed on the figure':'Метки, не размещённые на чертеже',
     'Cut & Strip Specification':'Спецификация резки и зачистки',
     'Drawing':'Чертёж','Revision':'Ревизия','Spec no.':'№ спецификации','Workmanship':'Стандарт',
     'Cable':'Кабель','Cut length':'Длина реза','Issued':'Выпущено','Status':'Статус',
@@ -8450,13 +8481,18 @@ function _csShrinkJpeg(b64, maxDim, quality){
   return new Promise(resolve=>{
     const img=new Image();
     img.onload=()=>{
-      const scale=Math.min(1, maxDim/Math.max(img.width,img.height));
-      if(scale>=1){ resolve(b64); return; }
-      const c=document.createElement('canvas');
-      c.width=Math.round(img.width*scale); c.height=Math.round(img.height*scale);
-      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-      try{ resolve(c.toDataURL('image/jpeg',quality).split(',')[1]); }
-      catch{ resolve(b64); }          // tainted canvas etc — the original still works
+      // The whole body is guarded, not just toDataURL. A throw anywhere in here
+      // used to leave this promise unsettled forever — the analysis would then
+      // hang until the 180 s timeout with no clue why. Allocating a canvas for a
+      // large scan is exactly the kind of call that fails on a loaded machine.
+      try{
+        const scale=Math.min(1, maxDim/Math.max(img.width,img.height));
+        if(scale>=1){ resolve(b64); return; }
+        const c=document.createElement('canvas');
+        c.width=Math.round(img.width*scale); c.height=Math.round(img.height*scale);
+        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+        resolve(c.toDataURL('image/jpeg',quality).split(',')[1]);
+      }catch{ resolve(b64); }   // tainted canvas, no memory — the original still works
     };
     img.onerror=()=>resolve(b64);     // never let a resize failure block the analysis
     img.src='data:image/jpeg;base64,'+b64;
@@ -8506,6 +8542,7 @@ Return ONLY a JSON object. No markdown fence, no commentary.
 
   "topology": "point_to_point | breakout | multi_branch",
   "route_dimensions": [ {"from":"P1","to":"P4","mm":200,"what":"what the arrow spans, as drawn"} ],
+  "overall_length_mm": <the longest end-to-end dimension on the drawing — the harness's own overall length>,
   "breakouts": [ {"id":"BR1","note":"where the trunk fans out into the branches"} ],
 
   "connectors": [
@@ -8552,6 +8589,7 @@ Return ONLY a JSON object. No markdown fence, no commentary.
   "sleeves":  [ {"part_number":"","kind":"heatshrink","segment":"S1","from_end":"P1","distance_mm":0,
                  "length_mm":5,"qty":2,"position":"plain-language position","confirmed":true} ],
   "markers":  [ {"part_number":"","label":"A","segment":"S1","from_end":"P1","distance_mm":50,
+                 "position":"where the drawing says to put it, in words, when it gives no dimension",
                  "confirmed":false,"text_lines":["DB9 FEMALE","RS422"]} ],
   "materials":[ {"item":1,"part_number":"","manufacturer":"","description":"","qty":"1","ref":"P1"} ],
   "steps":    [ {"n":1,"segment":"S1","title":"short imperative title",
@@ -8571,9 +8609,23 @@ RULES — these matter more than completeness:
    print on a marker sleeve. Those letters identify SLEEVES placed along the cable — they are markers,
    and they belong in "markers" with their text in "text_lines". They are NOT connectors and must never
    become entries in "connectors" or appear as "from"/"to" on a segment.
-   Connectors come from the PART LIST and from the connector bodies drawn on the assembly view. Name
-   them by their real reference designator (J1, P1, WSRV1) or, when the drawing gives none, by what they
-   are (DB9, RJ45, CIRC-22). A label letter that happens to sit next to a connector does not rename it.
+   EVERY ROW OF THAT TABLE MUST APPEAR IN "markers" — all of them, not the ones that were easy to place.
+   A marking table with rows B, C, D, E and F produces FIVE markers. If a label's position is described in
+   words rather than dimensioned ("place E on the soldering points", "as close as possible to the
+   connector"), still create the marker: put the words in "position", leave "distance_mm" null, and add an
+   open item asking for the dimension. A label left out is a label the operator never fits.
+
+   Connectors come from the PART LIST and from the connector bodies drawn on the assembly view.
+
+   USE THE DESIGNATOR PRINTED NEXT TO EACH CONNECTOR BODY, EXACTLY AS DRAWN. If the assembly view labels
+   the fans P2, P3, P4 then those are their refs — do not renumber them, do not shift them, and do not
+   take them from a different table. Copy the qualifier too when there is one: "P2 (FAN1)" tells the
+   operator which physical part it is, so keep it in "description".
+   If the WIRING TABLE uses different designators from the assembly view (a real drawing may say P2/P3/P4
+   on the picture and P3/P4/P5 in the table), follow the ASSEMBLY VIEW, and record the disagreement in
+   "discrepancies" naming both. Do not quietly pick one — an operator plugging into the wrong fan is a
+   fault nobody catches until the unit is running.
+   Only invent a name (DB9, RJ45, OPEN) when the drawing genuinely prints none.
 
 2. BUNDLING IS NOT A BREAKOUT. Get this right before you assign any length.
    Wires that simply run side by side — laced, taped, tied or sleeved together — are still SEPARATE runs.
@@ -8608,6 +8660,9 @@ RULES — these matter more than completeness:
    If a genuine trunk exists, the trunk gets its own dimension and the branches get theirs; if the drawing
    only gives end-to-end figures, model separate full-length runs (see rule 2) so nothing has to be guessed.
    Contradictory dimensions go in "discrepancies" — do not silently pick one.
+   Set "overall_length_mm" to the largest end-to-end dimension the drawing gives: the length of the whole
+   harness, the figure a planner quotes and a stores clerk checks against. On the fan harness above that
+   is 200, the longest run — not the sum of the runs, and not the shortest one.
 
 5. COUNT THE CABLES AND THE CONNECTORS FIRST, AND COVER ALL OF THEM.
    Look at the assembly view and count every connector body and every separate cable run. A harness with
@@ -8846,9 +8901,22 @@ function _csHarnessSVG(spec){
   const branches=rows.concat(rest.map(sg=>({seg:sg, far:sg.to, len:_csCutLength(sg).total, fin:_csNum(sg.finished_length_mm), _loose:true})));
 
   const maxLen=Math.max(...segs.map(sg=>_csNum(_csCutLength(sg).total)||0), 1);
-  const ROW=118, TOP=76, HUBX=560, LEFT=150;
-  const H = TOP + Math.max(branches.length,1)*ROW + (trunk?90:40) + (segs.length===1?26:0);
-  const hubY = TOP + (Math.max(branches.length,1)-1)*ROW/2 + 16;
+  const TOP=76, HUBX=560, LEFT=150;
+  // A run carrying five label dimensions needs more vertical room than one
+  // carrying none. A fixed row height was letting the lower annotations of one
+  // run land on top of the next run's cable — which is how a 200 mm dimension
+  // ended up looking like it belonged to the 180 mm branch below it.
+  const rowH=r=>{
+    const marks=(spec.markers||[]).filter(m=>!m.segment||m.segment===r.seg.id).length;
+    const cut=_csCutLength(r.seg);
+    return 74 + marks*20 + ((cut.hasBreakdown&&cut.added!==0)?32:0);
+  };
+  const heights=branches.map(rowH);
+  const rowY=[]; let acc=TOP+16;
+  heights.forEach(h=>{ rowY.push(acc); acc+=h; });
+  const bodyH=Math.max(acc-TOP-16, 100);
+  const H = TOP + bodyH + (trunk?90:46) + 56 + (segs.length===1?26:0);
+  const hubY = branches.length ? (rowY[0]+rowY[rowY.length-1])/2 : TOP+16;
 
   const W=1180, RIGHT=W-120;
   let g='';
@@ -8864,7 +8932,7 @@ function _csHarnessSVG(spec){
 
   // branches fan out to the LEFT of the hub, stacked
   branches.forEach((r,i)=>{
-    const y=TOP + i*ROW + 16;
+    const y=rowY[i];
     const x0=LEFT;
     g+=`<path d="M ${HUBX-18} ${hubY} Q ${HUBX-70} ${hubY} ${HUBX-90} ${(hubY+y)/2} Q ${HUBX-110} ${y} ${HUBX-150} ${y} L ${x0+52} ${y}"
           fill="none" stroke="#475569" stroke-width="6" stroke-linecap="round"/>
@@ -8881,6 +8949,25 @@ function _csHarnessSVG(spec){
         <line x1="${HUBX+18}" y1="${y}" x2="${RIGHT}" y2="${y}" stroke="#CBD5E1" stroke-width="5" stroke-linecap="round"/>`;
     g+=_csConnBox(RIGHT, y, trunk.far, pnOf(trunk.far), 'right', kindOf(trunk.far));
     g+=_csRunAnnot(spec, trunk, HUBX+18, RIGHT, y, rtlAttr, T, true, segs.length===1);
+  }
+
+  // The overall length, spanning the picture the way the drawing dimensions it.
+  const ov=_csOverall(spec);
+  if(ov.value!=null){
+    const oy=H-58;
+    g+=`<line x1="60" y1="${oy}" x2="${W-60}" y2="${oy}" stroke="#0F172A" stroke-width="1.4" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
+        <rect x="${W/2-190}" y="${oy-15}" width="380" height="26" fill="#fff"/>
+        <text x="${W/2-8}" y="${oy+5}" text-anchor="end" font-size="13" font-weight="800" fill="#0F172A"${rtlAttr}>${
+          _csSvgTxt(T('Overall length'))}</text>
+        <text x="${W/2}" y="${oy+5}" text-anchor="start" font-size="13" font-weight="800" fill="#0F172A" font-family="monospace">${ov.value} mm${
+          ov.span?`  (${_csSvgTxt(ov.span)})`:''}</text>`;
+  }
+  // A label the model could not place on any run still has to reach the operator.
+  const segIds=segs.map(x=>x.id);
+  const unplaced=(spec.markers||[]).filter(m=>m.segment && !segIds.includes(m.segment));
+  if(unplaced.length){
+    g+=`<text x="30" y="${H-28}" font-size="10.5" font-weight="700" fill="#B45309"${rtlAttr}>${
+      _csSvgTxt(T('Labels not placed on the figure'))}: ${_csSvgTxt(unplaced.map(m=>m.label||'?').join(', '))}</text>`;
   }
 
   const anyTBC=(spec.markers||[]).some(m=>m.confirmed===false);
@@ -8900,49 +8987,69 @@ function _csHarnessSVG(spec){
 
 // Everything drawn along one run: its id and cable, the sleeves and markers
 // that sit on it, the dimensioned length, and the cut length when they differ.
-function _csRunAnnot(spec, r, xNear, xFar, y, rtlAttr, T, isTrunk, showFormula){
+function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, showFormula){
   const seg=r.seg, cut=_csCutLength(seg);
   const len=_csNum(r.len)||0;
-  const xa=Math.min(xNear,xFar), xb=Math.max(xNear,xFar);
+  const xa=Math.min(xFarEnd,xHubEnd), xb=Math.max(xFarEnd,xHubEnd);
   const scale=len>0 ? (xb-xa)/len : 0;
+  // A distance is measured from a NAMED end, so it has to be laid off from that
+  // end's own x — not from whichever end happens to be on the left of the page.
+  const dir=xHubEnd>xFarEnd ? 1 : -1;   // +1 when the hub is to the right
+  const at=(fromEnd, mm)=>{
+    const d=(_csNum(mm)||0)*scale;
+    return String(fromEnd||'').toUpperCase()===String(r.far).toUpperCase()
+      ? xFarEnd + dir*d          // measured from the far connector, inwards
+      : xHubEnd - dir*d;         // measured from the shared end, inwards
+  };
+  const anchorOf=fromEnd=>String(fromEnd||'').toUpperCase()===String(r.far).toUpperCase() ? xFarEnd : xHubEnd;
   let g=`<text x="${(xa+xb)/2}" y="${y-16}" text-anchor="middle" font-size="11" font-weight="700" fill="#334155">${
     _csSvgTxt(seg.id||'')}${seg.cable_part_number?` · ${_csSvgTxt(seg.cable_part_number)}`:''}</text>`;
 
   (spec.sleeves||[]).filter(sl=>!sl.segment||sl.segment===seg.id).forEach(sl=>{
     const w=Math.max(6,(_csNum(sl.length_mm)||0)*scale);
-    const atFar=String(sl.from_end||'').toUpperCase()===String(r.far).toUpperCase();
-    const x=atFar ? xb-(_csNum(sl.distance_mm)||0)*scale-w : xa+(_csNum(sl.distance_mm)||0)*scale;
+    // The sleeve starts at its distance and occupies w INWARDS from that end.
+    const x0s=at(sl.from_end, sl.distance_mm);
+    const inward=(anchorOf(sl.from_end)===xFarEnd) ? dir : -dir;
+    const x=inward>0 ? x0s : x0s-w;
     g+=`<rect x="${x.toFixed(1)}" y="${y-11}" width="${w.toFixed(1)}" height="22" fill="url(#csHatch)" stroke="#1E293B" stroke-width="1"/>`;
   });
 
-  let dimY=y+34;
-  (spec.markers||[]).filter(m=>!m.segment||m.segment===seg.id).forEach(mk=>{
-    const atFar=String(mk.from_end||'').toUpperCase()===String(r.far).toUpperCase();
-    const x=atFar ? xb-(_csNum(mk.distance_mm)||0)*scale : xa+(_csNum(mk.distance_mm)||0)*scale;
-    const anchor=atFar?xb:xa, bad=mk.confirmed===false, col=bad?'#DC2626':'#334155';
-    g+=`<rect x="${(x-7).toFixed(1)}" y="${y-13}" width="14" height="26" fill="#fff" stroke="#1E293B" stroke-width="1.2"/>
-        <text x="${x.toFixed(1)}" y="${y+4}" text-anchor="middle" font-size="10.5" font-weight="800" fill="#0F172A">${_csSvgTxt(mk.label||'')}</text>
-        <line x1="${Math.min(anchor,x).toFixed(1)}" y1="${dimY}" x2="${Math.max(anchor,x).toFixed(1)}" y2="${dimY}" stroke="${col}" stroke-width="1" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
-        <rect x="${((anchor+x)/2-22).toFixed(1)}" y="${dimY-10}" width="44" height="17" fill="#fff"/>
-        <text x="${((anchor+x)/2).toFixed(1)}" y="${dimY+3}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${col}">${_csNum(mk.distance_mm)??'?'}${bad?' *':''}</text>`;
-    dimY+=20;
-  });
-
-  const ly=Math.max(y+34, dimY);
+  const ly=y+46;   // clears the connector part number, which sits at y+30
   g+=`<line x1="${xa}" y1="${ly}" x2="${xb}" y2="${ly}" stroke="#0F172A" stroke-width="1.2" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
       <rect x="${((xa+xb)/2-54)}" y="${ly-12}" width="108" height="19" fill="#fff"/>
       <text x="${((xa+xb)/2).toFixed(1)}" y="${ly+4}" text-anchor="middle" font-size="13" font-weight="800" fill="#0F172A">${
         cut.hasBreakdown&&cut.added!==0 ? cut.finished+' mm' : (_csNum(r.len)!=null?r.len+' mm':'? mm')}</text>`;
+  let dimY=ly+24;
   if(cut.hasBreakdown && cut.added!==0){
-    g+=`<rect x="${((xa+xb)/2-92)}" y="${ly+9}" width="184" height="20" fill="#FEF3C7" stroke="#B45309" stroke-width="1"/>
-        <text x="${((xa+xb)/2).toFixed(1)}" y="${ly+23}" text-anchor="middle" font-size="11" font-weight="700" fill="#7C2D12"${rtlAttr}>${
+    g+=`<rect x="${((xa+xb)/2-92)}" y="${dimY-13}" width="184" height="20" fill="#FEF3C7" stroke="#B45309" stroke-width="1"/>
+        <text x="${((xa+xb)/2).toFixed(1)}" y="${dimY+1}" text-anchor="middle" font-size="11" font-weight="700" fill="#7C2D12"${rtlAttr}>${
           _csSvgTxt(T('CUT'))} ${cut.total} mm</text>`;
+    dimY+=24;
     // The full sum is printed on the figure only when there is one run to print
     // it for. On a breakout harness four formulas would bury the drawing, and
     // each run's cut-length table carries its own arithmetic anyway.
-    if(showFormula)
-      g+=`<text x="${((xa+xb)/2).toFixed(1)}" y="${ly+44}" text-anchor="middle" font-size="11.5" font-family="monospace" fill="#7C2D12">${_csSvgTxt(_csCutFormula(seg))}</text>`;
+    if(showFormula){
+      g+=`<text x="${((xa+xb)/2).toFixed(1)}" y="${dimY}" text-anchor="middle" font-size="11.5" font-family="monospace" fill="#7C2D12">${_csSvgTxt(_csCutFormula(seg))}</text>`;
+      dimY+=22;
+    }
   }
+  (spec.markers||[]).filter(m=>!m.segment||m.segment===seg.id).forEach(mk=>{
+    const x=at(mk.from_end, mk.distance_mm);
+    const anchor=anchorOf(mk.from_end), bad=mk.confirmed===false, col=bad?'#DC2626':'#334155';
+    g+=`<rect x="${(x-7).toFixed(1)}" y="${y-13}" width="14" height="26" fill="#fff" stroke="#1E293B" stroke-width="1.2"/>
+        <text x="${x.toFixed(1)}" y="${y+4}" text-anchor="middle" font-size="10.5" font-weight="800" fill="#0F172A">${_csSvgTxt(mk.label||'')}</text>`;
+    if(_csNum(mk.distance_mm)==null && mk.position){
+      // No dimension on the drawing — print the placement note instead of an
+      // arrow to nowhere, so the operator still knows where the label goes.
+      g+=`<text x="${x.toFixed(1)}" y="${dimY+3}" text-anchor="middle" font-size="10" font-weight="700" fill="#B45309"${rtlAttr}>${
+        _csSvgTxt(_csP(mk.position))}</text>`;
+      dimY+=18; return;
+    }
+    g+=`<line x1="${Math.min(anchor,x).toFixed(1)}" y1="${dimY}" x2="${Math.max(anchor,x).toFixed(1)}" y2="${dimY}" stroke="${col}" stroke-width="1" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
+        <rect x="${((anchor+x)/2-22).toFixed(1)}" y="${dimY-10}" width="44" height="17" fill="#fff"/>
+        <text x="${((anchor+x)/2).toFixed(1)}" y="${dimY+3}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${col}">${_csNum(mk.distance_mm)??'?'}${bad?' *':''}</text>`;
+    dimY+=20;
+  });
   return g;
 }
 
@@ -9509,7 +9616,9 @@ function renderCutStripSheet(){
         <td class="cs-ltr" style="font-size:12.5px">${esc((m.text_lines||[]).join(' / '))}</td>
         <td class="cs-ctr">${_csEditing
           ? `${_csFNum(`markers.${i}.distance_mm`, m.distance_mm, ' mm')} ${_csFChk(`markers.${i}.confirmed`, m.confirmed===true, T('Confirmed'))}`
-          : `${_csDim(m.distance_mm, m.confirmed)} <span class="cs-ltr" style="font-size:11px">${esc(T('from'))} ${esc(m.from_end||'')}</span>`}</td></tr>`).join('')}
+          : (_csNum(m.distance_mm)==null && m.position
+             ? `<span style="font-size:11.5px;color:#B45309;font-weight:700">${esc(_csP(m.position))}</span>`
+             : `${_csDim(m.distance_mm, m.confirmed)} <span class="cs-ltr" style="font-size:11px">${esc(T('from'))} ${esc(m.from_end||'')}</span>`)}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
 
     <h2 class="cs-h2"><span class="cs-n">03</span>${esc(T('Harness layout'))}</h2>
@@ -9519,6 +9628,14 @@ function renderCutStripSheet(){
           _csBreakouts(spec).length?` + ${_csBreakouts(spec).length} ${esc(T('Breakout'))}`:''}.</b>
         <p>${_csSegments(spec).map(s=>`<span class="cs-ltr">${esc(s.id)}: ${esc(_csSegLabel(s))}</span>`).join(' &nbsp;·&nbsp; ')}</p>
       </div>
+      ${(()=>{ const ov=_csOverall(spec); if(ov.value==null) return '';
+        return `<div class="cs-box cs-info" style="border-color:#0F172A;background:#F8FAFC;color:#0F172A">
+          <b>${esc(T('Overall length of the whole harness'))}: <span class="cs-ltr">${esc(_csMM(ov.value))}</span></b>
+          ${ov.span?`<span class="cs-ltr" style="font-size:12px;color:#64748B"> (${esc(ov.span)})</span>`:''}
+          ${ov.mismatch?`<p style="color:#B45309;font-weight:700">${esc(T('The drawing states'))}
+            <span class="cs-ltr">${ov.mismatch.stated} mm</span>, ${esc(T('but the longest route through this harness is'))}
+            <span class="cs-ltr">${ov.mismatch.longest} mm</span> — ${esc(T('confirm before cutting.'))}</p>`:''}
+        </div>`; })()}
       <figure class="cs-fig">${_csHarnessSVG(spec)}</figure>
       ${(spec.route_dimensions||[]).length ? `
       <h3 class="cs-h3">${esc(T('Lengths as dimensioned on the drawing'))}</h3>
@@ -9684,7 +9801,8 @@ function renderCutStripSheet(){
         <td>${_csFRaw(`markers.${i}.part_number`, m.part_number)}</td>
         <td>${_csFRaw(`markers.${i}.from_end`, m.from_end)}</td>
         <td>${_csFNum(`markers.${i}.distance_mm`, m.distance_mm, ' mm')}
-            ${_csFChk(`markers.${i}.confirmed`, m.confirmed===true, T('Confirmed'))}</td></tr>`).join('')}
+            ${_csFChk(`markers.${i}.confirmed`, m.confirmed===true, T('Confirmed'))}
+            ${_csFText(`markers.${i}.position`, m.position)}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
 
     <div class="cs-pad">
