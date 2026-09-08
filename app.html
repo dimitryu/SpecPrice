@@ -633,7 +633,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.27.0';
+const APP_VER   = '1.28.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -8308,15 +8308,13 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
-    "How this cut length is worked out":"איך אורך החיתוך הזה מחושב",
-    "To where the jacket ends at each end — this shop’s rule":"עד המקום שבו נגמר המעטה בכל קצה — הכלל של המפעל הזה",
-    "The analysis read the drawing dimension as":"הניתוח קרא את המידה בסרטוט כ",
-    "the cut length below follows the shop rule, not that reading.":"אורך החיתוך שלמטה נגזר מכלל המפעל, לא מהקריאה הזו.",
+    "measured inside A — it adds nothing to the cut length":"נמדד בתוך A — לא מוסיף כלום לאורך החיתוך",
+    "This end adds to the cut length":"הקצה הזה מוסיף לאורך החיתוך",
+    "The length marked on the drawing. It is not the length you cut.":"האורך המסומן בסרטוט. זה לא האורך שחותכים.",
     "A dimension in the written instructions is not one of this sheet’s numbers":"מידה בהוראות המילוליות אינה אחד המספרים של הדף הזה",
     "The tables and the figures are computed from the same fields, so they always agree. Text is written separately and can drift. Correct the text, or add the missing dimension where it belongs.":"הטבלאות והסרטוטים מחושבים מאותם שדות, ולכן הם תמיד מסכימים. הטקסט נכתב בנפרד ויכול לסטות. לתקן את הטקסט, או להוסיף את המידה החסרה במקום שלה.",
     "Step":"שלב",
     "Inspection":"בדיקה",
-    "superseded by the jacket-strip rule":"מבוטל — מוחלף בכלל חשיפת המעטה",
     "each conductor":"כל מוליך",
     "The letter in front of each line is the code used on the strip figure above.":"האות שלפני כל שורה היא הקוד שמופיע בסרטוט החשיפה שמעל.",
     "The drawing as supplied, with the title block masked. Nothing is drawn over the harness; the cut lengths are in the table above.":"הסרטוט כפי שנמסר, כשאזור הכותרת מוסתר. לא צויר דבר על הצמה; אורכי החיתוך נמצאים בטבלה שמעל.",
@@ -8479,15 +8477,13 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
-    "How this cut length is worked out":"Как рассчитана эта длина реза",
-    "To where the jacket ends at each end — this shop’s rule":"До конца оболочки с каждой стороны — правило этого цеха",
-    "The analysis read the drawing dimension as":"Анализ прочитал размер на чертеже как",
-    "the cut length below follows the shop rule, not that reading.":"длина реза ниже следует правилу цеха, а не этому прочтению.",
+    "measured inside A — it adds nothing to the cut length":"измеряется внутри A — к длине реза не добавляет",
+    "This end adds to the cut length":"Этот конец добавляет к длине реза",
+    "The length marked on the drawing. It is not the length you cut.":"Длина, указанная на чертеже. Это не длина реза.",
     "A dimension in the written instructions is not one of this sheet’s numbers":"Размер в текстовых инструкциях не совпадает ни с одним числом этого листа",
     "The tables and the figures are computed from the same fields, so they always agree. Text is written separately and can drift. Correct the text, or add the missing dimension where it belongs.":"Таблицы и рисунки считаются из одних и тех же полей и всегда согласованы. Текст пишется отдельно и может разойтись. Исправьте текст или добавьте недостающий размер.",
     "Step":"Шаг",
     "Inspection":"Контроль",
-    "superseded by the jacket-strip rule":"заменён правилом зачистки оболочки",
     "each conductor":"каждый проводник",
     "The letter in front of each line is the code used on the strip figure above.":"Буква перед строкой — код, показанный на рисунке зачистки выше.",
     "The drawing as supplied, with the title block masked. Nothing is drawn over the harness; the cut lengths are in the table above.":"Чертёж как получен, штамп закрыт. Поверх жгута ничего не нанесено; длины реза — в таблице выше.",
@@ -9706,7 +9702,7 @@ function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, showForm
 // list and its strip dimensions: cuts sorted ascending from the tip give the
 // boundary between one layer and the next, so a 3-layer coax draws 3 steps and a
 // 2-layer wire draws 2, with no special-casing.
-function _csStripSVG(seg, end){
+function _csStripSVG(seg, end, spec){
   const T=_csT, rtlAttr=_csRTL()?' direction="rtl"':'';
   const allLayers=(seg?.layers||[]).slice();         // outermost first
   const cuts0=(end?.strip||[]).filter(s=>!s.derived && _csNum(s.value_mm)>0);
@@ -9774,7 +9770,27 @@ function _csStripSVG(seg, end){
     g+=`<line x1="${X_TIP-cs*S}" y1="${CY-((n-1)/2)*13-12}" x2="${X_TIP-cs*S}" y2="${CY+((n-1)/2)*13+12}" stroke="#DC2626" stroke-width="2"/>
         <text x="${(X_TIP-cs*S/2).toFixed(1)}" y="${y+4}" text-anchor="middle" font-size="12.5" font-weight="800" fill="${seg.conductor_strip_confirmed?'#0F172A':'#DC2626'}"${rtlAttr}>${
           _csSvgTxt(T('Each conductor'))}: ${cs} mm${seg.conductor_strip_confirmed?'':' *'}</text>`;
-    y+=26;
+    y+=16;
+    // Read off the picture, 8 and 2 look like 10. They are not: the conductor is
+    // bared WITHIN the length the jacket already exposes, so it adds nothing to
+    // what has to be cut. Saying so on the figure is the difference between a
+    // number an operator trusts and one they have to reason about.
+    g+=`<text x="${(X_TIP-cs*S/2).toFixed(1)}" y="${y+4}" text-anchor="middle" font-size="10.5" fill="#7C2D12"${rtlAttr}>${
+      _csSvgTxt(T('measured inside A — it adds nothing to the cut length'))}</text>`;
+    y+=24;
+  }
+
+  // The one number this end contributes to the cut length, spelled out exactly as
+  // the cut table spells it. Both read the same fields, so they cannot disagree —
+  // and now the operator can see that without holding two pages side by side.
+  const _ec=(_csCutLength(seg, spec).endCosts||[])
+    .find(e=>String(e.ref||'').toUpperCase()===String(end?.ref||'').toUpperCase());
+  if(_ec){
+    g+=`<rect x="300" y="${y-2}" width="400" height="26" fill="#FEF3C7" stroke="#B45309" stroke-width="1"/>
+        <text x="500" y="${y+15}" text-anchor="middle" font-size="12" font-weight="700" fill="#7C2D12"${rtlAttr}>${
+          _csSvgTxt(T('This end adds to the cut length'))}: <tspan font-family="monospace" direction="ltr">${
+          _ec.strip} + ${_ec.margin} = ${_ec.mm} mm</tspan></text>`;
+    y+=34;
   }
 
   const h=y+40;
@@ -10409,14 +10425,9 @@ function renderCutStripSheet(){
     ${_csSegments(spec).map((seg,si)=>{
       const cut=_csCutLength(seg, spec);
       const ends=_csSegEnds(seg, spec);
-      const BASIS={cable_only:'Bare cable, connectors excluded',
-                   over_connectors:'Whole assembly, connector face to connector face',
-                   to_jacket_end:'To where the jacket ends at each end — this shop’s rule',
-                   unclear:'The drawing does not say — confirm before cutting'};
-      // What the sum is actually built on, which is not always what the analysis read.
-      const usedBasis = cut.basis || seg.length_basis || 'unclear';
-      const readBasis = seg.length_basis || '';
-      const basisDiffers = readBasis && readBasis!==usedBasis;
+      // No commentary about models or rules: the operator needs the number and
+      // what it is for. Where the numbers came from is the third column of each
+      // row, in plain terms.
       return `
     <h2 class="cs-h2"><span class="cs-n">${String(4+si).padStart(2,'0')}</span>${esc(T('Cable run'))}
       <span class="cs-ltr">${esc(seg.id)} — ${esc(_csSegLabel(seg))}</span></h2>
@@ -10432,11 +10443,7 @@ function renderCutStripSheet(){
       <table class="cs-tbl"><tbody>
         <tr><td style="width:300px">${esc(T('Finished length (from the drawing)'))}</td>
             <td class="cs-ctr" style="width:190px">${_csFNum(`segments.${si}.finished_length_mm`, cut.finished, ' mm')}</td>
-            <td>${esc(T('How this cut length is worked out'))}: <b>${esc(T(BASIS[usedBasis]||BASIS.unclear))}</b>
-              ${basisDiffers?`<div style="font-size:12px;color:#B45309;margin-top:4px">${
-                esc(T('The analysis read the drawing dimension as'))}:
-                <b>${esc(T(BASIS[readBasis]||readBasis))}</b> —
-                ${esc(T('the cut length below follows the shop rule, not that reading.'))}</div>`:''}</td></tr>
+            <td>${esc(T('The length marked on the drawing. It is not the length you cut.'))}</td></tr>
         ${cut.allowances.map((a,ai)=>`<tr>
           <td>${esc(T('Allowance'))} — <b class="cs-ltr">${esc(a.ref||'')}</b></td>
           <td class="cs-ctr">${_csEditing
@@ -10449,10 +10456,6 @@ function renderCutStripSheet(){
               ? `${_csFNum(`segments.${si}.trim_allowance_mm`, cut.trim, ' mm')} ${_csFChk(`segments.${si}.trim_allowance_confirmed`, seg.trim_allowance_confirmed===true, T('Confirmed'))}`
               : _csDim(cut.trim, seg.trim_allowance_confirmed)}</td>
           <td style="font-size:12.5px">${esc(T('Squaring the cut and re-doing a bad strip'))}</td></tr>` : ''}
-        ${(cut.superseded||[]).map(a=>`<tr><td style="opacity:.65">${esc(T('Allowance'))}
-          <b class="cs-ltr">${esc(a.ref)}</b> — ${esc(T('superseded by the jacket-strip rule'))}</td>
-          <td class="cs-ctr cs-ltr" style="opacity:.65;text-decoration:line-through">${esc(_csMM(a.mm))}</td>
-          <td style="font-size:12.5px;opacity:.65">${esc(_csP(a.reason||''))}</td></tr>`).join('')}
         ${(cut.endCosts||[]).map(e=>`<tr><td>${esc(T('End'))} <b class="cs-ltr">${esc(e.ref)}</b>
           — ${esc(T('jacket strip'))} <span class="cs-ltr">${esc(e.code)}</span> + ${esc(T('handling margin'))}</td>
           <td class="cs-ctr cs-ltr">${esc(_csMM(e.mm))}</td>
@@ -10460,7 +10463,7 @@ function renderCutStripSheet(){
         <tr class="cs-cut-row"><td><b>${esc(T('CUT THIS LENGTH'))}</b></td>
           <td class="cs-ctr"><b class="cs-ltr" style="font-size:19px">${esc(_csMM(cut.total))}</b>
             ${_csNum(seg.cut_length_tolerance_mm)!=null?`<span class="cs-ltr" style="font-size:12px"> ±${_csNum(seg.cut_length_tolerance_mm)}</span>`:''}</td>
-          <td class="cs-ltr" style="font-size:13px">${esc(_csCutFormula(seg, spec))}</td></tr>
+          <td class="cs-ltr" style="font-size:13px;white-space:normal;overflow-wrap:anywhere">${esc(_csCutFormula(seg, spec))}</td></tr>
       </tbody></table>`}
 
       ${(seg.layers||[]).length ? `
@@ -10476,7 +10479,7 @@ function renderCutStripSheet(){
         </tbody></table>` : ''}
 
       <h3 class="cs-h3">${esc(T('Strip detail'))}</h3>
-      ${ends.map(e=>{ const svg=_csStripSVG(seg,e); return svg?`<figure class="cs-fig">${svg}</figure>`:''; }).join('')}
+      ${ends.map(e=>{ const svg=_csStripSVG(seg,e,spec); return svg?`<figure class="cs-fig">${svg}</figure>`:''; }).join('')}
       <table class="cs-tbl">
         <thead><tr><th style="width:15%">${esc(T('End'))}</th>
           <th style="width:38%">${esc(T('Description'))}</th><th style="width:20%">${esc(T('Value'))}</th>
@@ -10603,7 +10606,7 @@ function renderCutStripSheet(){
       _csCollectEdits();
       const fig=document.querySelectorAll('#cs-sheet .cs-fig');
       if(fig[0]) fig[0].innerHTML=_csHarnessSVG(csCurrent);
-      (csCurrent.ends||[]).forEach((e,k)=>{ if(fig[k+1]) fig[k+1].innerHTML=_csStripSVG(csCurrent,e); });
+      (csCurrent.ends||[]).forEach((e,k)=>{ if(fig[k+1]) fig[k+1].innerHTML=_csStripSVG(csCurrent,e,csCurrent); });
     }));
 
   document.querySelectorAll('[data-cs-lang]').forEach(b=>b.addEventListener('click',async()=>{
