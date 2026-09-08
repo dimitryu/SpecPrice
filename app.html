@@ -635,7 +635,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.30.0';
+const APP_VER   = '1.31.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -8319,6 +8319,10 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "Search saved specifications…":"חיפוש במפרטים שמורים…",
+    "No saved specification matches that search.":"אין מפרט שמור שתואם לחיפוש.",
+    "Sort by this column":"מיון לפי עמודה זו",
+    "Clear":"נקה",
     "These names are not printed on the drawing":"השמות האלה לא מופיעים בסרטוט",
     "The drawing gives no designator for them, so this sheet assigned one. Match them by position, not by looking for the label.":"הסרטוט לא נותן להם סימון, ולכן הדף הזה נתן להם שם. לזהות אותם לפי המיקום, לא לחפש את התווית.",
     "seen on the drawing as":"בסרטוט נראה כ",
@@ -8494,6 +8498,10 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    "Search saved specifications…":"Поиск по сохранённым спецификациям…",
+    "No saved specification matches that search.":"Нет сохранённых спецификаций по этому запросу.",
+    "Sort by this column":"Сортировать по этому столбцу",
+    "Clear":"Очистить",
     "These names are not printed on the drawing":"Эти имена на чертеже не напечатаны",
     "The drawing gives no designator for them, so this sheet assigned one. Match them by position, not by looking for the label.":"На чертеже для них нет обозначения, поэтому лист присвоил своё. Определяйте по положению, а не по метке.",
     "seen on the drawing as":"на чертеже видно как",
@@ -8836,6 +8844,10 @@ const _CS_MAX_TOKENS = 32000;
 // analysis image can be smaller than the one BOM extraction uses. Less to
 // upload is less time spent before the model even starts.
 const _CS_IMG_MAXDIM = 1800, _CS_IMG_QUALITY = 0.82;
+// How many sheets of one drawing go to the analysis. Enough for the packages
+// seen so far (assembly view, wiring table, notes) without turning one import
+// into a request that times out.
+const _CS_MAX_SHEETS = 6;
 // A second, smaller copy is kept ON the spec as the reference figure. It has to
 // live inside the Firestore document, which caps at 1 MB for everything else
 // too, so it is deliberately smaller than the one sent for analysis and is
@@ -9194,18 +9206,32 @@ RULES — these matter more than completeness:
    harness, the figure a planner quotes and a stores clerk checks against. On the fan harness above that
    is 200, the longest run — not the sum of the runs, and not the shortest one.
 
-5. READ THE WHOLE HARNESS BEFORE YOU WRITE ANY OF IT. A drawing with balloons numbered to 27, a branch
+5. YOU ARE GIVEN EVERY SHEET OF THE DRAWING. They arrive labelled SHEET 1 OF n. A harness package puts
+   the assembly view on one sheet and the connector names, the pin lists and the wiring tables on the
+   others — so the sheet that tells you what an end is CALLED is usually not the sheet that shows you
+   where it is. Read them all before you write anything.
+   A designator that appears only on sheet 3 is still that connector's designator. A pin list on sheet 2
+   belongs to the connector drawn on sheet 1. Match them up by reference and by position, and put what you
+   learn in "conductors" with from_pin and to_pin filled in.
+   If two sheets disagree, that goes in "discrepancies" naming both sheets.
+
+6. READ THE WHOLE HARNESS BEFORE YOU WRITE ANY OF IT. A drawing with balloons numbered to 27, a branch
    table, four dimension chains and several terminations is not one cable with two ends. Walk the picture:
    follow every line from every termination back to where it joins another, and list one segment per run
    and one connector per termination. Count the terminations by pointing at each one in turn.
    If the harness branches, say so in "topology" and give the breakouts. Collapsing a branched assembly
    into a single run is not a simplification — it produces one cut length for a harness that needs
    several, and every one of them will be wrong.
+   BREAKOUTS NEST. A trunk that splits into two, one of those splitting again further along, is normal:
+   give a breakout for each split, a segment from the connector to the first, a segment from the first to
+   the second, and a segment from each breakout out to whatever it feeds. The overall length is then the
+   longest path THROUGH the harness — trunk plus branch — and the sheet works it out from the segments,
+   so getting the chain right is what makes the total right.
    When the drawing genuinely defeats you — too dense, a view you cannot resolve — say that in
    "open_items" and give what you are sure of. An honest partial reading can be finished by a person; a
    confident wrong one gets cut.
 
-6. DECLARE YOUR COUNTS, THEN MATCH THEM. Before writing the arrays, count on the drawing: how many rows
+7. DECLARE YOUR COUNTS, THEN MATCH THEM. Before writing the arrays, count on the drawing: how many rows
    the marking/label table has, how many distinct connector references the assembly view and part list
    show, and how many separate cable runs there are. Put those three numbers in "counts".
    Then make the arrays match them exactly — five marking-table rows means five entries in "markers",
@@ -9214,7 +9240,7 @@ RULES — these matter more than completeness:
    silent. Getting the count right matters more than getting every field of every entry right: an entry
    with an open item is workable, a missing entry is invisible.
 
-7. COUNT THE CABLES AND THE CONNECTORS FIRST, AND COVER ALL OF THEM.
+8. COUNT THE CABLES AND THE CONNECTORS FIRST, AND COVER ALL OF THEM.
    Look at the assembly view and count every connector body and every separate cable run. A harness with
    three connectors and two cable runs gets THREE entries in "connectors" and TWO in "segments" —
    one segment per cable run, each naming the two connectors it links. Do NOT collapse a branched
@@ -9224,11 +9250,11 @@ RULES — these matter more than completeness:
    If a connector or a cable run appears on the drawing but you cannot work out its details, still list
    it, fill in what you can, and put the gap in "open_items" — a missing run is far worse than a thin one.
 
-8. DRAWING NUMBER vs NAME vs PROJECT. The title block has all three and they are different things.
+9. DRAWING NUMBER vs NAME vs PROJECT. The title block has all three and they are different things.
    "drawing_number" is this harness's own part number (DRAWING NO). "drawing_name" is its description.
    "project" is the programme it belongs to. Never put the project name in drawing_number.
 
-9. READ THE ENGINEERING NOTES BLOCK. Almost every drawing carries one, and it is where the
+10. READ THE ENGINEERING NOTES BLOCK. Almost every drawing carries one, and it is where the
    instructions live that are nowhere else on the sheet: the workmanship standard, whether the stated
    length includes the connectors, which item is the lacing cord, where each label goes, where glue may
    and may not reach, what to check afterwards. An operator working only from the dimensions will get a
@@ -9240,23 +9266,23 @@ RULES — these matter more than completeness:
    in "engineering_notes" alone with "action":"".
    If a note contradicts a dimension or a table, that goes in "discrepancies".
 
-10. CONFIRMED vs DERIVED. Set "confirmed": true ONLY when the value is printed on the drawing, or comes
+11. CONFIRMED vs DERIVED. Set "confirmed": true ONLY when the value is printed on the drawing, or comes
    from a manufacturer datasheet you actually know for that exact part number. If you calculated it,
    inferred it from connector geometry, or took it from a similar part, set "confirmed": false and say
    so plainly in "basis". A wrong strip dimension destroys parts — never dress up a guess as a fact.
 
-11. Still give a number. When a dimension is not confirmed, provide your best engineering proposal anyway
+12. Still give a number. When a dimension is not confirmed, provide your best engineering proposal anyway
    with confirmed:false, so the sheet is usable while engineering verifies it. Only use null when you
    have no defensible basis at all.
 
-12. OPEN ITEMS. Every unconfirmed dimension gets an entry in "open_items" naming what is unverified, why,
+13. OPEN ITEMS. Every unconfirmed dimension gets an entry in "open_items" naming what is unverified, why,
    and the action that closes it.
 
-13. DISCREPANCIES. Report contradictions in the drawing rather than silently picking one: file name vs
+14. DISCREPANCIES. Report contradictions in the drawing rather than silently picking one: file name vs
    title block, balloon numbers vs part-list item numbers, dimensions that do not add up, a wiring table
    with more wires than the connector has positions. Do not "fix" them.
 
-14. CUT LENGTH vs FINISHED LENGTH — per segment, and it is what the operator actually cuts.
+15. CUT LENGTH vs FINISHED LENGTH — per segment, and it is what the operator actually cuts.
    "finished_length_mm" is the length AS DIMENSIONED ON THE DRAWING for that run, and "length_basis"
    says what that dimension measures:
      - "to_jacket_end"    the dimension runs to where the JACKET ends at each end. THIS IS THE DEFAULT
@@ -9294,7 +9320,7 @@ RULES — these matter more than completeness:
      - Insertion depth comes from the connector's assembly spec. Without it, give a defensible estimate,
        set confirmed:false, and say what it was derived from.
 
-15. MULTI-CONDUCTOR CABLE. Fill in "conductors" from the wiring table: one entry per wire, with its
+16. MULTI-CONDUCTOR CABLE. Fill in "conductors" from the wiring table: one entry per wire, with its
    signal name, colour, AWG and the pin it lands on at each end. This table IS the work instruction for
    a crimped harness — an operator cannot terminate without it, so do not leave it empty when the
    drawing has a wiring table. "conductor_strip_mm" is how much insulation comes off each individual
@@ -9303,15 +9329,15 @@ RULES — these matter more than completeness:
    cut back and insulated, or terminated to a ferrule. Getting this wrong is a functional failure that
    inspection will not catch.
 
-16. LAYERS — always give at least the outer covering and the conductor, even on a simple wire. Without
+17. LAYERS — always give at least the outer covering and the conductor, even on a simple wire. Without
    them the strip figure has to draw a generic cable and says so on the sheet, which is worse than the
    real thing. LAYERS run OUTERMOST FIRST. For single_wire there are two layers (insulation, conductor) and only
    strip code "A". For a shielded multi-conductor cable list jacket, shield, and conductor insulation.
 
-17. STRIP CODES. "A" is always measured from the cable end. "derived":true marks a dimension that is
+18. STRIP CODES. "A" is always measured from the cable end. "derived":true marks a dimension that is
     arithmetic from the others (like C = A − B) rather than an independent setting.
 
-18. NEVER PUT A DIMENSION IN THE PROSE THAT IS NOT IN THE FIELDS. The sheet computes its tables and its
+19. NEVER PUT A DIMENSION IN THE PROSE THAT IS NOT IN THE FIELDS. The sheet computes its tables and its
    figures from the structured values, so those always agree with each other. Step text does not — it is
    whatever you wrote. If a step says "allow 4 mm at each end" while "strip" says 8, the operator has two
    different instructions and no way to tell which is real.
@@ -9320,12 +9346,12 @@ RULES — these matter more than completeness:
    name: "cut to the length in the cut table", "strip to dimension A". The sheet flags any number in your
    prose that it cannot find among its own, so an invented one will be visible.
 
-19. STEPS. Write for someone holding the cable, not for an engineer. Tag each step with the "segment"
+20. STEPS. Write for someone holding the cable, not for an engineer. Tag each step with the "segment"
     it belongs to when the harness has more than one, so the operator knows which run they are on.
     Include threading sleeves on BEFORE connectors if the assembly has sleeves — that mistake scraps
     the cable. Every segment must be covered by the steps, not just the first one.
 
-20. Units in millimetres throughout.
+21. Units in millimetres throughout.
 ${langTail}`;
 }
 
@@ -9386,9 +9412,15 @@ function _csParse(raw){
 
 async function _csAnthropic(text, isImage, imgData, lang){
   const prompt=_csPrompt(lang);
+  // Each sheet is announced before its image. Without the labels the model sees
+  // a pile of pictures; with them it can say "the pin list on sheet 2" and mean it.
+  const sheets = (imgData && imgData.pages && imgData.pages.length) ? imgData.pages
+               : (imgData && imgData.b64 ? [imgData.b64] : []);
+  const imgBlocks = sheets.flatMap((b64,i)=>[
+    {type:'text', text:`SHEET ${i+1} OF ${sheets.length}`},
+    {type:'image', source:{type:'base64', media_type:imgData.mimeType, data:b64}}]);
   const messages = isImage
-    ? [{role:'user',content:[{type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
-                             {type:'text',text:prompt}]}]
+    ? [{role:'user',content:[...imgBlocks, {type:'text',text:prompt}]}]
     : [{role:'user', content: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,24000)}];
   const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
     method:'POST',
@@ -9960,13 +9992,42 @@ async function renderCutStrip(){
     return;
   }
 
-  setContent(`<div class="card">
-    <table class="tbl"><thead><tr>
-      <th>Drawing #</th><th>Name</th><th>Project</th><th style="text-align:center">Runs</th>
-      <th style="text-align:center">Connectors</th><th style="text-align:center">Unverified dims</th>
-      <th>Updated</th><th style="width:150px"></th>
-    </tr></thead><tbody>
-    ${list.map(s=>{
+  // Search and sort live here rather than in the query: the list is small and
+  // already in memory, so a round trip to re-sort a dozen rows would be slower
+  // than the keystroke that asked for it.
+  const COLS=[
+    {k:'drawing_number', h:'Drawing #',       v:s=>s.drawing_number||s._id||''},
+    {k:'drawing_name',   h:'Name',            v:s=>s.drawing_name||s.title||''},
+    {k:'project',        h:'Project',         v:s=>s.project||''},
+    {k:'runs',           h:'Runs',            v:s=>_csSegments(s).length,  num:true, mid:true},
+    {k:'connectors',     h:'Connectors',      v:s=>_csConnectors(s).length,num:true, mid:true},
+    {k:'tbc',            h:'Unverified dims', v:s=>_csTBCCount(s),         num:true, mid:true},
+    {k:'updated',        h:'Updated',         v:s=>s.updatedAt?.toDate ? s.updatedAt.toDate().getTime() : 0, num:true},
+  ];
+  let wireRowButtons=()=>{};
+  const paint=()=>{
+    const q=_csListQuery.trim().toLowerCase();
+    // Every word must appear somewhere in the row, so a second word narrows
+    // instead of widening — the behaviour the other tables already have.
+    const words=q ? q.split(/\s+/) : [];
+    let rows=list.filter(sp=>{
+      if(!words.length) return true;
+      const hay=(COLS.map(c=>String(c.v(sp))).join(' ')+' '+
+                 _csConnectors(sp).map(c=>c.ref||'').join(' ')).toLowerCase();
+      return words.every(w=>hay.includes(w));
+    });
+    const col=COLS.find(c=>c.k===_csListSort.k);
+    if(col){
+      const dir=_csListSort.dir;
+      rows=rows.slice().sort((a,b)=>{
+        const x=col.v(a), y=col.v(b);
+        const r=col.num ? (x-y) : String(x).localeCompare(String(y),undefined,{numeric:true});
+        return dir==='asc' ? r : -r;
+      });
+    }
+    const arrow=k=>_csListSort.k===k ? (_csListSort.dir==='asc'?' ▲':' ▼') : '';
+    const body=document.getElementById('cs-list-body');
+    body.innerHTML = rows.length ? rows.map(s=>{
       const tbc=_csTBCCount(s);
       return `<tr>
         <td style="font-weight:700">${esc(s.drawing_number||s._id)}</td>
@@ -9982,28 +10043,77 @@ async function renderCutStrip(){
           <button class="btn btn-sm btn-blue cs-open" data-id="${esc(s._id)}">Open</button>
           <button class="btn btn-sm btn-ghost cs-del" data-id="${esc(s._id)}">🗑</button>
         </td></tr>`;
-    }).join('')}
-    </tbody></table></div>`);
+    }).join('') : `<tr><td colspan="8" style="text-align:center;padding:26px;color:var(--muted)">
+        ${esc(_csT('No saved specification matches that search.'))}</td></tr>`;
+    document.getElementById('cs-list-count').textContent=`${rows.length} / ${list.length}`;
+    document.querySelectorAll('#cs-list-head th[data-k]').forEach(th=>{
+      th.textContent = COLS.find(c=>c.k===th.dataset.k).h + arrow(th.dataset.k);
+    });
+    wireRowButtons();
+  };
 
-  document.querySelectorAll('.cs-open').forEach(b=>b.addEventListener('click',async()=>{
-    const s=csSpecs.find(x=>x._id===b.dataset.id);
-    if(!s) return;
-    csCurrent=s; _csEditing=false; _csEditBackup=null;
-    // Hebrew is the default, so the translation has to be in hand BEFORE the
-    // first paint — otherwise the sheet flashes up half English.
-    b.disabled=true; b.textContent=_csT('Translating…');
-    await _csEnsureLang(s, _csLang);
-    renderCutStripSheet();
-  }));
-  document.querySelectorAll('.cs-del').forEach(b=>b.addEventListener('click',async()=>{
-    const s=csSpecs.find(x=>x._id===b.dataset.id);
-    if(!s || !confirm(`Delete the cut & strip specification for ${s.drawing_number||s._id}?`)) return;
-    try{
-      await deleteDoc(doc(db,'companies',companyId,'cut_strip_specs',s._id));
-      toast('Specification deleted','success');
-      renderCutStrip();
-    }catch(e){ toast('Error: '+e.message,'error'); }
-  }));
+  setContent(`<div class="card">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <div class="search-wrap" style="position:relative">
+        <input id="cs-search" class="search-box" placeholder="${esc(_csT('Search saved specifications…'))}"
+               value="${esc(_csListQuery)}" style="padding-inline-end:26px">
+        <button id="cs-search-x" title="${esc(_csT('Clear'))}"
+                style="position:absolute;inset-inline-end:6px;top:50%;transform:translateY(-50%);
+                       border:0;background:none;cursor:pointer;color:var(--muted);font-size:15px;
+                       display:${_csListQuery?'block':'none'}">✕</button>
+      </div>
+      <span id="cs-list-count" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+    <table class="tbl"><thead><tr id="cs-list-head">
+      ${COLS.map(c=>`<th data-k="${c.k}" style="cursor:pointer;user-select:none${c.mid?';text-align:center':''}"
+         title="${esc(_csT('Sort by this column'))}">${esc(c.h)}</th>`).join('')}
+      <th style="width:150px"></th>
+    </tr></thead><tbody id="cs-list-body"></tbody></table></div>`);
+
+  wireRowButtons=()=>{
+    document.querySelectorAll('.cs-open').forEach(b=>b.addEventListener('click',async()=>{
+      const s=csSpecs.find(x=>x._id===b.dataset.id);
+      if(!s) return;
+      csCurrent=s; _csEditing=false; _csEditBackup=null;
+      // Hebrew is the default, so the translation has to be in hand BEFORE the
+      // first paint — otherwise the sheet flashes up half English.
+      b.disabled=true; b.textContent=_csT('Translating…');
+      await _csEnsureLang(s, _csLang);
+      renderCutStripSheet();
+    }));
+    document.querySelectorAll('.cs-del').forEach(b=>b.addEventListener('click',async()=>{
+      const s=csSpecs.find(x=>x._id===b.dataset.id);
+      if(!s || !confirm(`Delete the cut & strip specification for ${s.drawing_number||s._id}?`)) return;
+      try{
+        await deleteDoc(doc(db,'companies',companyId,'cut_strip_specs',s._id));
+        toast('Specification deleted','success');
+        renderCutStrip();
+      }catch(e){ toast('Error: '+e.message,'error'); }
+    }));
+  };
+
+  document.querySelectorAll('#cs-list-head th[data-k]').forEach(th=>{
+    th.addEventListener('click',()=>{
+      const k=th.dataset.k;
+      // The same column toggles direction; a new one starts ascending, except
+      // the date and the unverified count, where the interesting end is the top.
+      _csListSort = (_csListSort.k===k)
+        ? {k, dir:_csListSort.dir==='asc'?'desc':'asc'}
+        : {k, dir:(k==='updated'||k==='tbc')?'desc':'asc'};
+      paint();
+    });
+  });
+  const box=document.getElementById('cs-search');
+  box?.addEventListener('input',()=>{
+    _csListQuery=box.value;
+    document.getElementById('cs-search-x').style.display = _csListQuery ? 'block' : 'none';
+    paint();                       // no re-render, so the cursor never jumps
+  });
+  document.getElementById('cs-search-x')?.addEventListener('click',()=>{
+    _csListQuery=''; box.value='';
+    document.getElementById('cs-search-x').style.display='none'; box.focus(); paint();
+  });
+  paint();
 }
 
 // ── Import ────────────────────────────────────────────────────────────────────
@@ -10049,15 +10159,27 @@ async function handleCSFile(file){
       setM('Extracting drawing…',20);
       const {pageTexts,pageImages}=await extractPDFPages(file);
       text=pageTexts.join('\n');
-      // Vision on page 1 is the right default here, unlike BOM extraction: the
-      // cut length, strip callouts and marker positions live on the assembly
-      // view, and reading them needs the picture, not the text layer.
-      if(pageImages[0]){
-        const small=await _csShrinkJpeg(pageImages[0], _CS_IMG_MAXDIM, _CS_IMG_QUALITY);
-        console.log('[CutStrip] drawing image',(pageImages[0].length/1e6).toFixed(2),'MB →',
-                    (small.length/1e6).toFixed(2),'MB base64');
-        isImage=true; imgData={mimeType:'image/jpeg', b64:small};
-        rawImage=pageImages[0];
+      // Vision, not the text layer: cut lengths, strip callouts and marker
+      // positions live on the picture. And on EVERY sheet — the assembly view is
+      // usually sheet 1, but the connector names and the pin lists are just as
+      // often on sheet 2 or 3, and an analysis that never sees them has no way
+      // to know what the ends are called.
+      const usable=pageImages.filter(Boolean).slice(0, _CS_MAX_SHEETS);
+      if(usable.length){
+        setM(`Preparing ${usable.length} sheet${usable.length>1?'s':''}…`, 30);
+        const pages=[];
+        for(const raw of usable){
+          const small=await _csShrinkJpeg(raw, _CS_IMG_MAXDIM, _CS_IMG_QUALITY);
+          if(small) pages.push(small);
+        }
+        console.log('[CutStrip]', pages.length, 'sheet(s),',
+                    (pages.reduce((a,b)=>a+b.length,0)/1e6).toFixed(2), 'MB base64');
+        if(pages.length){
+          isImage=true; imgData={mimeType:'image/jpeg', b64:pages[0], pages};
+          // The reference figure stays sheet 1: the cut & strip sheet wants the
+          // cable, not the pin tables.
+          rawImage=usable[0];
+        }
       }
     } else {
       setM('Reading image…',20);
@@ -10157,6 +10279,9 @@ function _csDim(value, confirmed){
 // generic pass over the DOM rather than a bespoke reader per field.
 let _csEditing=false;
 let _csEditBackup=null;   // deep copy taken on entering edit mode, for Cancel
+// Search text and sort order for the saved-specs list. Kept outside the render
+// so deleting a row, or coming back from a sheet, lands you where you were.
+let _csListQuery='', _csListSort={k:'updated', dir:'desc'};
 
 function _csGetPath(o,path){
   return path.split('.').reduce((a,k)=>(a==null?a:a[k]), o);
