@@ -633,7 +633,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.26.0';
+const APP_VER   = '1.27.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -8308,6 +8308,10 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "How this cut length is worked out":"איך אורך החיתוך הזה מחושב",
+    "To where the jacket ends at each end — this shop’s rule":"עד המקום שבו נגמר המעטה בכל קצה — הכלל של המפעל הזה",
+    "The analysis read the drawing dimension as":"הניתוח קרא את המידה בסרטוט כ",
+    "the cut length below follows the shop rule, not that reading.":"אורך החיתוך שלמטה נגזר מכלל המפעל, לא מהקריאה הזו.",
     "A dimension in the written instructions is not one of this sheet’s numbers":"מידה בהוראות המילוליות אינה אחד המספרים של הדף הזה",
     "The tables and the figures are computed from the same fields, so they always agree. Text is written separately and can drift. Correct the text, or add the missing dimension where it belongs.":"הטבלאות והסרטוטים מחושבים מאותם שדות, ולכן הם תמיד מסכימים. הטקסט נכתב בנפרד ויכול לסטות. לתקן את הטקסט, או להוסיף את המידה החסרה במקום שלה.",
     "Step":"שלב",
@@ -8475,6 +8479,10 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    "How this cut length is worked out":"Как рассчитана эта длина реза",
+    "To where the jacket ends at each end — this shop’s rule":"До конца оболочки с каждой стороны — правило этого цеха",
+    "The analysis read the drawing dimension as":"Анализ прочитал размер на чертеже как",
+    "the cut length below follows the shop rule, not that reading.":"длина реза ниже следует правилу цеха, а не этому прочтению.",
     "A dimension in the written instructions is not one of this sheet’s numbers":"Размер в текстовых инструкциях не совпадает ни с одним числом этого листа",
     "The tables and the figures are computed from the same fields, so they always agree. Text is written separately and can drift. Correct the text, or add the missing dimension where it belongs.":"Таблицы и рисунки считаются из одних и тех же полей и всегда согласованы. Текст пишется отдельно и может разойтись. Исправьте текст или добавьте недостающий размер.",
     "Step":"Шаг",
@@ -10403,7 +10411,12 @@ function renderCutStripSheet(){
       const ends=_csSegEnds(seg, spec);
       const BASIS={cable_only:'Bare cable, connectors excluded',
                    over_connectors:'Whole assembly, connector face to connector face',
+                   to_jacket_end:'To where the jacket ends at each end — this shop’s rule',
                    unclear:'The drawing does not say — confirm before cutting'};
+      // What the sum is actually built on, which is not always what the analysis read.
+      const usedBasis = cut.basis || seg.length_basis || 'unclear';
+      const readBasis = seg.length_basis || '';
+      const basisDiffers = readBasis && readBasis!==usedBasis;
       return `
     <h2 class="cs-h2"><span class="cs-n">${String(4+si).padStart(2,'0')}</span>${esc(T('Cable run'))}
       <span class="cs-ltr">${esc(seg.id)} — ${esc(_csSegLabel(seg))}</span></h2>
@@ -10419,7 +10432,11 @@ function renderCutStripSheet(){
       <table class="cs-tbl"><tbody>
         <tr><td style="width:300px">${esc(T('Finished length (from the drawing)'))}</td>
             <td class="cs-ctr" style="width:190px">${_csFNum(`segments.${si}.finished_length_mm`, cut.finished, ' mm')}</td>
-            <td>${esc(T('What the drawing dimension measures'))}: <b>${esc(T(BASIS[seg.length_basis]||BASIS.unclear))}</b></td></tr>
+            <td>${esc(T('How this cut length is worked out'))}: <b>${esc(T(BASIS[usedBasis]||BASIS.unclear))}</b>
+              ${basisDiffers?`<div style="font-size:12px;color:#B45309;margin-top:4px">${
+                esc(T('The analysis read the drawing dimension as'))}:
+                <b>${esc(T(BASIS[readBasis]||readBasis))}</b> —
+                ${esc(T('the cut length below follows the shop rule, not that reading.'))}</div>`:''}</td></tr>
         ${cut.allowances.map((a,ai)=>`<tr>
           <td>${esc(T('Allowance'))} — <b class="cs-ltr">${esc(a.ref||'')}</b></td>
           <td class="cs-ctr">${_csEditing
@@ -10432,10 +10449,6 @@ function renderCutStripSheet(){
               ? `${_csFNum(`segments.${si}.trim_allowance_mm`, cut.trim, ' mm')} ${_csFChk(`segments.${si}.trim_allowance_confirmed`, seg.trim_allowance_confirmed===true, T('Confirmed'))}`
               : _csDim(cut.trim, seg.trim_allowance_confirmed)}</td>
           <td style="font-size:12.5px">${esc(T('Squaring the cut and re-doing a bad strip'))}</td></tr>` : ''}
-        <tr class="cs-cut-row"><td><b>${esc(T('CUT THIS LENGTH'))}</b></td>
-          <td class="cs-ctr"><b class="cs-ltr" style="font-size:19px">${esc(_csMM(cut.total))}</b>
-            ${_csNum(seg.cut_length_tolerance_mm)!=null?`<span class="cs-ltr" style="font-size:12px"> ±${_csNum(seg.cut_length_tolerance_mm)}</span>`:''}</td>
-          <td class="cs-ltr" style="font-size:13px">${esc(_csCutFormula(seg, spec))}</td></tr>
         ${(cut.superseded||[]).map(a=>`<tr><td style="opacity:.65">${esc(T('Allowance'))}
           <b class="cs-ltr">${esc(a.ref)}</b> — ${esc(T('superseded by the jacket-strip rule'))}</td>
           <td class="cs-ctr cs-ltr" style="opacity:.65;text-decoration:line-through">${esc(_csMM(a.mm))}</td>
@@ -10444,6 +10457,10 @@ function renderCutStripSheet(){
           — ${esc(T('jacket strip'))} <span class="cs-ltr">${esc(e.code)}</span> + ${esc(T('handling margin'))}</td>
           <td class="cs-ctr cs-ltr">${esc(_csMM(e.mm))}</td>
           <td class="cs-ltr" style="font-size:12.5px">${e.strip} + ${e.margin}</td></tr>`).join('')}
+        <tr class="cs-cut-row"><td><b>${esc(T('CUT THIS LENGTH'))}</b></td>
+          <td class="cs-ctr"><b class="cs-ltr" style="font-size:19px">${esc(_csMM(cut.total))}</b>
+            ${_csNum(seg.cut_length_tolerance_mm)!=null?`<span class="cs-ltr" style="font-size:12px"> ±${_csNum(seg.cut_length_tolerance_mm)}</span>`:''}</td>
+          <td class="cs-ltr" style="font-size:13px">${esc(_csCutFormula(seg, spec))}</td></tr>
       </tbody></table>`}
 
       ${(seg.layers||[]).length ? `
