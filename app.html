@@ -633,7 +633,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.25.0';
+const APP_VER   = '1.26.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -7962,6 +7962,7 @@ function _csNormalize(spec){
 // and the app does the adding.
 const _CS_END_MARGIN_MM = 1.5;
 const _CS_BASIS_JACKET  = 'to_jacket_end';
+const _CS_CUT_MODEL     = 'jacket_end_v1';   // stamped on every new analysis
 
 function _csEndMargin(seg, spec){
   const v=_csNum(seg?.end_margin_mm);
@@ -7989,7 +7990,13 @@ function _csCutLength(seg, spec){
   // taken from the analysis. Specs saved under the old basis keep their stored
   // allowances so their numbers do not move under anyone's feet.
   const declared=String(seg?.length_basis||'');
-  const basis = (declared==='' || declared==='unclear') ? _CS_BASIS_JACKET : declared;
+  const stamped = String(spec?.cut_model||'')===_CS_CUT_MODEL;
+  // A stamped spec always costs by the convention, whatever length_basis says.
+  // An unstamped one was saved before the convention existed, so its arithmetic
+  // is left exactly as it was — numbers on a shop-floor sheet must not move
+  // under someone who already read them.
+  const basis = stamped ? _CS_BASIS_JACKET
+              : ((declared==='' || declared==='unclear') ? _CS_BASIS_JACKET : declared);
   if(basis===_CS_BASIS_JACKET && finished!=null){
     const margin=_csEndMargin(seg, spec);
     const ends=[];
@@ -8135,6 +8142,52 @@ function _csAllowanceDoubles(spec){
 // "cable_part_number" is in fact a connector's part number produced a stores line
 // telling the storeman to fetch 570 mm of fan — so those are separated out and
 // named rather than quietly totalled.
+// "If a number appears in the prose it must be the same number in the sum and on
+// the figure." The sum and the figures already read the same fields, so they
+// cannot drift. The prose is written by the analysis and can. This finds every
+// millimetre figure quoted in the step text and reports any that is not one of
+// the sheet's own numbers — which is exactly how "add 4 mm" ended up beside a
+// figure showing 8 mm.
+function _csKnownNumbers(spec){
+  const n=new Set(); const add=v=>{ const x=_csNum(v); if(x!=null) n.add(_csR(x)); };
+  add(spec?.overall_length_mm); add(spec?.end_margin_mm); n.add(_CS_END_MARGIN_MM);
+  (spec?.route_dimensions||[]).forEach(d=>add(d.mm));
+  (spec?.markers||[]).forEach(m=>add(m.distance_mm));
+  (spec?.sleeves||[]).forEach(x=>{ add(x.length_mm); add(x.distance_mm); });
+  if(spec?.bundle) add(spec.bundle.length_mm);
+  _csSegments(spec).forEach(seg=>{
+    const c=_csCutLength(seg, spec);
+    add(seg.finished_length_mm); add(c.total); add(c.added); add(seg.cut_length_tolerance_mm);
+    add(seg.trim_allowance_mm); add(seg.conductor_strip_mm);
+    (c.endCosts||[]).forEach(e=>{ add(e.mm); add(e.strip); add(e.margin); });
+    (c.allowances||[]).forEach(a=>add(a.mm));
+    // Deliberately NOT the superseded ones. A superseded allowance is a number
+    // the sheet decided not to act on, so prose quoting it is the exact error
+    // this check exists to catch: "add 4 mm" printed beside a figure showing 8.
+    (seg.layers||[]).forEach(l=>add(l.od_mm));
+    (seg.ends||[]).forEach(e=>{ add(e.strip_tolerance_mm);
+      (e.strip||[]).forEach(x=>add(x.value_mm)); });
+  });
+  return n;
+}
+function _csNumberConflicts(spec){
+  const known=_csKnownNumbers(spec), out=[];
+  const scan=(text, where)=>{
+    String(text||'').replace(/(\d+(?:[.,]\d+)?)\s*(?:mm|מ״מ|מ"מ|מ׳׳מ)/gi, (m,d)=>{
+      const v=_csR(parseFloat(String(d).replace(',','.')));
+      if(v!=null && !known.has(v)) out.push({value:v, where, text:String(text).slice(0,120)});
+      return m;
+    });
+  };
+  (spec?.steps||[]).forEach((st,i)=>{ scan(st.title,`${_csT('Step')} ${st.n??i+1}`);
+    scan(st.body,`${_csT('Step')} ${st.n??i+1}`); scan(st.critical,`${_csT('Step')} ${st.n??i+1}`); });
+  (spec?.inspection||[]).forEach(t=>scan(t, _csT('Inspection')));
+  (spec?.engineering_notes||[]).forEach(nt=>scan(nt.action, _csT('Engineering notes from the drawing')));
+  // one report per distinct number, not one per mention
+  const seen=new Set();
+  return out.filter(o=>{ const k=o.value+'|'+o.where; if(seen.has(k)) return false; seen.add(k); return true; });
+}
+
 function _csCableTotals(spec){
   const conn=new Set(_csConnectors(spec).map(c=>String(c.part_number||'').trim().toUpperCase()).filter(Boolean));
   const by={};
@@ -8255,6 +8308,10 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "A dimension in the written instructions is not one of this sheet’s numbers":"מידה בהוראות המילוליות אינה אחד המספרים של הדף הזה",
+    "The tables and the figures are computed from the same fields, so they always agree. Text is written separately and can drift. Correct the text, or add the missing dimension where it belongs.":"הטבלאות והסרטוטים מחושבים מאותם שדות, ולכן הם תמיד מסכימים. הטקסט נכתב בנפרד ויכול לסטות. לתקן את הטקסט, או להוסיף את המידה החסרה במקום שלה.",
+    "Step":"שלב",
+    "Inspection":"בדיקה",
     "superseded by the jacket-strip rule":"מבוטל — מוחלף בכלל חשיפת המעטה",
     "each conductor":"כל מוליך",
     "The letter in front of each line is the code used on the strip figure above.":"האות שלפני כל שורה היא הקוד שמופיע בסרטוט החשיפה שמעל.",
@@ -8418,6 +8475,10 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    "A dimension in the written instructions is not one of this sheet’s numbers":"Размер в текстовых инструкциях не совпадает ни с одним числом этого листа",
+    "The tables and the figures are computed from the same fields, so they always agree. Text is written separately and can drift. Correct the text, or add the missing dimension where it belongs.":"Таблицы и рисунки считаются из одних и тех же полей и всегда согласованы. Текст пишется отдельно и может разойтись. Исправьте текст или добавьте недостающий размер.",
+    "Step":"Шаг",
+    "Inspection":"Контроль",
     "superseded by the jacket-strip rule":"заменён правилом зачистки оболочки",
     "each conductor":"каждый проводник",
     "The letter in front of each line is the code used on the strip figure above.":"Буква перед строкой — код, показанный на рисунке зачистки выше.",
@@ -9163,12 +9224,21 @@ RULES — these matter more than completeness:
 16. STRIP CODES. "A" is always measured from the cable end. "derived":true marks a dimension that is
     arithmetic from the others (like C = A − B) rather than an independent setting.
 
-17. STEPS. Write for someone holding the cable, not for an engineer. Tag each step with the "segment"
+17. NEVER PUT A DIMENSION IN THE PROSE THAT IS NOT IN THE FIELDS. The sheet computes its tables and its
+   figures from the structured values, so those always agree with each other. Step text does not — it is
+   whatever you wrote. If a step says "allow 4 mm at each end" while "strip" says 8, the operator has two
+   different instructions and no way to tell which is real.
+   So: every millimetre figure you write into a step, a check or a note must be one you also put in a
+   field — a strip value, a finished length, a cut length, a marker distance. Better still, refer to it by
+   name: "cut to the length in the cut table", "strip to dimension A". The sheet flags any number in your
+   prose that it cannot find among its own, so an invented one will be visible.
+
+18. STEPS. Write for someone holding the cable, not for an engineer. Tag each step with the "segment"
     it belongs to when the harness has more than one, so the operator knows which run they are on.
     Include threading sleeves on BEFORE connectors if the assembly has sleeves — that mistake scraps
     the cable. Every segment must be covered by the steps, not just the first one.
 
-18. Units in millimetres throughout.
+19. Units in millimetres throughout.
 ${langTail}`;
 }
 
@@ -9274,6 +9344,7 @@ async function aiAnalyzeCutStrip(text, isImage, imgData, lang){
   // nothing to translate and the sheet can be reopened years later without
   // guessing.
   spec.lang = lang || _CS_SOURCE_LANG;
+  spec.cut_model = _CS_CUT_MODEL;
   return spec;
 }
 
@@ -10210,6 +10281,12 @@ function renderCutStripSheet(){
         </tbody></table>` : ''}
 
 
+      ${_csNumberConflicts(spec).length ? `<div class="cs-box cs-stop" style="margin-top:10px">
+        <b>${esc(T('A dimension in the written instructions is not one of this sheet’s numbers'))}</b>
+        <ul>${_csNumberConflicts(spec).map(c=>`<li><span class="cs-ltr"><b>${c.value} mm</b></span>
+          — ${esc(c.where)}: <span style="font-size:12px">${esc(_csP(c.text))}</span></li>`).join('')}</ul>
+        <p>${esc(T('The tables and the figures are computed from the same fields, so they always agree. Text is written separately and can drift. Correct the text, or add the missing dimension where it belongs.'))}</p>
+      </div>` : ''}
       ${_csTBCCount(spec) ? `<div class="cs-box cs-stop" style="margin-top:10px">
         <b>${esc(T('This sheet still has'))} ${_csTBCCount(spec)} ${esc(T('unverified dimension(s)'))}.</b>
         <p>${esc(T('Do not cut production material until they are confirmed.'))}</p></div>` : ''}
