@@ -635,7 +635,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.29.0';
+const APP_VER   = '1.30.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -8218,6 +8218,15 @@ function _csCableSuspects(spec){
 // what it actually produced. Same discipline as _csRouteMismatches: report the
 // gap, never paper over it. A label the analysis dropped is invisible otherwise,
 // and "invisible" is exactly how D and F went missing twice running.
+// Connectors whose designator the sheet invented rather than read. An operator
+// told to "cut from P1 to P4" on a drawing that says X7 and X9 will look for P1,
+// not find it, and either stop or guess. Naming them is cheap; guessing is not.
+function _csAssignedRefs(spec){
+  return _csConnectors(spec)
+    .filter(c=>String(c.ref_source||'')==='assigned' || c._inferred)
+    .map(c=>({ref:c.ref||'', seen:c.ref_seen_as||'', desc:c.description||''}));
+}
+
 function _csCountMismatches(spec){
   const c=(spec&&spec.counts)||{}; const out=[];
   const cmp=(said, got, what)=>{
@@ -8310,6 +8319,12 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "These names are not printed on the drawing":"השמות האלה לא מופיעים בסרטוט",
+    "The drawing gives no designator for them, so this sheet assigned one. Match them by position, not by looking for the label.":"הסרטוט לא נותן להם סימון, ולכן הדף הזה נתן להם שם. לזהות אותם לפי המיקום, לא לחפש את התווית.",
+    "seen on the drawing as":"בסרטוט נראה כ",
+    "Outer covering":"ציפוי חיצוני",
+    "Conductor / core":"מוליך / ליבה",
+    "The layer names were not captured from the drawing — the cable is drawn generically. The dimensions are as specified.":"שמות השכבות לא נלכדו מהסרטוט — הכבל מצויר באופן כללי. המידות הן כפי שצוינו.",
     "measured inside A — it adds nothing to the cut length":"נמדד בתוך A — לא מוסיף כלום לאורך החיתוך",
     "This end adds to the cut length":"הקצה הזה מוסיף לאורך החיתוך",
     "The length marked on the drawing. It is not the length you cut.":"האורך המסומן בסרטוט. זה לא האורך שחותכים.",
@@ -8479,6 +8494,12 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    "These names are not printed on the drawing":"Эти имена на чертеже не напечатаны",
+    "The drawing gives no designator for them, so this sheet assigned one. Match them by position, not by looking for the label.":"На чертеже для них нет обозначения, поэтому лист присвоил своё. Определяйте по положению, а не по метке.",
+    "seen on the drawing as":"на чертеже видно как",
+    "Outer covering":"Внешняя оболочка",
+    "Conductor / core":"Проводник / жила",
+    "The layer names were not captured from the drawing — the cable is drawn generically. The dimensions are as specified.":"Названия слоёв с чертежа не извлечены — кабель показан условно. Размеры указаны как заданы.",
     "measured inside A — it adds nothing to the cut length":"измеряется внутри A — к длине реза не добавляет",
     "This end adds to the cut length":"Этот конец добавляет к длине реза",
     "The length marked on the drawing. It is not the length you cut.":"Длина, указанная на чертеже. Это не длина реза.",
@@ -8866,7 +8887,31 @@ function _csShrinkJpeg(b64, maxDim, quality){
 // Checked against the real WLS-122-050 sheet: this clears the logo, the company
 // name and the whole title block while leaving the part list — including its QTY
 // and Ref columns — fully readable.
-const _CS_TITLEBLOCK = {x:0.655, y:0.775};   // masked from here to the bottom-right corner
+const _CS_TITLEBLOCK = {x:0.655, y:0.775};   // fallback when no ruling line is found
+// A drawing frames its title block with real lines. Snapping the mask to the
+// nearest of those, instead of covering a fixed fraction, means the white area
+// stops exactly where the block does — no part list clipped, no logo left
+// showing. Searched only near the expected corner, so a busy drawing cannot
+// pull the mask across the harness.
+function _csFindRule(px, w, h, vertical){
+  const lo = vertical ? Math.round(w*0.50) : Math.round(h*0.60);
+  const hi = vertical ? Math.round(w*0.80) : Math.round(h*0.92);
+  const span = vertical ? h : w;
+  const from = vertical ? Math.round(h*0.70) : Math.round(w*0.55);   // only the corner region
+  let best=-1, bestScore=0;
+  for(let i=lo; i<hi; i++){
+    let dark=0;
+    for(let j=from; j<span; j+=2){
+      const x = vertical ? i : j, y = vertical ? j : i;
+      const o=(y*w+x)*4;
+      if(px[o]<110 && px[o+1]<110 && px[o+2]<110) dark++;
+    }
+    const frac = dark / ((span-from)/2);
+    if(frac>bestScore){ bestScore=frac; best=i; }
+  }
+  // A ruling line is nearly solid. Anything less is text or hatching, not a frame.
+  return bestScore>0.55 ? best/(vertical?w:h) : null;
+}
 function _csMaskTitleBlock(b64){
   return new Promise(resolve=>{
     const img=new Image();
@@ -8876,7 +8921,20 @@ function _csMaskTitleBlock(b64){
         c.width=img.width; c.height=img.height;
         const ctx=c.getContext('2d');
         ctx.drawImage(img,0,0);
-        const x=_CS_TITLEBLOCK.x*img.width, y=_CS_TITLEBLOCK.y*img.height;
+        let fx=_CS_TITLEBLOCK.x, fy=_CS_TITLEBLOCK.y;
+        try{
+          const d=ctx.getImageData(0,0,img.width,img.height).data;
+          const vx=_csFindRule(d, img.width, img.height, true);
+          const hy=_csFindRule(d, img.width, img.height, false);
+          // Two failure modes, both bad: a line found too far in eats the part
+          // list, one too far out leaves the logo showing. Measured against real
+          // sheets, the finder does both — so a snap is only accepted inside a
+          // narrow envelope around the fraction that was checked by eye, and it
+          // may only grow the mask. Outside the envelope the fixed mask stands.
+          if(vx!=null && vx>=0.60 && vx<=0.70) fx=Math.min(fx, vx);
+          if(hy!=null && hy>=0.74 && hy<=0.84) fy=Math.min(fy, hy);
+        }catch{ /* tainted canvas or out of memory — the fixed fraction still works */ }
+        const x=fx*img.width, y=fy*img.height;
         ctx.fillStyle='#FFFFFF';
         ctx.fillRect(x, y, img.width-x, img.height-y);
         resolve(c.toDataURL('image/jpeg',0.9).split(',')[1]);
@@ -8988,6 +9046,8 @@ Return ONLY a JSON object. No markdown fence, no commentary.
 
   "connectors": [
     { "ref":"J1", "kind":"connector | open_wires | splice | ring_terminal",
+      "ref_source":"drawing | assigned",
+      "ref_seen_as":"the exact text you read on the drawing for this connector, or \"\" if it has none",
       "part_number":"ISDF-04-D-M", "manufacturer":"Samtec",
       "description":"what it is",
       "positions": <number of contacts, or null>,
@@ -9066,7 +9126,15 @@ RULES — these matter more than completeness:
    on the picture and P3/P4/P5 in the table), follow the ASSEMBLY VIEW, and record the disagreement in
    "discrepancies" naming both. Do not quietly pick one — an operator plugging into the wrong fan is a
    fault nobody catches until the unit is running.
-   Only invent a name (DB9, RJ45, OPEN) when the drawing genuinely prints none.
+   NEVER INVENT P1, P2, P3. A drawing that marks its ends X7, X9 and X16-18 has no P1 on it anywhere, and
+   a sheet that says "cut from P1 to P4" sends an operator looking for something that does not exist. If a
+   connector carries a mark of ANY kind — X7, J3, a letter from a table, a balloon number, a pin-list
+   column header — that mark is its name. Copy it and set "ref_source":"drawing".
+   Only when a connector truly carries no mark at all may you name it, and then name it for what it IS and
+   where it IS — "BACKSHELL-LEFT", "OPEN-END-TOP", "38999-RIGHT" — never with a designator pattern the
+   drawing does not use. Set "ref_source":"assigned" and put the text you actually saw in "ref_seen_as".
+   The sheet prints assigned names with a note saying they are not on the drawing, so the operator knows
+   to match by position instead of hunting for a label.
 
    A LABEL AND A CONNECTOR ARE AT DIFFERENT PLACES. The marking table says which text goes on which
    label; the assembly view says WHERE on the cable that label sits. Read the position off the assembly
@@ -9126,7 +9194,18 @@ RULES — these matter more than completeness:
    harness, the figure a planner quotes and a stores clerk checks against. On the fan harness above that
    is 200, the longest run — not the sum of the runs, and not the shortest one.
 
-5. DECLARE YOUR COUNTS, THEN MATCH THEM. Before writing the arrays, count on the drawing: how many rows
+5. READ THE WHOLE HARNESS BEFORE YOU WRITE ANY OF IT. A drawing with balloons numbered to 27, a branch
+   table, four dimension chains and several terminations is not one cable with two ends. Walk the picture:
+   follow every line from every termination back to where it joins another, and list one segment per run
+   and one connector per termination. Count the terminations by pointing at each one in turn.
+   If the harness branches, say so in "topology" and give the breakouts. Collapsing a branched assembly
+   into a single run is not a simplification — it produces one cut length for a harness that needs
+   several, and every one of them will be wrong.
+   When the drawing genuinely defeats you — too dense, a view you cannot resolve — say that in
+   "open_items" and give what you are sure of. An honest partial reading can be finished by a person; a
+   confident wrong one gets cut.
+
+6. DECLARE YOUR COUNTS, THEN MATCH THEM. Before writing the arrays, count on the drawing: how many rows
    the marking/label table has, how many distinct connector references the assembly view and part list
    show, and how many separate cable runs there are. Put those three numbers in "counts".
    Then make the arrays match them exactly — five marking-table rows means five entries in "markers",
@@ -9135,7 +9214,7 @@ RULES — these matter more than completeness:
    silent. Getting the count right matters more than getting every field of every entry right: an entry
    with an open item is workable, a missing entry is invisible.
 
-6. COUNT THE CABLES AND THE CONNECTORS FIRST, AND COVER ALL OF THEM.
+7. COUNT THE CABLES AND THE CONNECTORS FIRST, AND COVER ALL OF THEM.
    Look at the assembly view and count every connector body and every separate cable run. A harness with
    three connectors and two cable runs gets THREE entries in "connectors" and TWO in "segments" —
    one segment per cable run, each naming the two connectors it links. Do NOT collapse a branched
@@ -9145,11 +9224,11 @@ RULES — these matter more than completeness:
    If a connector or a cable run appears on the drawing but you cannot work out its details, still list
    it, fill in what you can, and put the gap in "open_items" — a missing run is far worse than a thin one.
 
-7. DRAWING NUMBER vs NAME vs PROJECT. The title block has all three and they are different things.
+8. DRAWING NUMBER vs NAME vs PROJECT. The title block has all three and they are different things.
    "drawing_number" is this harness's own part number (DRAWING NO). "drawing_name" is its description.
    "project" is the programme it belongs to. Never put the project name in drawing_number.
 
-8. READ THE ENGINEERING NOTES BLOCK. Almost every drawing carries one, and it is where the
+9. READ THE ENGINEERING NOTES BLOCK. Almost every drawing carries one, and it is where the
    instructions live that are nowhere else on the sheet: the workmanship standard, whether the stated
    length includes the connectors, which item is the lacing cord, where each label goes, where glue may
    and may not reach, what to check afterwards. An operator working only from the dimensions will get a
@@ -9161,23 +9240,23 @@ RULES — these matter more than completeness:
    in "engineering_notes" alone with "action":"".
    If a note contradicts a dimension or a table, that goes in "discrepancies".
 
-9. CONFIRMED vs DERIVED. Set "confirmed": true ONLY when the value is printed on the drawing, or comes
+10. CONFIRMED vs DERIVED. Set "confirmed": true ONLY when the value is printed on the drawing, or comes
    from a manufacturer datasheet you actually know for that exact part number. If you calculated it,
    inferred it from connector geometry, or took it from a similar part, set "confirmed": false and say
    so plainly in "basis". A wrong strip dimension destroys parts — never dress up a guess as a fact.
 
-10. Still give a number. When a dimension is not confirmed, provide your best engineering proposal anyway
+11. Still give a number. When a dimension is not confirmed, provide your best engineering proposal anyway
    with confirmed:false, so the sheet is usable while engineering verifies it. Only use null when you
    have no defensible basis at all.
 
-11. OPEN ITEMS. Every unconfirmed dimension gets an entry in "open_items" naming what is unverified, why,
+12. OPEN ITEMS. Every unconfirmed dimension gets an entry in "open_items" naming what is unverified, why,
    and the action that closes it.
 
-12. DISCREPANCIES. Report contradictions in the drawing rather than silently picking one: file name vs
+13. DISCREPANCIES. Report contradictions in the drawing rather than silently picking one: file name vs
    title block, balloon numbers vs part-list item numbers, dimensions that do not add up, a wiring table
    with more wires than the connector has positions. Do not "fix" them.
 
-13. CUT LENGTH vs FINISHED LENGTH — per segment, and it is what the operator actually cuts.
+14. CUT LENGTH vs FINISHED LENGTH — per segment, and it is what the operator actually cuts.
    "finished_length_mm" is the length AS DIMENSIONED ON THE DRAWING for that run, and "length_basis"
    says what that dimension measures:
      - "to_jacket_end"    the dimension runs to where the JACKET ends at each end. THIS IS THE DEFAULT
@@ -9215,7 +9294,7 @@ RULES — these matter more than completeness:
      - Insertion depth comes from the connector's assembly spec. Without it, give a defensible estimate,
        set confirmed:false, and say what it was derived from.
 
-14. MULTI-CONDUCTOR CABLE. Fill in "conductors" from the wiring table: one entry per wire, with its
+15. MULTI-CONDUCTOR CABLE. Fill in "conductors" from the wiring table: one entry per wire, with its
    signal name, colour, AWG and the pin it lands on at each end. This table IS the work instruction for
    a crimped harness — an operator cannot terminate without it, so do not leave it empty when the
    drawing has a wiring table. "conductor_strip_mm" is how much insulation comes off each individual
@@ -9224,13 +9303,15 @@ RULES — these matter more than completeness:
    cut back and insulated, or terminated to a ferrule. Getting this wrong is a functional failure that
    inspection will not catch.
 
-15. LAYERS run OUTERMOST FIRST. For single_wire there are two layers (insulation, conductor) and only
+16. LAYERS — always give at least the outer covering and the conductor, even on a simple wire. Without
+   them the strip figure has to draw a generic cable and says so on the sheet, which is worse than the
+   real thing. LAYERS run OUTERMOST FIRST. For single_wire there are two layers (insulation, conductor) and only
    strip code "A". For a shielded multi-conductor cable list jacket, shield, and conductor insulation.
 
-16. STRIP CODES. "A" is always measured from the cable end. "derived":true marks a dimension that is
+17. STRIP CODES. "A" is always measured from the cable end. "derived":true marks a dimension that is
     arithmetic from the others (like C = A − B) rather than an independent setting.
 
-17. NEVER PUT A DIMENSION IN THE PROSE THAT IS NOT IN THE FIELDS. The sheet computes its tables and its
+18. NEVER PUT A DIMENSION IN THE PROSE THAT IS NOT IN THE FIELDS. The sheet computes its tables and its
    figures from the structured values, so those always agree with each other. Step text does not — it is
    whatever you wrote. If a step says "allow 4 mm at each end" while "strip" says 8, the operator has two
    different instructions and no way to tell which is real.
@@ -9239,12 +9320,12 @@ RULES — these matter more than completeness:
    name: "cut to the length in the cut table", "strip to dimension A". The sheet flags any number in your
    prose that it cannot find among its own, so an invented one will be visible.
 
-18. STEPS. Write for someone holding the cable, not for an engineer. Tag each step with the "segment"
+19. STEPS. Write for someone holding the cable, not for an engineer. Tag each step with the "segment"
     it belongs to when the harness has more than one, so the operator knows which run they are on.
     Include threading sleeves on BEFORE connectors if the assembly has sleeves — that mistake scraps
     the cable. Every segment must be covered by the steps, not just the first one.
 
-19. Units in millimetres throughout.
+20. Units in millimetres throughout.
 ${langTail}`;
 }
 
@@ -9706,7 +9787,16 @@ function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, showForm
 // 2-layer wire draws 2, with no special-casing.
 function _csStripSVG(seg, end, spec){
   const T=_csT, rtlAttr=_csRTL()?' direction="rtl"':'';
-  const allLayers=(seg?.layers||[]).slice();         // outermost first
+  // A missing layer list must not cost the operator the whole figure. On the
+  // harness that prompted this, the strip dimensions were there — 50 mm at each
+  // end — but "layers" was absent, so every strip figure silently vanished. The
+  // dimensions are the instruction; the layer names are description. Draw a
+  // generic jacket-and-core when they are missing, and say so on the figure.
+  const namedLayers=(seg?.layers||[]).filter(l=>l && (l.name||_csNum(l.od_mm)!=null));
+  const layersAssumed = namedLayers.length < 2;
+  const allLayers = layersAssumed
+    ? [{name:_csT('Outer covering'), od_mm:null}, {name:_csT('Conductor / core'), od_mm:null}]
+    : namedLayers.slice();                          // outermost first
   const cuts0=(end?.strip||[]).filter(s=>!s.derived && _csNum(s.value_mm)>0);
   // One cut makes one step, so only as many layers as there are steps can be
   // drawn. A 4-conductor cable listing jacket + shield + insulation but stripped
@@ -9806,7 +9896,7 @@ function _csStripSVG(seg, end, spec){
     y+=50;
   }
 
-  const h=y+40;
+  const h=y+40+(layersAssumed?16:0);
   return `<svg viewBox="0 0 1000 ${h}" xmlns="http://www.w3.org/2000/svg" font-family="Heebo, Public Sans, Arial, sans-serif" direction="ltr">
     <defs>
       <marker id="csAr2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#0F172A"/></marker>
@@ -9814,6 +9904,8 @@ function _csStripSVG(seg, end, spec){
     </defs>
     <text x="80" y="34" font-size="15" font-weight="800" fill="#1E293B">${_csSvgTxt(seg?.id||'')} — ${_csSvgTxt(end?.ref||'')}</text>
     ${g}
+    ${layersAssumed?`<text x="500" y="${h-38}" text-anchor="middle" font-size="10.5" fill="#B45309"${rtlAttr}>${
+      _csSvgTxt(T('The layer names were not captured from the drawing — the cable is drawn generically. The dimensions are as specified.'))}</text>`:''}
     <text x="500" y="${h-22}" text-anchor="middle" font-size="11.5" fill="#7F1D1D"${rtlAttr}>${_csSvgTxt(T('Red faces = every cut square to the axis, free of burrs and nicks.'))}</text>
     ${cuts.some(c=>!c.confirmed)||(cs>0&&!seg.conductor_strip_confirmed)
       ? `<text x="500" y="${h-6}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#DC2626"${rtlAttr}>* ${_csSvgTxt(T('TO BE CONFIRMED'))}</text>` : ''}
@@ -10367,6 +10459,13 @@ function renderCutStripSheet(){
           _csBreakouts(spec).length?` + ${_csBreakouts(spec).length} ${esc(T('Breakout'))}`:''}.</b>
         <p>${_csSegments(spec).map(s=>`<span class="cs-ltr">${esc(s.id)}: ${esc(_csSegLabel(s))}</span>`).join(' &nbsp;·&nbsp; ')}</p>
       </div>
+      ${_csAssignedRefs(spec).length ? `
+      <div class="cs-box cs-warn">
+        <b>${esc(T('These names are not printed on the drawing'))}</b>
+        <p>${esc(T('The drawing gives no designator for them, so this sheet assigned one. Match them by position, not by looking for the label.'))}</p>
+        <ul>${_csAssignedRefs(spec).map(a=>`<li><span class="cs-ltr"><b>${esc(a.ref)}</b></span>${
+          a.desc?` — ${esc(_csP(a.desc))}`:''}${a.seen?` <span style="color:#64748B">(${esc(T('seen on the drawing as'))}: ${esc(a.seen)})</span>`:''}</li>`).join('')}</ul>
+      </div>` : ''}
       ${_csCountMismatches(spec).length ? `
       <div class="cs-box cs-stop">
         <b>${esc(T('The analysis counted more on the drawing than it wrote down'))}</b>
