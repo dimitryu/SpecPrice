@@ -850,6 +850,44 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
     G('_XLS_MAP_FIELDS').every(f=>f.key in G('_XLS_COL_ALIASES')), true);
 }
 
+
+// ──────────────────────────── 24. version check
+{
+  const parse=G('_parseAppVer'), newer=G('_verIsNewer');
+
+  t('parseAppVer: reads the constant', parse("const APP_VER   = '1.32.0';"), '1.32.0');
+  t('parseAppVer: tolerates spacing',  parse("const APP_VER='2.0.1';"), '2.0.1');
+  t('parseAppVer: two-part version',   parse("const APP_VER = '3.4';"), '3.4');
+  t('parseAppVer: finds it inside a bigger file',
+    parse("let a=1;\nconst APP_VER   = '1.31.9';\nfunction x(){}"), '1.31.9');
+  t('parseAppVer: nothing to find',    parse('<html>404</html>'), '');
+  t('parseAppVer: empty body',         parse(''), '');
+  t('parseAppVer: null',               parse(null), '');
+  t('parseAppVer: ignores a lookalike', parse("const OTHER_VER = '9.9.9';"), '');
+
+  // The comparison a string sort gets wrong.
+  t('verIsNewer: 1.32.0 > 1.9.9',   newer('1.32.0','1.9.9'), true);
+  t('verIsNewer: 1.9.9 < 1.32.0',   newer('1.9.9','1.32.0'), false);
+  t('verIsNewer: patch bump',       newer('1.32.1','1.32.0'), true);
+  t('verIsNewer: minor bump',       newer('1.33.0','1.32.9'), true);
+  t('verIsNewer: major bump',       newer('2.0.0','1.99.99'), true);
+  t('verIsNewer: identical',        newer('1.32.0','1.32.0'), false);
+  t('verIsNewer: older is not newer',newer('1.31.0','1.32.0'), false);
+  t('verIsNewer: shorter but newer', newer('2','1.32.0'), true);
+  t('verIsNewer: shorter and equal', newer('1.32','1.32.0'), false);
+  t('verIsNewer: longer and equal',  newer('1.32.0.0','1.32'), false);
+  t('verIsNewer: longer and newer',  newer('1.32.0.1','1.32'), true);
+  t('verIsNewer: unreadable remote', newer('','1.32.0'), false);
+  t('verIsNewer: unreadable local',  newer('1.32.0',''), true);
+  t('verIsNewer: junk parts count as 0', newer('1.x.0','1.0.0'), false);
+
+  // Round trip: what the fetch reads out of a served file decides the answer.
+  const served="const APP_VER   = '1.33.0';";
+  t('round trip: a newer served file triggers an update', newer(parse(served), '1.32.0'), true);
+  t('round trip: the same file does not', newer(parse("const APP_VER   = '1.32.0';"), '1.32.0'), false);
+  t('round trip: an unreadable response never triggers one', newer(parse('oops'), '1.32.0'), false);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

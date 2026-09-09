@@ -364,6 +364,16 @@
     .toast-error   { background:#C0392B; color:#fff; }
     .toast-warn    { background:#B45309; color:#fff; }
 
+    /* ── Update bar ── */
+    /* Sits above the toast so a "version available" message and the bar that
+       acts on it are never stacked on top of each other. */
+    #update-bar { position:fixed; left:50%; transform:translateX(-50%); bottom:72px; z-index:901;
+                  display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:8px;
+                  background:var(--blue-dark); color:#fff; font-size:12px; line-height:1.4;
+                  box-shadow:0 6px 20px rgba(0,0,0,.25); animation:fadeIn .2s ease-out;
+                  max-width:calc(100vw - 24px); flex-wrap:wrap; justify-content:center; }
+    #update-bar .btn { min-height:30px; }
+
     /* ── Progress bar ── */
     .progress-bar { height:4px; background:var(--blue-light); border-radius:2px; overflow:hidden; margin-top:8px; }
     .progress-fill { height:100%; background:var(--blue-mid); width:0%;
@@ -635,7 +645,94 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.32.0';
+const APP_VER   = '1.34.0';
+
+// ── Version check ─────────────────────────────────────────────────────────────
+// The whole app is one static file on GitHub Pages, so a browser can keep
+// serving a cached copy for hours after a deploy — long enough for someone to
+// report a bug that was fixed that morning, from a screen that no longer
+// exists in the current code. There's no service worker here to push an
+// update, so the app asks instead: it re-fetches its own file, cache bypassed,
+// and compares the version string it finds with the one it is running.
+//
+// Only the first 64KB are requested — APP_VER sits near the top of the file —
+// so the check costs a fraction of the 650KB the page itself weighs. A server
+// that ignores the Range header simply returns the whole file, which parses
+// exactly the same.
+const _VER_CHECK_BYTES=65535;
+
+function _parseAppVer(html){
+  const m=String(html||'').match(/const\s+APP_VER\s*=\s*'([0-9]+(?:\.[0-9]+)*)'/);
+  return m?m[1]:'';
+}
+// Compared part by part as NUMBERS: '1.32.0' is newer than '1.9.9', which a
+// plain string comparison gets backwards.
+function _verIsNewer(remote, local){
+  const a=String(remote||'').split('.').map(x=>parseInt(x,10)||0);
+  const b=String(local||'').split('.').map(x=>parseInt(x,10)||0);
+  for(let i=0;i<Math.max(a.length,b.length);i++){
+    const x=a[i]||0, y=b[i]||0;
+    if(x>y) return true;
+    if(x<y) return false;
+  }
+  return false;
+}
+
+// The version the SERVER is serving right now, or '' when it couldn't be read.
+// Never throws: a failed check is a non-event, not something to explain.
+async function fetchLatestAppVersion(){
+  try{
+    const resp=await fetch(`app.html?_vc=${Date.now()}`,
+      {cache:'no-store', headers:{Range:`bytes=0-${_VER_CHECK_BYTES}`}});
+    if(!resp.ok && resp.status!==206) return '';
+    return _parseAppVer(await resp.text());
+  }catch(e){ console.warn('[version] check failed:', e.message); return ''; }
+}
+
+// Loads from a URL the cache has never seen. That is the only reliable way to
+// bypass it — location.reload(true) has been ignored by browsers for years.
+function _applyUpdate(latest){
+  location.replace(`app.html?v=${encodeURIComponent(latest||String(Date.now()))}`);
+}
+
+// A dismissible bar rather than a modal: an update is worth noticing, not
+// worth interrupting a quote someone is in the middle of building.
+function _showUpdateBar(latest){
+  if(document.getElementById('update-bar')) return;
+  const bar=document.createElement('div');
+  bar.id='update-bar';
+  bar.setAttribute('role','status');
+  bar.innerHTML=`<span>New version <b>v${esc(latest)}</b> available — you're on v${esc(APP_VER)}.</span>
+    <button class="btn btn-green btn-sm" id="update-now">↻ Update now</button>
+    <button class="btn btn-ghost btn-sm" id="update-later">Later</button>`;
+  document.body.appendChild(bar);
+  document.getElementById('update-now').addEventListener('click',()=>_applyUpdate(latest));
+  document.getElementById('update-later').addEventListener('click',()=>bar.remove());
+}
+
+// The explicit "Check for updates" button. Reports EVERY outcome — up to date,
+// update available, or server unreachable — because a button that sometimes
+// says nothing leaves the person no wiser than before they pressed it.
+async function checkForUpdate(btn){
+  const restore=btn?btn.textContent:'';
+  if(btn){ btn.disabled=true; btn.textContent='Checking…'; }
+  const latest=await fetchLatestAppVersion();
+  if(btn){ btn.disabled=false; btn.textContent=restore; }
+  if(!latest){ toast('Could not reach the server to check the version','error'); return; }
+  if(_verIsNewer(latest, APP_VER)){
+    _showUpdateBar(latest);
+    toast(`Version ${latest} is available`,'info');
+  } else {
+    toast(`You're on the latest version (v${APP_VER})`,'success');
+  }
+}
+
+// Runs once after sign-in. Shows the bar when there is something to update and
+// stays completely silent otherwise.
+async function autoCheckForUpdate(){
+  const latest=await fetchLatestAppVersion();
+  if(latest && _verIsNewer(latest, APP_VER)) _showUpdateBar(latest);
+}
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -678,6 +775,7 @@ onAuthStateChanged(auth, async user => {
   if (infoEl) infoEl.innerHTML = `<span>👤 ${esc(currentUserEmail)}</span><span style="color:#CBD5E1">|</span><span>v${APP_VER}</span>`;
   logAudit('login', {role: currentUserRole}, true);
   route('home');
+  autoCheckForUpdate();   // silent unless there's something to update
 });
 
 // ── Company ───────────────────────────────────────────────────────────────────
@@ -839,11 +937,16 @@ function renderHome(){
         }).join('')}
       </div>
       <button class="btn btn-ghost" id="btn-home-signout" style="margin-top:36px">Sign Out</button>
-      <div style="margin-top:10px;font-size:10px;color:#94A3B8">v${APP_VER}</div>
+      <div style="margin-top:10px;display:flex;align-items:center;justify-content:center;gap:8px">
+        <span style="font-size:10px;color:#94A3B8">v${APP_VER}</span>
+        <button class="btn btn-ghost btn-sm" id="btn-check-version">↻ Check for updates</button>
+      </div>
     </div>`);
   document.querySelectorAll('.home-btn').forEach(b=>b.addEventListener('click',()=>route(b.dataset.view)));
   document.getElementById('btn-home-signout')?.addEventListener('click',
     () => logAudit('logout',null,true).finally(()=>signOut(auth).then(() => location.href = 'index.html')));
+  const _cvBtn=document.getElementById('btn-check-version');
+  _cvBtn?.addEventListener('click',()=>checkForUpdate(_cvBtn));
 }
 
 // ── Support ticket (floating headset button, every screen) ──────────────────────────
@@ -6679,7 +6782,13 @@ async function exportSalesDeskExcel(){
     title.alignment={vertical:'middle',horizontal:'center'};
 
     const sub=ws.getCell(3,1);
-    sub.value = dwgs.length ? `Drawing ${dwgs.join(' · ')}` : 'Cable assembly';
+    // The banner is one centred line. Listing 33 drawing numbers there ran the
+    // text clear off the page and told the reader nothing the summary table
+    // two rows below doesn't say better — so past a handful, name the count
+    // and the range instead. The full list stays in the Drawing(s) meta cell.
+    sub.value = !dwgs.length ? 'Cable assembly'
+      : dwgs.length<=4 ? `Drawing ${dwgs.join(' · ')}`
+      : `${dwgs.length} drawings · ${dwgs[0]} … ${dwgs[dwgs.length-1]}`;
     sub.font={name:'Calibri',size:11,color:{argb:'FFBFD4EA'}};
     sub.alignment={vertical:'middle',horizontal:'center'};
 
@@ -6698,20 +6807,28 @@ async function exportSalesDeskExcel(){
 
     // ── Meta block ────────────────────────────────────────────────────────
     let row=6;
+    // Thirty-odd drawing numbers on a single line run clean off the page.
+    // Six per line, wrapped, with the row grown to fit.
+    const _dwgLines=[];
+    for(let i2=0;i2<dwgs.length;i2+=6) _dwgLines.push(dwgs.slice(i2,i2+6).join(', '));
     const meta=[
       ['Date', new Date().toLocaleDateString()],
       ['Prepared by', currentUserEmail||''],
-      ['Drawing(s)', dwgs.join(', ')||'—'],
+      ['Drawing(s)', _dwgLines.join('\n')||'—', _dwgLines.length],
       ['Line items', String(sdItems.length)],
       ['Drawings', String(groups.length)],
     ];
-    meta.forEach(([k,v])=>{
+    meta.forEach(([k,v,lines])=>{
       const kc=ws.getCell(row,1); kc.value=k;
       kc.font={bold:true,size:10,color:{argb:'FF334155'}};
       fill(kc,_XL.brandLight);
       merge(row,2,4);
       const vc=ws.getCell(row,2); vc.value=v;
       vc.font={size:10,color:{argb:'FF0F172A'}};
+      if(lines>1){
+        vc.alignment={wrapText:true,vertical:'top'};
+        ws.getRow(row).height=Math.min(lines*13+4,170);
+      }
       fill(vc,_XL.brandLight);
       for(let c=1;c<=4;c++) ws.getCell(row,c).border=_xlBoxed;
       row++;
@@ -6790,6 +6907,13 @@ async function exportSalesDeskExcel(){
         c.alignment={vertical:'middle',horizontal:ci?'right':'left'};
       });
       ws.getRow(row).height=22;
+      row++;
+      merge(row,1,LAST);
+      const _outlineHint=ws.getCell(row,1);
+      _outlineHint.value='Each drawing\'s parts are collapsed below — click the + in the left margin '
+                       + '(or the 1 / 2 buttons above it) to expand a drawing.';
+      _outlineHint.font={italic:true,size:9,color:{argb:'FF64748B'}};
+      _outlineHint.alignment={vertical:'middle',indent:1};
       row+=2;
     }
 
@@ -6864,6 +6988,18 @@ async function exportSalesDeskExcel(){
         row++;
       });
 
+      // Fold this drawing's parts into a collapsible group. Collapsed, the
+      // quote reads as one line per drawing plus its price build-up — the shape
+      // of the whole job on one screen; expanded, it's the full BOM. The price
+      // rows below stay OUTSIDE the group so they are visible either way.
+      if(groups.length>1){
+        for(let rr=hr; rr<row; rr++){
+          const R=ws.getRow(rr);
+          R.outlineLevel=1;
+          R.hidden=true;
+        }
+      }
+
       // This drawing's own price build-up, immediately under its parts.
       money('Parts Total',+g.partsTotal.toFixed(2));
       money(`Labor  (${(+g.laborMinutes).toFixed(1)} min × $${g.rate}/min)`,+g.laborCost.toFixed(2));
@@ -6917,8 +7053,19 @@ async function exportSalesDeskExcel(){
       row++;
     }
 
-    if(firstHeaderRow){
-      ws.views=[{state:'frozen',ySplit:firstHeaderRow,showGridLines:false}];
+    // Freezing the first drawing's column-header row keeps the headers in view
+    // while scrolling a single-drawing quote. With 33 drawings that row is ~50
+    // rows down, and freezing there fills the entire window — the sheet stops
+    // scrolling at all, which reads as a broken file. Every drawing carries its
+    // own header row anyway, so a multi-drawing quote freezes only the banner.
+    const _freezeAt = (groups.length===1 && firstHeaderRow && firstHeaderRow<=15)
+      ? firstHeaderRow : 4;
+    ws.views=[{state:'frozen',ySplit:_freezeAt,showGridLines:false}];
+    if(groups.length>1){
+      // summaryBelow:false puts the outline's +/- button on the DRAWING title
+      // row above its parts, rather than on the total below them.
+      ws.properties.outlineProperties={summaryBelow:false,summaryRight:false};
+      ws.properties.outlineLevelRow=1;
     }
 
 
