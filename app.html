@@ -635,7 +635,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.31.0';
+const APP_VER   = '1.31.1';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2308,6 +2308,11 @@ function _normalizeBOMRows(rows){
   });
   rows.length=0;
   rows.push(...deduped);
+  // Component rows are deliberately NOT merged by part number. A parts list that
+  // names the same component on several lines is describing several places it is
+  // fitted, each with its own item number and quantity, and the sheet shows them
+  // as the file does. Only TOOL rows collapse (above), because a hand tool is a
+  // one-time purchase rather than something that scales with the assembly.
   return rows;
 }
 
@@ -2646,8 +2651,7 @@ function _parseStructuredBOMSheet(rows){
   // every row as its Drawing #.
   const reportPN=_xlsFindReportPartNumber(rows, hdrIdx);
   const cell=(row,key)=>colMap[key]===undefined?'':String(row[colMap[key]]??'').trim();
-  const out=[];          // components in first-seen order
-  const byKey=new Map(); // dedupe key -> row already emitted
+  const out=[];          // one entry per component line, in sheet order
   let current=null;      // last emitted component, for attaching its vendor rows
 
   for(let i=hdrIdx+1;i<rows.length;i++){
@@ -2703,9 +2707,12 @@ function _parseStructuredBOMSheet(rows){
     // Must carry some identity to be a real row.
     if(!pn && !nm && !desc) continue;
 
-    const key=(pn||nm||desc).toLowerCase();
-    if(byKey.has(key)){ current=byKey.get(key); continue; } // already emitted — reuse for vendor attachment
-
+    // Every line of the source file becomes its own row, repeats included.
+    // Previously a repeated component was dropped outright, so the sheet showed
+    // one line carrying only the FIRST occurrence's quantity — three connectors
+    // ordered as one. Keeping the lines is the faithful reading: each carries
+    // its own item number and quantity, and the totals downstream add up because
+    // they sum rows rather than trusting one merged figure.
     const rec={
       item:cell(row,'item'),
       atlantium_pn:pn,
@@ -2722,7 +2729,7 @@ function _parseStructuredBOMSheet(rows){
       alt_mpns:[],                       // every approved manufacturer PN (QVL)
       _isSubAssembly:!!isSub,
     };
-    out.push(rec); byKey.set(key,rec); current=rec;
+    out.push(rec); current=rec;
   }
   // Fallback for components the export lists with NO vendor/QVL row at all:
   // rather than leave MNF P/N blank, fall back to the sheet's own part number.
@@ -2804,7 +2811,7 @@ ROW-TYPE COLUMN (e.g. a column literally named "Type"): treat its values as foll
 - "StdPart Revision", "SpecTdp", "SpecTdp Revision", "DocumentTdp", "DocumentTdp Revision" → internal sub-assembly / drawing / document references. SKIP these entirely — they are not purchasable components.
 - If there is no type column at all, just extract every genuine data row of the BOM table.
 
-DEDUPLICATION: these exports repeat the same component many times (once per place it's used). Output each distinct component ONCE only, keyed on its part identity.
+REPEATED COMPONENTS: these exports list the same component once per place it is used. Output EVERY one of those lines as its own row, in sheet order, each with its own item number and its own quantity. Do not merge them and do not drop any of them — a component on three lines produces three rows. Merging them and keeping only the first line's quantity is what orders a third of what the assembly needs.
 
 FIELD MAPPING (map by column name; names vary between systems):
 - "atlantium_pn" → the customer's/company's internal part number — look for: PART NUM, PART NUMBER, ITEM ID, CATALOG, INTERNAL PN, CUST PN
@@ -2821,7 +2828,7 @@ FIELD MAPPING (map by column name; names vary between systems):
 ${_BOM_TOOL_RULE_SECTION}
 
 RULES:
-1. Output ONE row per distinct real component — do not repeat a component that appears multiple times in the sheet
+1. Output one row for EVERY component line in the sheet, in sheet order — a component listed on three lines produces three rows, each with its own item number and quantity
 2. Never output a QVL/vendor child row as its own BOM row — fold it into its parent component
 3. Never output sub-assembly/document rows (SpecTdp/DocumentTdp and their Revisions)
 4. Read part numbers character by character — they are precise: do NOT guess or correct them
@@ -2878,6 +2885,12 @@ COLUMN MAPPING (column names may vary between drawings):
 - "unit" → unit of measure — look for: UNIT, UOM, U/M — the ONLY valid values are: "pc", "mm", "cm", "ea", "gm" (grams — also written "GR"), "M" (meters). If the column shows anything else, leave "unit" as empty string "" rather than inventing or guessing a unit.
 - "pin_count" → for connector parts only: the number of pins/positions/contacts (look for a POS, PINS, CONTACTS, WAY column, or a count embedded in the part number/description of a known connector series). Empty string "" if the row isn't a connector or the count isn't known — do not guess.
 - "price" → normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). The ONLY exception is a synthesized crimp-tool row — see rule 5 below.
+THE SAME PART ON SEVERAL LINES: a parts list often gives one part more than one
+item number, because it is fitted in more than one place. Output EVERY one of
+those lines as its own row, in the order they appear, each keeping its own item
+number and quantity. Do not merge them into one row and do not drop any of them
+— merging and keeping the first line's quantity orders a fraction of what the
+assembly needs.
 
 QTY RULE: If there are multiple quantity columns (e.g. for different product sizes), take the FIRST one only.
 
@@ -2932,6 +2945,12 @@ For each row extract:
 - "manufacturer": manufacturer name if shown, else empty string
 - "pin_count": for connector parts only — the number of pins/positions/contacts, read from a POS/PINS/CONTACTS/WAY column if the drawing has one, or inferred from a count embedded in the part number/description of a known connector series. Empty string "" if the row isn't a connector or the count isn't known — do not guess.
 - "price": normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). The ONLY exception is a synthesized crimp-tool row — see rule 5 below.
+THE SAME PART ON SEVERAL LINES: a parts list often gives one part more than one
+item number, because it is fitted in more than one place. Output EVERY one of
+those lines as its own row, in the order they appear, each keeping its own item
+number and quantity. Do not merge them into one row and do not drop any of them
+— merging and keeping the first line's quantity orders a fraction of what the
+assembly needs.
 
 QTY DISAMBIGUATION: for cable/wire rows, the QTY cell is very often a LENGTH
 with its unit stuck directly to the number, e.g. "230mm", "2500mm", "1.5M" —
