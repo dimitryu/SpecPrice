@@ -619,6 +619,120 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
     ts(['Part Number','Description','x','y'])>ts(['Part Number','Description']));
 }
 
+
+// ──────────────────────────── 20. flat ERP exports (AMAT PDM shape)
+{
+  const sq=G('_xlsSquash');
+  [['MFG P/N','mfgpn'],['MFG PN','mfgpn'],['U/M','um'],['UOM','uom'],['NO.','no'],
+   ["NO. REQ'D",'noreqd'],['Part Number','partnumber'],['AMAT P/N','amatpn'],
+   ['EA/FT','eaft'],['  Description  ','description'],['#','#'],['','']]
+    .forEach(([raw,exp])=>t(`_xlsSquash(${JSON.stringify(raw)})`, sq(raw), exp));
+  t('_xlsSquash keeps Hebrew letters', sq('מק"ט'), 'מקט');
+  t('_xlsSquash null', sq(null), '');
+
+  const f=G('_parseStructuredBOMSheet');
+  // The real sheet: banner row, then a flat header with the manufacturer PN
+  // and name as columns on the component row itself (no QVL child rows).
+  const flat=[
+    ['PDC - UV ENLIGHT -  EA0150-K6394 REV A - Date Information Retrieved : 4/17/2019','','','','','','',''],
+    ['HLA','ITEM','AMAT P/N','DESCRIPTION','QTY','EA/FT','MFG NAME','MFG P/N'],
+    ['0150-K6394','1','0190-C9640','KIT,JACK SCW PH HD 4-40x5.6mm w/RETAINING CLIP','1','EACH','TRANS-PRO','ELH-750/R-0'],
+    ['0150-K6394','2','0720-A2120','CON D-SUB 15PIN MALE STR CRIMP FLAT REL W/O','1','EACH','3M','8215-6003'],
+    ['0150-K6394','4','1390-A2920','CABLE FLAT 15 COND 28AWG BLUE','0.22','METER','3M','3601/15'],
+    ['','','','','','','',''],
+  ];
+  const out=f(flat);
+  ok('flat: sheet is recognised as a BOM', Array.isArray(out));
+  t('flat: row count',                out.length, 3);
+  t('flat: MFG P/N becomes part_number', out[0].part_number, 'ELH-750/R-0');
+  t('flat: MFG NAME becomes manufacturer', out[0].manufacturer, 'TRANS-PRO');
+  t('flat: AMAT P/N stays the customer PN', out[0].atlantium_pn, '0190-C9640');
+  t('flat: description',              out[0].description, 'KIT,JACK SCW PH HD 4-40x5.6mm w/RETAINING CLIP');
+  t('flat: item number',              out[0].item, '1');
+  t('flat: qty',                      out[0].qty, '1');
+  t('flat: EA/FT column read as the unit', out[0].unit, 'EACH');
+  t('flat: HLA becomes the drawing number', out[0].drawing_number, '0150-K6394');
+  t('flat: second row MPN',           out[1].part_number, '8215-6003');
+  t('flat: second row manufacturer',  out[1].manufacturer, '3M');
+  t('flat: customer PN is NOT copied into MPN', out[1].part_number!==out[1].atlantium_pn, true);
+  t('flat: no phantom alternatives',  out[0].alt_mpns, []);
+
+  // Same sheet through the extraction normalizer, as the app runs it.
+  const norm=G('_normalizeExtractedRow');
+  const rows=f(flat); rows.forEach(norm);
+  t('flat: EACH normalizes to pc', rows[0].unit, 'pc');
+  t('flat: METER normalizes to mm', rows[2].unit, 'mm');
+  t('flat: 0.22 METER becomes 220 mm', rows[2].qty, 220);
+
+  // A banner number still wins over the assembly column.
+  const withBanner=[
+    ['Part Number:','ASSY-999','','','','','',''],
+    ['HLA','ITEM','AMAT P/N','DESCRIPTION','QTY','EA/FT','MFG NAME','MFG P/N'],
+    ['0150-K6394','1','P-1','Thing','1','EACH','3M','X-1'],
+  ];
+  t('flat: banner number beats the HLA column', f(withBanner)[0].drawing_number, 'ASSY-999');
+
+  // Header punctuation variants all resolve.
+  const punct=[
+    ['NO.','CUST PN','DESCRIPTION','QTY','U/M','MFR PN','MANUFACTURER'],
+    ['1','C-1','Widget','3','EA','M-1','Acme'],
+  ];
+  const po=f(punct);
+  t('punct: "MFR PN" found',        po[0].part_number, 'M-1');
+  t('punct: "MANUFACTURER" found',  po[0].manufacturer, 'Acme');
+  t('punct: "CUST PN" found',       po[0].atlantium_pn, 'C-1');
+  t('punct: "U/M" found',           po[0].unit, 'EA');
+  t('punct: "NO." found as item',   po[0].item, '1');
+
+  // The customer-prefix shape must never swallow the manufacturer column.
+  const shape=[
+    ['ITEM','ACME P/N','DESCRIPTION','QTY','MFG P/N'],
+    ['1','A-1','Widget','1','M-9'],
+  ];
+  const so=f(shape);
+  t('shape: "ACME P/N" read as the customer PN', so[0].atlantium_pn, 'A-1');
+  t('shape: "MFG P/N" still read as the MPN',    so[0].part_number, 'M-9');
+
+  // Hierarchical sheets are untouched: a QVL row still supplies the MPN, and
+  // a component row that already has its own MPN keeps it.
+  const hier=[
+    ['Part Number:','ASSY-100'],
+    ['Item','Part Number','Description','Type','MPN','Vendor','Qty','UOM'],
+    ['1','P-1','Cap','StdPart','','','1','pc'],
+    ['','','','QVL','GRM-1','Murata','',''],
+    ['','','','QVL','C0603','Yageo','',''],
+  ];
+  const ho=f(hier);
+  t('hier: QVL still supplies the MPN', ho[0].part_number, 'GRM-1');
+  t('hier: QVL still supplies the maker', ho[0].manufacturer, 'Murata');
+  t('hier: alternatives still collected', ho[0].alt_mpns.length, 2);
+
+  const hier2=[
+    ['Item','Part Number','Description','Type','MPN','Vendor','Qty','UOM'],
+    ['1','P-1','Cap','StdPart','OWN-1','Kemet','1','pc'],
+    ['','','','QVL','GRM-1','Murata','',''],
+  ];
+  const h2=f(hier2);
+  t('hier: a row with its own MPN keeps it', h2[0].part_number, 'OWN-1');
+  t('hier: ...and its own manufacturer',     h2[0].manufacturer, 'Kemet');
+  t('hier: own MPN and the QVL one are both alternatives', h2[0].alt_mpns.map(a=>a.mpn), ['OWN-1','GRM-1']);
+  t('hier: own MPN keeps its own maker in the list', h2[0].alt_mpns[0].manufacturer, 'Kemet');
+}
+
+// ──────────────────────────── 21. unit values these sheets actually use
+{
+  const f=G('_normalizeUnitQty');
+  [[3,'each',{qty:3,unit:'pc'}], [3,'EACH',{qty:3,unit:'pc'}], [3,'pcs',{qty:3,unit:'pc'}],
+   [3,'piece',{qty:3,unit:'pc'}], [3,'pieces',{qty:3,unit:'pc'}], [3,'pc.',{qty:3,unit:'pc'}],
+   [2,'ft',{qty:609.6,unit:'mm'}], [2,'FEET',{qty:609.6,unit:'mm'}], [1,'foot',{qty:304.8,unit:'mm'}],
+   [2,'in',{qty:50.8,unit:'mm'}], [1,'inch',{qty:25.4,unit:'mm'}], [2,'inches',{qty:50.8,unit:'mm'}],
+   ['x','ft',{qty:'x',unit:'mm'}]]
+    .forEach(([q,u,exp])=>t(`_normalizeUnitQty(${JSON.stringify(q)},${JSON.stringify(u)})`, f(q,u), exp));
+  t('unit: METER still folds to mm', f(0.22,'METER'), {qty:220,unit:'mm'});
+  t('_dbNormalizeUnit each', G('_dbNormalizeUnit')('each'), 'pc');
+  t('_dbNormalizeUnit ft',   G('_dbNormalizeUnit')('ft'), 'mm');
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

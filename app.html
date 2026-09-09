@@ -635,7 +635,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.31.1';
+const APP_VER   = '1.31.2';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2346,7 +2346,14 @@ function _normalizeUnitQty(qty, rawUnit){
       return {qty: hasNum ? n*1000 : qty, unit:'mm'};
     case 'cm': case 'centimeter': case 'centimeters':
       return {qty: hasNum ? n*10 : qty, unit:'mm'};
-    case 'ea': return {qty, unit:'pc'};
+    case 'ea': case 'each': case 'pc.': case 'pcs': case 'piece': case 'pieces':
+      return {qty, unit:'pc'};
+    // Imperial length. Same fold as m/cm — one canonical length unit (mm), qty
+    // rescaled so the number still describes the same physical length.
+    case 'ft': case 'feet': case 'foot':
+      return {qty: hasNum ? n*304.8 : qty, unit:'mm'};
+    case 'in': case 'inch': case 'inches':
+      return {qty: hasNum ? n*25.4 : qty, unit:'mm'};
     case 'gm': case 'g': case 'gram': case 'grams':
       return {qty, unit:'gr'};
     default: return {qty, unit:''};
@@ -2383,10 +2390,14 @@ function _dbNormalizeUnit(rawUnit){
 // — a part_number can be referenced by more than one RFQ, so this is a set, not a
 // single value, and existing entries are always preserved (arrayUnion).
 async function saveBOMToPartStock(rows, rfqName=''){
-  let created=0;
+  let created=0, skipped=0;
   for(const r of rows){
     const pn=(r.part_number||'').trim();
-    if(!pn) continue;
+    // The Database is keyed on the part number, so a row without one has
+    // nowhere to live. It used to be dropped in silence, which looked exactly
+    // like a successful save until the part couldn't be found later — say so
+    // instead (count them up and warn once, below).
+    if(!pn){ skipped++; continue; }
     // Firestore doc IDs can't have / ; replace unsafe chars
     const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
     const ref=doc(db,'companies',companyId,'parts_cache',key);
@@ -2431,6 +2442,9 @@ async function saveBOMToPartStock(rows, rfqName=''){
         created++;
       }
     }catch(e){ console.warn('[PartStock] save error:',pn,e.message); }
+  }
+  if(skipped){
+    toast(`${skipped} of ${rows.length} row(s) had no part number and were NOT saved to the Database — fill MNF P/N and import again`,'error');
   }
   // Refresh in-memory parts list so SD search sees new entries
   await loadParts();
@@ -2558,18 +2572,38 @@ const _xlsIncludeSubAssemblies=true;
 
 // Column-name aliases for the deterministic spreadsheet parser below. Matched
 // case-insensitively against the detected header row.
+// Every ERP spells its headers differently — "MFG P/N" vs "MFG PN", "U/M" vs
+// "UM", "NO." vs "NO". Squash the sheet's header cell AND the alias entry down
+// to letters+digits before comparing, so one alias covers every punctuation
+// variant instead of needing a row per spelling. "#" squashes to nothing, so
+// it keeps its raw form rather than matching everything.
+function _xlsSquash(s){
+  const t=String(s??'').trim().toLowerCase();
+  const sq=t.replace(/[^a-z0-9\u0590-\u05FF]+/g,'');
+  return sq||t;
+}
 const _XLS_COL_ALIASES={
   internal_pn : ['part num','part number','partnumber','part no','item id','catalog','catalog no','internal pn','cust pn','customer pn','מק"ט','מקט'],
   name        : ['name','title','part name'],
   description : ['description','desc','long description','item description','תיאור','תאור'],
-  uom         : ['uom','unit','units','u/m','unit of measure',"יח'"],
+  uom         : ['uom','unit','units','u/m','unit of measure','ea/ft',"יח'"],
   type        : ['type','row type','record type','level type'],
   mfpn        : ['mfpn','mpn','mfg pn','mfr pn','manufacturer pn','manufacturer part number','vendor pn','nfpn'],
-  vendor      : ['vendor','manufacturer','mfg','supplier','maker','יצרן','ספק'],
+  vendor      : ['vendor','manufacturer','mfg','supplier','maker','mfg name','mfr name','manufacturer name','vendor name','supplier name','יצרן','ספק'],
   qty         : ['qty','quantity',"no. req'd",'no req','amount','usage','required','כמות'],
   item        : ['item','item no','seq','#','no.','line'],
   status      : ['nfpn status','status','approval','approval status'],
+  // The top-level assembly number, repeated on every row (Applied Materials
+  // PDM exports label this column "HLA"). Used as the Drawing # when the
+  // banner above the header doesn't carry one.
+  assembly    : ['hla','assembly','assy','top level','parent assembly'],
 };
+// A customer-prefixed part-number column — "AMAT P/N", "ACME P/N" — is the
+// CUSTOMER's internal number, not the manufacturer's. Matched by shape so the
+// next customer's export doesn't need its own alias entry, but never for the
+// manufacturer-side spellings, which mean the opposite thing.
+const _XLS_INTERNAL_PN_SHAPE=/^[a-z]{2,8}pn$/;
+const _XLS_MFG_PN_SQUASHED=['mfgpn','mfrpn','mpn','mfpn','nfpn','vendorpn','manufacturerpn'];
 // Row-TYPE semantics in hierarchical ERP/PLM exports (ELBIT "BOM QVL Report"
 // and friends). Classified with ANCHORED patterns on purpose: a loose
 // substring test is actively dangerous here — "StdPart" happens to contain the
@@ -2626,20 +2660,23 @@ function _xlsFindReportPartNumber(rows, hdrIdx){
 // with no recognisable header row (see handleFiles/handleSDFiles).
 // Returns null when the sheet doesn't look like a structured BOM at all.
 function _parseStructuredBOMSheet(rows){
-  const norm=s=>String(s??'').trim().toLowerCase();
   // 1. Find the header row — the first row within the top 30 that matches at
   //    least two known column names (a title/date banner won't).
   let hdrIdx=-1, colMap=null;
   for(let i=0;i<Math.min(30,rows.length);i++){
-    const cells=(rows[i]||[]).map(norm);
+    const cells=(rows[i]||[]).map(_xlsSquash);
     const map={};
     cells.forEach((c,ci)=>{
       if(!c) return;
       for(const key in _XLS_COL_ALIASES){
         if(map[key]!==undefined) continue;
-        if(_XLS_COL_ALIASES[key].includes(c)) map[key]=ci;
+        if(_XLS_COL_ALIASES[key].some(a=>_xlsSquash(a)===c)) map[key]=ci;
       }
     });
+    if(map.internal_pn===undefined){
+      const ci=cells.findIndex(c=>c && _XLS_INTERNAL_PN_SHAPE.test(c) && !_XLS_MFG_PN_SQUASHED.includes(c));
+      if(ci>=0) map.internal_pn=ci;
+    }
     const hits=Object.keys(map).length;
     if(hits>=2 && (map.internal_pn!==undefined||map.mfpn!==undefined||map.description!==undefined||map.name!==undefined)){
       hdrIdx=i; colMap=map; break;
@@ -2649,7 +2686,16 @@ function _parseStructuredBOMSheet(rows){
 
   // Top-level assembly number from the banner above the header — stamped onto
   // every row as its Drawing #.
-  const reportPN=_xlsFindReportPartNumber(rows, hdrIdx);
+  let reportPN=_xlsFindReportPartNumber(rows, hdrIdx);
+  // No banner number? Fall back to an assembly-number column that repeats the
+  // top-level number on every row. It's the sheet's own answer, and better
+  // than the file name the caller falls back to otherwise.
+  if(!reportPN && colMap.assembly!==undefined){
+    for(let i=hdrIdx+1;i<rows.length;i++){
+      const v=String((rows[i]||[])[colMap.assembly]??'').trim();
+      if(v){ reportPN=v; break; }
+    }
+  }
   const cell=(row,key)=>colMap[key]===undefined?'':String(row[colMap[key]]??'').trim();
   const out=[];          // one entry per component line, in sheet order
   let current=null;      // last emitted component, for attaching its vendor rows
@@ -2716,8 +2762,13 @@ function _parseStructuredBOMSheet(rows){
     const rec={
       item:cell(row,'item'),
       atlantium_pn:pn,
-      part_number:'',                    // filled from the QVL row that follows
-      manufacturer:'',
+      // A FLAT export carries MFG P/N and MFG NAME as columns on the component
+      // row itself, with no QVL child row underneath — reading them only from
+      // QVL rows left every line unpriceable on those files. A hierarchical
+      // export leaves both cells blank here and still fills them from the QVL
+      // rows below, exactly as before.
+      part_number:cell(row,'mfpn'),
+      manufacturer:cell(row,'vendor'),
       // Prefer the longer of Name / Description — exports often truncate one.
       description:(desc.length>nm.length?desc:nm)||nm||desc,
       qty:cell(row,'qty')||'1',          // these exports frequently have no qty column
@@ -2726,7 +2777,11 @@ function _parseStructuredBOMSheet(rows){
       // empty so the caller fills it from the FILE NAME (same as PDF imports).
       drawing_number:reportPN, drawing_name:'',
       pin_count:'', price:'',
-      alt_mpns:[],                       // every approved manufacturer PN (QVL)
+      // Every approved manufacturer PN (QVL). The row's OWN MPN is seeded here
+      // too when it has one, because the "fewer than two means no real choice"
+      // test at the bottom counts this list — leaving the row's own number out
+      // would make one row + one approved alternative look like no choice.
+      alt_mpns: cell(row,'mfpn') ? [{mpn:cell(row,'mfpn'), manufacturer:cell(row,'vendor')}] : [],
       _isSubAssembly:!!isSub,
     };
     out.push(rec); current=rec;
@@ -6158,7 +6213,12 @@ async function handleSDFiles(files){
         const match=pn?allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
         const qty=parseFloat(r.qty)||1;
         const item={
-          part_number:r.part_number||r.item||'', description:r.description||'',
+          // NOT `|| r.item`: the item column is the row's ORDINAL on the sheet
+          // ("1", "2", "3"), not a part number. Falling back to it filled MNF
+          // P/N with 1..N on any file whose rows carry no manufacturer number,
+          // which reads as a real part, gets sent to Check Price as one, and
+          // matches nothing. An empty cell is the truthful answer.
+          part_number:r.part_number||'', description:r.description||'',
           drawing_number:r.drawing_number||match?.drawing_number||match?.drawing_name||'',
           qty, unit:r.unit||match?.unit||match?.units||'pcs',
           // A crimp/insertion TOOL row is synthesized fresh by the AI during
@@ -6188,17 +6248,13 @@ async function handleSDFiles(files){
         // _sdRecalcLaborTotal to use it as-is instead of multiplying again by
         // this row's own qty column (see that function for why).
         // Must match the EXACT same fallback priority used when this key was
-        // stored above (row.part_number||row.description||step.row_idx) —
-        // NOT item.part_number, which for a row with no real part number
-        // falls back to r.item (the row/item NUMBER, e.g. "5"), a completely
-        // different value from what the storage side falls back to
-        // (row.description). That mismatch silently dropped the AI-computed
-        // fixed total for every row lacking a manufacturer part number —
-        // common for plain cable/wire rows or generic hardware — which is
-        // exactly where a chunk of "missing" labor time was going, even
-        // though the breakdown modal (which sums proc.steps directly,
-        // independent of whether this lookup succeeds) kept showing the
-        // full, correct total.
+        // stored above (row.part_number||row.description||step.row_idx), and be
+        // built from `r` rather than `item` — the two used to diverge for rows
+        // with no manufacturer part number (item.part_number fell back to the
+        // item ORDINAL, the storage side to the description), which silently
+        // dropped the AI-computed fixed total for exactly those rows: plain
+        // cable/wire and generic hardware. That fallback is gone now, but keep
+        // both sides reading from `r` so they cannot drift apart again.
         const dwgKey=`${item.drawing_number}|${r.part_number||r.description||_sdRowIdx}`;
         if(_sdPendingLaborByKey[dwgKey]!=null){
           item.labor_time = String(_sdPendingLaborByKey[dwgKey]);
