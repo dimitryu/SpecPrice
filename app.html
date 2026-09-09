@@ -645,7 +645,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.34.0';
+const APP_VER   = '1.34.1';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -772,7 +772,17 @@ onAuthStateChanged(auth, async user => {
   document.getElementById('splash').style.display = 'none';
   document.getElementById('shell').style.display = 'flex';
   const infoEl = document.getElementById('topbar-info');
-  if (infoEl) infoEl.innerHTML = `<span>👤 ${esc(currentUserEmail)}</span><span style="color:#CBD5E1">|</span><span>v${APP_VER}</span>`;
+  // The version sits next to the signed-in user on every screen, and doubles as
+  // the update check — the place people already look to answer "what am I
+  // running?" is the place to answer "is it current?". It was on the Home
+  // screen only, in 10px grey, where nobody found it.
+  if (infoEl){
+    infoEl.innerHTML = `<span>👤 ${esc(currentUserEmail)}</span><span style="color:#CBD5E1">|</span>`
+      + `<button class="btn btn-ghost btn-sm" id="btn-check-version-top" `
+      + `title="Check for a newer version">↻ v${APP_VER}</button>`;
+    document.getElementById('btn-check-version-top')
+      ?.addEventListener('click',e=>checkForUpdate(e.currentTarget));
+  }
   logAudit('login', {role: currentUserRole}, true);
   route('home');
   autoCheckForUpdate();   // silent unless there's something to update
@@ -937,16 +947,11 @@ function renderHome(){
         }).join('')}
       </div>
       <button class="btn btn-ghost" id="btn-home-signout" style="margin-top:36px">Sign Out</button>
-      <div style="margin-top:10px;display:flex;align-items:center;justify-content:center;gap:8px">
-        <span style="font-size:10px;color:#94A3B8">v${APP_VER}</span>
-        <button class="btn btn-ghost btn-sm" id="btn-check-version">↻ Check for updates</button>
-      </div>
+      <div style="margin-top:10px;font-size:10px;color:#94A3B8">v${APP_VER}</div>
     </div>`);
   document.querySelectorAll('.home-btn').forEach(b=>b.addEventListener('click',()=>route(b.dataset.view)));
   document.getElementById('btn-home-signout')?.addEventListener('click',
     () => logAudit('logout',null,true).finally(()=>signOut(auth).then(() => location.href = 'index.html')));
-  const _cvBtn=document.getElementById('btn-check-version');
-  _cvBtn?.addEventListener('click',()=>checkForUpdate(_cvBtn));
 }
 
 // ── Support ticket (floating headset button, every screen) ──────────────────────────
@@ -6910,8 +6915,9 @@ async function exportSalesDeskExcel(){
       row++;
       merge(row,1,LAST);
       const _outlineHint=ws.getCell(row,1);
-      _outlineHint.value='Each drawing\'s parts are collapsed below — click the + in the left margin '
-                       + '(or the 1 / 2 buttons above it) to expand a drawing.';
+      _outlineHint.value='Each drawing\'s parts are grouped — click the 1 button above the left margin '
+                       + 'to collapse them all to one line per drawing, 2 to expand again, '
+                       + 'or the − / + beside a drawing for just that one.';
       _outlineHint.font={italic:true,size:9,color:{argb:'FF64748B'}};
       _outlineHint.alignment={vertical:'middle',indent:1};
       row+=2;
@@ -6988,16 +6994,18 @@ async function exportSalesDeskExcel(){
         row++;
       });
 
-      // Fold this drawing's parts into a collapsible group. Collapsed, the
-      // quote reads as one line per drawing plus its price build-up — the shape
-      // of the whole job on one screen; expanded, it's the full BOM. The price
-      // rows below stay OUTSIDE the group so they are visible either way.
+      // Fold this drawing's parts into a collapsible group, so the reader can
+      // shrink the quote to one line per drawing plus its price build-up. The
+      // price rows below stay OUTSIDE the group and are visible either way.
+      //
+      // Deliberately NOT shipped pre-collapsed. The price cells carry Excel
+      // comments (the "matched under a different part number" warnings), and a
+      // comment anchored to a HIDDEN row makes Excel declare the workbook
+      // damaged and offer to repair it — which is exactly what happened when
+      // this shipped collapsed. The outline's "1" button collapses everything
+      // in one click, and the file opens.
       if(groups.length>1){
-        for(let rr=hr; rr<row; rr++){
-          const R=ws.getRow(rr);
-          R.outlineLevel=1;
-          R.hidden=true;
-        }
+        for(let rr=hr; rr<row; rr++) ws.getRow(rr).outlineLevel=1;
       }
 
       // This drawing's own price build-up, immediately under its parts.
