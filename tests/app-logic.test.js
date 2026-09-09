@@ -733,6 +733,123 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('_dbNormalizeUnit ft',   G('_dbNormalizeUnit')('ft'), 'mm');
 }
 
+
+// ──────────────────────────── 22. header analysis, ambiguity, repeated rows
+{
+  const find=G('_xlsFindHeaderRow'), analyze=G('_xlsAnalyzeSheet'),
+        parse=G('_parseStructuredBOMSheet'), merge=G('_xlsMergeRepeatedRows'),
+        count=G('_xlsCountRepeatedRows');
+
+  // The AMAT flat sheet: every role matches exactly one column, no repeats.
+  const flat=[
+    ['PDC - UV ENLIGHT - EA0150-K6394 REV A','','','','','','',''],
+    ['HLA','ITEM','AMAT P/N','DESCRIPTION','QTY','EA/FT','MFG NAME','MFG P/N'],
+    ['0150-K6394','1','0190-C9640','KIT,JACK SCW','1','EACH','TRANS-PRO','ELH-750/R-0'],
+    ['0150-K6394','2','0720-A2120','CON D-SUB 15PIN','1','EACH','3M','8215-6003'],
+  ];
+  const fa=analyze(flat);
+  t('analyze: header row found', fa.hdrIdx, 1);
+  t('analyze: no ambiguous roles', fa.ambiguous, []);
+  t('analyze: no repeated rows', fa.repeats, 0);
+  t('analyze: a confident sheet is never interrupted', fa.needsConfirmation, false);
+  t('analyze: row count', fa.rowCount, 2);
+  t('analyze: sample value comes from the first data row', fa.sample[7], 'ELH-750/R-0');
+  t('analyze: headers captured verbatim', fa.headers[6], 'MFG NAME');
+
+  // The ELBIT hierarchical sheet: also unambiguous.
+  const hier=[
+    ['Part Number:','ASSY-100'],
+    ['Item','Part Number','Description','Type','MPN','Vendor','Qty','UOM'],
+    ['1','P-1','Cap','StdPart','','','1','pc'],
+    ['','','','QVL','GRM-1','Murata','',''],
+  ];
+  t('analyze: hierarchical sheet needs no confirmation', analyze(hier).needsConfirmation, false);
+
+  // The CBL export: duplicate header names AND one row per manufacturer.
+  const cbl=[
+    ['Date','Top-Level Part','Part Description','Part Number','Part Description',
+     'Quantity','Factory Unit','Baloon no.','Manufacturer Name','Mnf. Part No.','Factory Unit'],
+    ['07/22/2026','CBL002351-AA','CABLE ASSY','CON000177','CON D-TYPE 9P','1.000','ea','10','CONEC','163A11069X','ea'],
+    ['07/22/2026','CBL002351-AA','CABLE ASSY','CON000177','CON D-TYPE 9P','1.000','ea','10','CVILUX','CD5109PA100','ea'],
+    ['07/22/2026','CBL002351-AA','CABLE ASSY','CON000366','CON MOLEX 2 PIN','1.000','ea','16','MOLEX INC','39-01-3022','ea'],
+  ];
+  const ca=analyze(cbl);
+  t('analyze: "Mnf. Part No." is recognised as the MPN column', ca.candidates.mfpn, [9]);
+  t('analyze: "Part Number" stays the customer PN', ca.candidates.internal_pn, [3]);
+  t('analyze: "Manufacturer Name" found', ca.candidates.vendor, [8]);
+  t('analyze: "Baloon no." found as the item column', ca.candidates.item, [7]);
+  t('analyze: "Top-Level Part" found as the assembly', ca.candidates.assembly, [1]);
+  t('analyze: duplicate Part Description flagged', ca.candidates.description, [2,4]);
+  t('analyze: duplicate Factory Unit flagged', ca.candidates.uom, [6,10]);
+  t('analyze: ambiguous roles listed', ca.ambiguous.sort(), ['description','uom']);
+  t('analyze: repeated rows counted', ca.repeats, 1);
+  t('analyze: this sheet asks before importing', ca.needsConfirmation, true);
+
+  // Auto-guess: the MPN is now real, not the customer number.
+  const guess=parse(cbl);
+  t('cbl: MNF P/N is the manufacturer number', guess[0].part_number, '163A11069X');
+  t('cbl: customer PN preserved separately',   guess[0].atlantium_pn, 'CON000177');
+  t('cbl: manufacturer read from the row',     guess[0].manufacturer, 'CONEC');
+  t('cbl: drawing number from Top-Level Part', guess[0].drawing_number, 'CBL002351-AA');
+  t('cbl: item from Baloon no.',               guess[0].item, '10');
+  t('cbl: without merging, every row stays',   guess.length, 3);
+
+  // A confirmed mapping overrides the guess (component description, not the assembly's).
+  const fixed=parse(cbl,{hdrIdx:ca.hdrIdx, colMap:{...ca.colMap, description:4, uom:10}});
+  t('override: the chosen description column is used', fixed[0].description, 'CON D-TYPE 9P');
+
+  // Merging folds the repeats into alternatives.
+  const mergedRows=parse(cbl,{hdrIdx:ca.hdrIdx, colMap:{...ca.colMap, description:4}, mergeDuplicates:true});
+  t('merge: repeated component collapses',      mergedRows.length, 2);
+  t('merge: first manufacturer stays the pick', mergedRows[0].part_number, '163A11069X');
+  t('merge: both manufacturers kept as QVL',    mergedRows[0].alt_mpns.map(a=>a.mpn), ['163A11069X','CD5109PA100']);
+  t('merge: each alternative keeps its maker',  mergedRows[0].alt_mpns[1].manufacturer, 'CVILUX');
+  t('merge: qty is NOT multiplied',             mergedRows[0].qty, '1.000');
+  t('merge: a component listed once is untouched', mergedRows[1].alt_mpns, []);
+
+  // Merge helpers on their own.
+  const rows=[{atlantium_pn:'A',part_number:'M1',manufacturer:'X',alt_mpns:[{mpn:'M1',manufacturer:'X'}]},
+              {atlantium_pn:'A',part_number:'M2',manufacturer:'Y',alt_mpns:[{mpn:'M2',manufacturer:'Y'}]},
+              {atlantium_pn:'B',part_number:'M3',manufacturer:'Z',alt_mpns:[{mpn:'M3',manufacturer:'Z'}]}];
+  t('countRepeated: one repeat', count(rows), 1);
+  const m=merge(rows.map(r=>({...r, alt_mpns:[...r.alt_mpns]})));
+  t('mergeRepeated: two lines out', m.length, 2);
+  t('mergeRepeated: alternatives gathered', m[0].alt_mpns.map(a=>a.mpn), ['M1','M2']);
+  t('mergeRepeated: keyed case-insensitively',
+    merge([{atlantium_pn:'a',part_number:'M1',alt_mpns:[]},{atlantium_pn:'A',part_number:'M2',alt_mpns:[]}]).length, 1);
+  t('mergeRepeated: rows with no key are never folded',
+    merge([{atlantium_pn:'',description:'',part_number:'M1',alt_mpns:[]},
+           {atlantium_pn:'',description:'',part_number:'M2',alt_mpns:[]}]).length, 2);
+  t('mergeRepeated: falls back to description as the key',
+    merge([{atlantium_pn:'',description:'Cap',part_number:'M1',alt_mpns:[]},
+           {atlantium_pn:'',description:'Cap',part_number:'M2',alt_mpns:[]}]).length, 1);
+  t('countRepeated: nothing repeats', count([{atlantium_pn:'A'},{atlantium_pn:'B'}]), 0);
+
+  t('findHeaderRow: no header anywhere → null', find([['just'],['text']]), null);
+  t('analyze: unparsable sheet → null', analyze([['x']]), null);
+}
+
+// ──────────────────────────── 23. remembering a confirmed mapping
+{
+  const store={};
+  global.localStorage={getItem:k=>k in store?store[k]:null, setItem:(k,v)=>{store[k]=String(v);}, removeItem:k=>{delete store[k];}};
+  const sig=G('_xlsMapSignature'), save=G('_xlsSaveMap'), load=G('_xlsLoadSavedMap');
+  const headers=['Part Number','Mnf. Part No.','Quantity'];
+  t('signature: punctuation-insensitive', sig(headers), sig(['PART NUMBER','MNF PART NO','quantity']));
+  t('signature: different layouts differ', sig(headers)===sig(['A','B','C']), false);
+  t('recall: nothing saved yet', load(headers), null);
+  save(headers,{mfpn:1, internal_pn:0, qty:2});
+  t('recall: saved mapping comes back', load(headers), {mfpn:1, internal_pn:0, qty:2});
+  t('recall: a different layout is unaffected', load(['A','B','C']), null);
+  store['xlsColMap_v1_'+sig(headers)]='not json';
+  t('recall: corrupt entry is ignored', load(headers), null);
+
+  t('map fields: MNF P/N is the required one',
+    G('_XLS_MAP_FIELDS').filter(f=>f.required).map(f=>f.key), ['mfpn']);
+  t('map fields: every field is a real column role',
+    G('_XLS_MAP_FIELDS').every(f=>f.key in G('_XLS_COL_ALIASES')), true);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

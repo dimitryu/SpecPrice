@@ -635,7 +635,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.31.2';
+const APP_VER   = '1.32.0';
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -2079,9 +2079,18 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
       if(isXls){
         setMsg('Reading spreadsheet…', 20);
         const sheets = await readExcelSheets(file);
+        // Confirm the column mapping first when the guess is uncertain — see
+        // _xlsConfirmMapping. Returns {} for a sheet it is confident about, so
+        // a recognised export is never interrupted.
+        const _colChoice = await _xlsConfirmMapping(sheets, file.name, body, foot);
+        if(_colChoice===null){ errors.push(`"${file.name}" — import cancelled`); continue; }
+        body.innerHTML = `
+      <div class="ai-status"><div class="ring"></div><span id="ai-msg">${filePrefix}Reading spreadsheet…</span></div>
+      <div class="progress-bar"><div class="progress-fill" id="prog"></div></div>`;
+        foot.innerHTML = '';
         // Structured parse first — exact and repeatable (see
         // _parseStructuredBOMSheet). AI only for unrecognisable layouts.
-        extractedRows = parseExcelSheetsStructured(sheets) || [];
+        extractedRows = parseExcelSheetsStructured(sheets, _colChoice) || [];
         if(extractedRows.length){
           setMsg(`Parsed ${extractedRows.length} component(s) from the sheet`, 90);
         } else {
@@ -2585,18 +2594,23 @@ function _xlsSquash(s){
 const _XLS_COL_ALIASES={
   internal_pn : ['part num','part number','partnumber','part no','item id','catalog','catalog no','internal pn','cust pn','customer pn','מק"ט','מקט'],
   name        : ['name','title','part name'],
-  description : ['description','desc','long description','item description','תיאור','תאור'],
-  uom         : ['uom','unit','units','u/m','unit of measure','ea/ft',"יח'"],
+  description : ['description','desc','long description','item description','part description',
+                 'component description','material description','item desc','long desc','תיאור','תאור'],
+  uom         : ['uom','unit','units','u/m','unit of measure','ea/ft','factory unit',"יח'"],
   type        : ['type','row type','record type','level type'],
-  mfpn        : ['mfpn','mpn','mfg pn','mfr pn','manufacturer pn','manufacturer part number','vendor pn','nfpn'],
+  mfpn        : ['mfpn','mpn','mfg pn','mfr pn','manufacturer pn','manufacturer part number','vendor pn','nfpn',
+                 // "Mnf. Part No." and friends — the same column, spelled a dozen ways.
+                 'mnf part no','mnf pn','mnf part number','manufacturer part no','mfg part number','mfg part no',
+                 'mfr part number','mfr part no','supplier part number','vendor part no','maker pn'],
   vendor      : ['vendor','manufacturer','mfg','supplier','maker','mfg name','mfr name','manufacturer name','vendor name','supplier name','יצרן','ספק'],
   qty         : ['qty','quantity',"no. req'd",'no req','amount','usage','required','כמות'],
-  item        : ['item','item no','seq','#','no.','line'],
+  item        : ['item','item no','seq','#','no.','line','baloon no','balloon no','balloon number',
+                 'bubble no','find no'],
   status      : ['nfpn status','status','approval','approval status'],
   // The top-level assembly number, repeated on every row (Applied Materials
   // PDM exports label this column "HLA"). Used as the Drawing # when the
   // banner above the header doesn't carry one.
-  assembly    : ['hla','assembly','assy','top level','parent assembly'],
+  assembly    : ['hla','assembly','assy','top level','top level part','parent assembly','parent part'],
 };
 // A customer-prefixed part-number column — "AMAT P/N", "ACME P/N" — is the
 // CUSTOMER's internal number, not the manufacturer's. Matched by shape so the
@@ -2659,30 +2673,75 @@ function _xlsFindReportPartNumber(rows, hdrIdx){
 // the rules themselves are exact. The AI is kept only as a fallback for files
 // with no recognisable header row (see handleFiles/handleSDFiles).
 // Returns null when the sheet doesn't look like a structured BOM at all.
-function _parseStructuredBOMSheet(rows){
-  // 1. Find the header row — the first row within the top 30 that matches at
-  //    least two known column names (a title/date banner won't).
-  let hdrIdx=-1, colMap=null;
+// Finds the header row and works out which column plays which role. Returns
+// EVERY column that matched a role, not only the first: a sheet with two
+// "Part Description" columns (the assembly's and the component's) or two
+// "Factory Unit" columns is genuinely ambiguous, and choosing silently is how
+// the wrong description — or the wrong quantity basis — ends up in a quote.
+// The caller decides whether to run with the first-match guess or ask.
+function _xlsFindHeaderRow(rows){
   for(let i=0;i<Math.min(30,rows.length);i++){
     const cells=(rows[i]||[]).map(_xlsSquash);
-    const map={};
+    const candidates={};
     cells.forEach((c,ci)=>{
       if(!c) return;
       for(const key in _XLS_COL_ALIASES){
-        if(map[key]!==undefined) continue;
-        if(_XLS_COL_ALIASES[key].some(a=>_xlsSquash(a)===c)) map[key]=ci;
+        if(_XLS_COL_ALIASES[key].some(a=>_xlsSquash(a)===c)) (candidates[key]=candidates[key]||[]).push(ci);
       }
     });
-    if(map.internal_pn===undefined){
+    if(candidates.internal_pn===undefined){
       const ci=cells.findIndex(c=>c && _XLS_INTERNAL_PN_SHAPE.test(c) && !_XLS_MFG_PN_SQUASHED.includes(c));
-      if(ci>=0) map.internal_pn=ci;
+      if(ci>=0) candidates.internal_pn=[ci];
     }
-    const hits=Object.keys(map).length;
-    if(hits>=2 && (map.internal_pn!==undefined||map.mfpn!==undefined||map.description!==undefined||map.name!==undefined)){
-      hdrIdx=i; colMap=map; break;
+    const keys=Object.keys(candidates);
+    if(keys.length>=2 && (candidates.internal_pn||candidates.mfpn||candidates.description||candidates.name)){
+      const colMap={};
+      keys.forEach(k=>{ colMap[k]=candidates[k][0]; });
+      return {hdrIdx:i, candidates, colMap};
     }
   }
-  if(hdrIdx<0) return null;
+  return null;
+}
+
+// Some exports write ONE ROW PER APPROVED MANUFACTURER: the same component
+// repeats, differing only in Manufacturer / Mnf. Part No. Read literally that
+// is three parts with three quantities, and the quote comes out multiplied.
+// It is the same QVL relationship the hierarchical exports express with child
+// rows, so fold it the same way — one line, every manufacturer in alt_mpns.
+function _xlsMergeRepeatedRows(out){
+  const merged=[], byKey=new Map();
+  for(const r of out){
+    const key=String(r.atlantium_pn||r.description||'').trim().toLowerCase();
+    if(!key){ merged.push(r); continue; }
+    const first=byKey.get(key);
+    if(!first){ byKey.set(key,r); merged.push(r); continue; }
+    const mpn=String(r.part_number||'').trim();
+    if(mpn && !(first.alt_mpns||[]).some(a=>String(a.mpn||'').toLowerCase()===mpn.toLowerCase())){
+      first.alt_mpns=first.alt_mpns||[];
+      first.alt_mpns.push({mpn, manufacturer:r.manufacturer||''});
+    }
+    if(!first.part_number && mpn){ first.part_number=mpn; first.manufacturer=r.manufacturer||''; }
+  }
+  return merged;
+}
+// How many rows would disappear if the repeats above were folded together.
+function _xlsCountRepeatedRows(out){
+  const seen=new Set(); let repeats=0;
+  for(const r of out){
+    const key=String(r.atlantium_pn||r.description||'').trim().toLowerCase();
+    if(!key) continue;
+    if(seen.has(key)) repeats++; else seen.add(key);
+  }
+  return repeats;
+}
+
+function _parseStructuredBOMSheet(rows, opts={}){
+  // A confirmed mapping from the column dialog wins over the auto-guess.
+  const found = (opts.colMap && opts.hdrIdx!=null)
+    ? {hdrIdx:opts.hdrIdx, colMap:opts.colMap}
+    : _xlsFindHeaderRow(rows);
+  if(!found) return null;
+  const hdrIdx=found.hdrIdx, colMap=found.colMap;
 
   // Top-level assembly number from the banner above the header — stamped onto
   // every row as its Drawing #.
@@ -2786,12 +2845,13 @@ function _parseStructuredBOMSheet(rows){
     };
     out.push(rec); current=rec;
   }
+  const finalRows = opts.mergeDuplicates ? _xlsMergeRepeatedRows(out) : out;
   // Fallback for components the export lists with NO vendor/QVL row at all:
   // rather than leave MNF P/N blank, fall back to the sheet's own part number.
   // It's the only identifier such a row has, and a blank MNF P/N would make the
   // line unpriceable AND unsearchable. Customer PN is cleared in that case so
   // the same value isn't shown twice in two different columns.
-  for(const r of out){
+  for(const r of finalRows){
     if(!r.part_number && r.atlantium_pn){
       r.part_number = r.atlantium_pn;
       r.atlantium_pn = '';
@@ -2801,7 +2861,7 @@ function _parseStructuredBOMSheet(rows){
     if((r.alt_mpns||[]).length<2) r.alt_mpns=[];
     delete r._hasVendorRow;
   }
-  return out.length?out:null;
+  return finalRows.length?finalRows:null;
 }
 
 // Reads every sheet into raw row arrays — the shared input for both the
@@ -2817,9 +2877,186 @@ async function readExcelSheets(file){
 }
 // Runs the deterministic parser over each sheet, returning the first sheet that
 // yields real BOM rows. null → hand the file to the AI instead.
-function parseExcelSheetsStructured(sheets){
+// ── Column-mapping confirmation ───────────────────────────────────────────────
+// Auto-detection is right for most exports, but it is a guess, and a wrong
+// guess is expensive here: the manufacturer part number is what every price
+// lookup keys on, and a mis-picked quantity column silently multiplies a quote.
+// So when the guess is uncertain — the MNF P/N column wasn't found, a role
+// matched more than one column, or the sheet repeats a component once per
+// approved manufacturer — the import stops and asks instead of proceeding.
+// Confident sheets are never interrupted.
+//
+// Answers are remembered per header layout, so the same export format only
+// asks once. Repeated-row sheets still ask every time: that answer changes
+// the quantities in the quote, and it is a per-file judgement, not a format one.
+const _XLS_MAP_STORE='xlsColMap_v1_';
+function _xlsMapSignature(headers){
+  return (headers||[]).map(_xlsSquash).join('|').slice(0,300);
+}
+function _xlsLoadSavedMap(headers){
+  try{
+    const raw=localStorage.getItem(_XLS_MAP_STORE+_xlsMapSignature(headers));
+    const v=raw?JSON.parse(raw):null;
+    return (v && typeof v==='object' && !Array.isArray(v)) ? v : null;
+  }catch{ return null; }
+}
+function _xlsSaveMap(headers, colMap){
+  try{ localStorage.setItem(_XLS_MAP_STORE+_xlsMapSignature(headers), JSON.stringify(colMap)); }catch{}
+}
+
+// The roles a person can actually reason about, in the order they appear in the
+// BOM table. Everything else the auto-guess found (row type, status) is carried
+// through untouched — those are structural, not judgement calls.
+const _XLS_MAP_FIELDS=[
+  {key:'mfpn',        label:'MNF P/N — manufacturer part number', required:true},
+  {key:'internal_pn', label:'Customer PN'},
+  {key:'description', label:'Description'},
+  {key:'vendor',      label:'Manufacturer'},
+  {key:'qty',         label:'QTY'},
+  {key:'uom',         label:'Units'},
+  {key:'item',        label:'Item'},
+  {key:'assembly',    label:'Drawing # (assembly number)'},
+];
+
+// Renders the dialog into the modal that is already open and resolves with the
+// confirmed mapping, or with null if the person cancelled.
+function _xlsRenderMappingDialog(sheetsData, activeName, analysisByName, fileName, body, foot, resolve){
+  const active=sheetsData.find(s=>s.name===activeName)||sheetsData[0];
+  const a=analysisByName[active.name];
+  const saved=_xlsLoadSavedMap(a.headers);
+  const start={...a.colMap, ...(saved||{})};
+
+  const colText=(i)=>{
+    const h=String(a.headers[i]||'').trim()||`(Column ${i+1})`;
+    const v=String(a.sample[i]||'').trim();
+    return v ? `${h}  ·  ${v.length>30?v.slice(0,30)+'…':v}` : h;
+  };
+  const opts=(sel,required)=>
+    (required?'':`<option value="-1" ${sel===undefined||sel<0?'selected':''}>— None —</option>`)+
+    a.headers.map((_,i)=>`<option value="${i}" ${i===sel?'selected':''}>${esc(colText(i))}</option>`).join('');
+
+  const why=[];
+  if(a.candidates.mfpn===undefined) why.push('no column looked like a manufacturer part number');
+  if(a.ambiguous.length) why.push(`more than one column matched: ${a.ambiguous.join(', ')}`);
+  if(a.repeats) why.push(`${a.repeats} row(s) repeat a component that is already listed`);
+
+  body.innerHTML=`
+    <p style="font-size:12px;color:var(--text);margin-bottom:4px">
+      <b>${esc(fileName)}</b> — checking the column mapping before importing.</p>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">
+      ${esc(why.join('; '))}. Confirm or change the columns below.</p>
+    ${sheetsData.length>1?`<div class="form-field">
+      <label for="bm-sheet">Sheet</label>
+      <select class="form-input" id="bm-sheet">
+        ${sheetsData.filter(x=>analysisByName[x.name]).map(x=>`<option value="${esc(x.name)}" ${x.name===active.name?'selected':''}>${esc(x.name)} (${analysisByName[x.name].rowCount} rows)</option>`).join('')}
+      </select>
+    </div>`:''}
+    ${_XLS_MAP_FIELDS.map(f=>`
+      <div class="form-field" style="margin-top:10px">
+        <label for="bm-${f.key}">${esc(f.label)}${f.required?' *':''}</label>
+        <select class="form-input" id="bm-${f.key}">${opts(start[f.key], f.required)}</select>
+      </div>`).join('')}
+    ${a.repeats?`
+      <div class="form-field" style="margin-top:14px;padding:10px;background:var(--blue-light);border-radius:6px">
+        <label style="text-transform:none">This sheet lists ${a.repeats} repeated component row(s)</label>
+        <label style="display:flex;align-items:flex-start;gap:6px;text-transform:none;font-weight:400;font-size:12px;margin-top:6px">
+          <input type="radio" name="bm-dup" value="merge" checked style="width:auto;margin-top:2px">
+          <span>One line per component — every manufacturer kept as an approved alternative (QVL).
+                <b>Quantities stay as the sheet states them.</b></span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:6px;text-transform:none;font-weight:400;font-size:12px;margin-top:6px">
+          <input type="radio" name="bm-dup" value="keep" style="width:auto;margin-top:2px">
+          <span>Keep every row — one BOM line per manufacturer.
+                <b>The same component will be counted more than once.</b></span>
+        </label>
+      </div>`:''}
+    <div id="bm-err" role="alert" aria-live="polite" style="color:#E53E3E;font-size:12px;margin-top:10px;min-height:16px"></div>
+    <div style="margin-top:6px">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">First rows of the sheet:</div>
+      <div class="table-wrap"><table style="font-size:11px">
+        <thead><tr>${a.headers.map(h=>`<th>${esc(String(h||''))}</th>`).join('')}</tr></thead>
+        <tbody>${active.rows.slice(a.hdrIdx+1, a.hdrIdx+4).map(r=>
+          `<tr>${a.headers.map((_,i)=>`<td>${esc(String(r[i]??''))}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>
+    </div>`;
+
+  foot.innerHTML=`
+    <button class="btn btn-ghost" id="bm-cancel">Cancel</button>
+    <button class="btn btn-green" id="bm-continue">Continue →</button>`;
+
+  document.getElementById('bm-sheet')?.addEventListener('change',e=>{
+    _xlsRenderMappingDialog(sheetsData, e.target.value, analysisByName, fileName, body, foot, resolve);
+  });
+  document.getElementById('bm-cancel').addEventListener('click',()=>{ closeModal(); resolve(null); });
+  document.getElementById('bm-continue').addEventListener('click',()=>{
+    const err=document.getElementById('bm-err');
+    const picked={};
+    for(const f of _XLS_MAP_FIELDS){
+      const v=parseInt(document.getElementById('bm-'+f.key).value,10);
+      if(v>=0) picked[f.key]=v;
+    }
+    if(picked.mfpn===undefined){ err.textContent='Choose the MNF P/N column — every price lookup uses it.'; return; }
+    if(picked.internal_pn===picked.mfpn){ err.textContent='Customer PN and MNF P/N must be different columns.'; return; }
+    // Structural roles the dialog doesn't expose stay as detected.
+    const colMap={...a.colMap, ...picked};
+    for(const f of _XLS_MAP_FIELDS) if(picked[f.key]===undefined) delete colMap[f.key];
+    _xlsSaveMap(a.headers, colMap);
+    const dup=document.querySelector('input[name="bm-dup"]:checked');
+    resolve({sheetName:active.name, hdrIdx:a.hdrIdx, colMap, mergeDuplicates: dup ? dup.value==='merge' : false});
+  });
+}
+
+// Import-flow entry point. Returns {} to run with the auto-guess, a mapping
+// object to run with, or null when the person cancelled the import.
+function _xlsConfirmMapping(sheets, fileName, body, foot){
+  const analysisByName={};
+  let firstName=null;
+  for(const sh of sheets){
+    const a=_xlsAnalyzeSheet(sh.rows);
+    if(a && a.rowCount){ analysisByName[sh.name]=a; if(!firstName) firstName=sh.name; }
+  }
+  if(!firstName) return Promise.resolve({});          // nothing parseable — the AI path takes over
+  const a=analysisByName[firstName];
+  const saved=_xlsLoadSavedMap(a.headers);
+  // A format we've been told about before, with no per-file judgement to make.
+  if(saved && !a.repeats) return Promise.resolve({sheetName:firstName, hdrIdx:a.hdrIdx, colMap:{...a.colMap, ...saved}});
+  if(!a.needsConfirmation) return Promise.resolve({});
+  return new Promise(resolve=>{
+    _xlsRenderMappingDialog(sheets, firstName, analysisByName, fileName, body, foot, resolve);
+  });
+}
+
+// Everything the column-mapping dialog needs to describe a sheet to a human:
+// the header row, one real sample value per column, which roles matched more
+// than one column, and how many rows are repeats. needsConfirmation is the
+// single question the import flow asks — "can I run this without checking?".
+function _xlsAnalyzeSheet(rows){
+  const found=_xlsFindHeaderRow(rows);
+  if(!found) return null;
+  const headers=(rows[found.hdrIdx]||[]).map(h=>String(h??'').trim());
+  const sample=headers.map((_,c)=>{
+    for(let i=found.hdrIdx+1;i<Math.min(found.hdrIdx+9,rows.length);i++){
+      const v=String((rows[i]||[])[c]??'').trim();
+      if(v) return v;
+    }
+    return '';
+  });
+  const guessed=_parseStructuredBOMSheet(rows,{hdrIdx:found.hdrIdx,colMap:found.colMap})||[];
+  const repeats=_xlsCountRepeatedRows(guessed);
+  const ambiguous=Object.keys(found.candidates).filter(k=>found.candidates[k].length>1);
+  return {
+    hdrIdx:found.hdrIdx, colMap:found.colMap, candidates:found.candidates,
+    headers, sample, rowCount:guessed.length, repeats, ambiguous,
+    // Ask when the manufacturer part number wasn't found at all (the number
+    // everything downstream prices on), when a role matched several columns,
+    // or when repeated rows mean a quantity decision has to be made.
+    needsConfirmation: found.candidates.mfpn===undefined || ambiguous.length>0 || repeats>0,
+  };
+}
+
+function parseExcelSheetsStructured(sheets, opts={}){
   for(const s of sheets){
-    const rows=_parseStructuredBOMSheet(s.rows);
+    const rows=_parseStructuredBOMSheet(s.rows, opts.sheetName && s.name!==opts.sheetName ? {} : opts);
     if(rows && rows.length) return rows;
   }
   return null;
@@ -5989,9 +6226,16 @@ async function handleSDFiles(files){
         setM('Reading spreadsheet…',20);
         const sheets=await readExcelSheets(file);
         const sheetText=await extractExcelText(file);
+        // Same column-mapping confirmation as the RFQ import — see
+        // _xlsConfirmMapping. A recognised export goes straight through.
+        const _colChoice=await _xlsConfirmMapping(sheets, file.name, body, foot);
+        if(_colChoice===null){ errors.push(`"${file.name}" — import cancelled`); continue; }
+        body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="sd-ai-msg">${filePrefix}Reading spreadsheet…</span></div>
+      <div class="progress-bar"><div class="progress-fill" id="sd-prog"></div></div>`;
+        foot.innerHTML='';
         // Structured parse first — exact and repeatable (see
         // _parseStructuredBOMSheet). AI only for unrecognisable layouts.
-        extractedRows=parseExcelSheetsStructured(sheets)||[];
+        extractedRows=parseExcelSheetsStructured(sheets, _colChoice)||[];
         if(extractedRows.length){
           setM(`Parsed ${extractedRows.length} component(s) from the sheet`,60);
         } else {
