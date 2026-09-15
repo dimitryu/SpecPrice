@@ -888,6 +888,102 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('round trip: an unreadable response never triggers one', newer(parse('oops'), '1.32.0'), false);
 }
 
+
+// ──────────────────────────── 25. how many cables the quote covers
+{
+  const units=G('_sdDwgUnits'), apply=G('_sdApplyUnits'), groups=G('_sdComputeGroups'),
+        labor=G('_sdRecalcLaborTotal'), unitsFor=G('_sdUnitsForRow'),
+        items=G('sdItems'), settings=G('_sdDwgSettings'), recalc=G('_sdRecalcRow');
+
+  const reset=()=>{ items.length=0; for(const k in settings) delete settings[k]; };
+  const row=(dwg,o={})=>Object.assign({drawing_number:dwg, part_number:'P-'+dwg,
+    description:'part', qty:'2', unit:'pc', mouser_price:'5', labor_time:'3'}, o);
+
+  // Default is one cable, and anything nonsensical falls back to one rather
+  // than zeroing out a quote.
+  reset();
+  t('units: unset drawing is one cable', units('D1'), 1);
+  settings['D1']={units:0};   t('units: 0 falls back to 1', units('D1'), 1);
+  settings['D1']={units:-4};  t('units: negative falls back to 1', units('D1'), 1);
+  settings['D1']={units:'x'}; t('units: junk falls back to 1', units('D1'), 1);
+  settings['D1']={units:''};  t('units: blank falls back to 1', units('D1'), 1);
+  settings['D1']={units:7};   t('units: a real number is kept', units('D1'), 7);
+  settings['D1']={units:'12'};t('units: numeric string is kept', units('D1'), 12);
+  t('unitsForRow reads the row\'s drawing', unitsFor({drawing_number:'D1'}), 12);
+  t('unitsForRow: unknown drawing is one', unitsFor({drawing_number:'nope'}), 1);
+
+  // Applying rescales QTY and everything computed from it.
+  reset();
+  items.push(row('A'), row('A'), row('B'));
+  items.forEach(recalc);
+  t('apply: parts total before', groups()[0].partsTotal, 20);   // 2 rows x qty2 x $5
+  apply('A',10);
+  t('apply: QTY multiplied', items[0].qty, 20);
+  t('apply: both rows of the drawing', items[1].qty, 20);
+  t('apply: the other drawing is untouched', items[2].qty, '2');
+  t('apply: units recorded on the group', groups()[0].units, 10);
+  t('apply: parts total scales', groups()[0].partsTotal, 200);
+  t('apply: the untouched drawing still costs the same', groups()[1].partsTotal, 10);
+
+  // Re-running with the same number must not compound — this is the whole
+  // reason the per-cable quantity is remembered instead of multiplying live.
+  apply('A',10);
+  t('apply: running 10 twice is still 10', items[0].qty, 20);
+  apply('A',10); apply('A',10);
+  t('apply: four times, still 10', items[0].qty, 20);
+
+  // ...and lowering divides back down rather than being a one-way door.
+  apply('A',2);
+  t('apply: 10 down to 2', items[0].qty, 4);
+  apply('A',1);
+  t('apply: back to a single cable', items[0].qty, 2);
+  t('apply: and the price with it', groups()[0].partsTotal, 20);
+
+  // Fractional per-cable quantities survive the round trip without drifting.
+  reset();
+  items.push(row('A',{qty:'0.1'}));
+  items.forEach(recalc);
+  apply('A',3);
+  t('apply: 0.1 x 3 is 0.3, not 0.30000000000000004', items[0].qty, 0.3);
+  apply('A',1);
+  t('apply: and back to 0.1 exactly', items[0].qty, 0.1);
+
+  // Labor has to scale too, or the quote prices 10 cables of parts with the
+  // labor of building one.
+  reset();
+  settings['A']={units:4};
+  t('labor: AI fixed total x units',
+    labor({drawing_number:'A', labor_time:'12', qty:'1', unit:'pc', _laborFixedTotal:true}), 48);
+  t('labor: mm row is a flat minute per cable',
+    labor({drawing_number:'A', labor_time:'2', qty:'2000', unit:'mm'}), 4);
+  t('labor: gr row likewise',
+    labor({drawing_number:'A', labor_time:'2', qty:'50', unit:'gr'}), 4);
+  t('labor: a typed per-unit rate scales through QTY, not twice',
+    labor({drawing_number:'A', labor_time:'2', qty:'12', unit:'pc'}), 24);
+  t('labor: a manual override is left exactly as typed',
+    labor({drawing_number:'A', labor_total:9, labor_time:'2', qty:'5', unit:'pc', _laborManualOverride:true}), 9);
+  settings['A']={units:1};
+  t('labor: one cable is the old behaviour',
+    labor({drawing_number:'A', labor_time:'12', qty:'1', unit:'pc', _laborFixedTotal:true}), 12);
+
+  // End to end: parts, labor and the final price all move together.
+  reset();
+  settings['A']={profitPct:0, laborRateMin:1};
+  items.push(row('A',{labor_time:'10', _laborFixedTotal:true}));
+  items.forEach(recalc);
+  const before=groups()[0];
+  t('e2e: one cable subtotal', before.subtotal, 20);        // $10 parts + 10 min x $1
+  apply('A',5);
+  const after=groups()[0];
+  t('e2e: five cables of parts', after.partsTotal, 50);
+  t('e2e: five cables of labor minutes', after.laborMinutes, 50);
+  t('e2e: subtotal scales exactly 5x', after.subtotal, before.subtotal*5);
+  t('e2e: final scales exactly 5x', after.final, before.final*5);
+  t('e2e: price per cable is unchanged', after.final/after.units, before.final);
+
+  reset();
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

@@ -645,7 +645,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.34.2';
+const APP_VER   = '1.35.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -3919,6 +3919,60 @@ async function lookupPartPrices(partNumber, qty=0, desc=''){
 // HTTP 429s that would make the whole run slower, not faster.
 const PRICE_CHECK_CONCURRENCY = 5;
 
+// Asked every time Check Price runs, pre-filled with the quantity used last, so
+// the number is a deliberate answer rather than a setting someone has to
+// remember to revisit. One field per drawing: each drawing is a different
+// cable, and an order rarely wants the same count of each.
+function _sdAskUnitsThenCheck(targets){
+  const dwgs=[]; const seen=new Set();
+  for(const r of targets){
+    const k=_sdDwgKey(r);
+    if(!seen.has(k)){ seen.add(k); dwgs.push(k); }
+  }
+  showModal(`<div class="modal modal-sm">
+    <div class="modal-head"><h3>How many cables are we quoting?</h3>
+      <button class="close-modal" id="su-x">✕</button></div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:6px">
+        Every row's QTY is multiplied by this, so distributor prices are looked up for
+        the quantity actually being bought, and labor is costed for building that many.</p>
+      ${dwgs.map((d,i)=>`
+        <div class="form-field" style="margin-top:10px">
+          <label for="su-${i}">${esc(d)}</label>
+          <input type="number" class="form-input su-units" id="su-${i}" data-dwg="${esc(d)}"
+                 min="1" step="1" value="${_sdDwgUnits(d)}">
+        </div>`).join('')}
+      <div id="su-err" role="alert" aria-live="polite"
+           style="color:#E53E3E;font-size:12px;margin-top:10px;min-height:16px"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="su-cancel">Cancel</button>
+      <button class="btn btn-green" id="su-go">Check Price →</button>
+    </div>
+  </div>`);
+  document.getElementById('su-x').addEventListener('click',closeModal);
+  document.getElementById('su-cancel').addEventListener('click',closeModal);
+  const first=document.getElementById('su-0'); if(first){ first.focus(); first.select(); }
+  document.querySelectorAll('.su-units').forEach(inp=>inp.addEventListener('keydown',e=>{
+    if(e.key==='Enter') document.getElementById('su-go').click();
+  }));
+  document.getElementById('su-go').addEventListener('click',()=>{
+    const err=document.getElementById('su-err');
+    const picks=[];
+    for(const inp of document.querySelectorAll('.su-units')){
+      const v=parseFloat(inp.value);
+      if(!isFinite(v)||v<=0){ err.textContent='Enter a quantity of 1 or more for every drawing.'; inp.focus(); return; }
+      picks.push([inp.dataset.dwg, v]);
+    }
+    picks.forEach(([d,v])=>_sdApplyUnits(d,v));
+    const items=targets.filter(r=>r.part_number).map(r=>({
+      part_number:r.part_number, qty:parseFloat(r.qty)||1, unit:r.unit||'',
+      description:r.description||'', _sdIdx:sdItems.indexOf(r)}));
+    if(!items.length){ closeModal(); toast('No parts to check','error'); return; }
+    runFCCheckModal(items,'sd');   // replaces this modal with its own
+  });
+}
+
 async function runFCCheckModal(items, mode){
   if(!items.length){toast('No parts to check','error');return;}
   let stopped=false;
@@ -4984,7 +5038,11 @@ function _sdRecalcLaborTotal(r){
   // "1 connector housing" whose pins are crimped 20 times), so multiplying
   // again here would silently inflate the total.
   if(r._laborFixedTotal){
-    r.labor_total = lt;
+    // The AI figure is the time to build ONE cable, so building N of them takes
+    // N times as long. Rows priced by a per-unit rate scale on their own (their
+    // QTY already carries the multiplier); these two branches do not, so they
+    // are scaled here — exactly once each.
+    r.labor_total = lt * _sdUnitsForRow(r);
     return r.labor_total;
   }
   // Length rows (mm — the system's sole canonical length unit) and bulk-weight
@@ -4995,7 +5053,7 @@ function _sdRecalcLaborTotal(r){
   // of material takes roughly the same setup time no matter the quantity.
   const unit=String(r.unit||'').trim().toLowerCase();
   if(unit==='mm'||unit==='gr'){
-    r.labor_total = 1;
+    r.labor_total = 1 * _sdUnitsForRow(r);   // a flat minute per cable built
     return r.labor_total;
   }
   // A manually-typed Labor Time is always a PER-UNIT rate that scales with
@@ -5650,6 +5708,38 @@ function _sdDwgRate(dwg){
   return v==null||v==='' ? _sdLaborRatePerMin() : (parseFloat(v)||0);
 }
 
+// ── How many of this cable the quote covers ──────────────────────────────────
+// A drawing describes ONE cable assembly; an order is usually for several. The
+// quantity is asked for at Check Price (see the units dialog) and applied by
+// multiplying each row's QTY, so the table shows the real purchase quantity —
+// which is also the quantity the distributor price breaks get looked up
+// against, and that is the whole point: 200 connectors do not cost 20× the
+// price of 10.
+function _sdDwgUnits(dwg){
+  const n=parseFloat(_sdDwgSet(dwg).units);
+  return (isFinite(n) && n>0) ? n : 1;
+}
+function _sdUnitsForRow(r){ return _sdDwgUnits(_sdDwgKey(r)); }
+
+// Rescales one drawing's rows to `units` cables. The PER-CABLE quantity is
+// remembered on the row the first time this runs, and every later call is
+// computed from that baseline rather than from the current QTY. Multiplying the
+// live QTY instead would make two presses of "5" mean 25, and lowering 5 to 2
+// impossible without re-importing.
+function _sdApplyUnits(dwg, units){
+  const u = (isFinite(units) && units>0) ? units : 1;
+  _sdDwgSet(dwg).units = u;
+  for(const r of sdItems){
+    if(_sdDwgKey(r)!==dwg) continue;
+    if(r._qtyPerUnit==null) r._qtyPerUnit = parseFloat(r.qty)||0;
+    const q = r._qtyPerUnit * u;
+    // Six decimals is past any real BOM quantity and keeps 0.1 × 3 from
+    // surfacing as 0.30000000000000004 in the table.
+    r.qty = +q.toFixed(6);
+    _sdRecalcRow(r);
+  }
+}
+
 // General (not row-tied) labor minutes belonging to ONE drawing.
 function _sdGeneralMinutesFor(dwg){
   let total=0;
@@ -5657,7 +5747,8 @@ function _sdGeneralMinutesFor(dwg){
     if(!b.generalMinutes) continue;
     if(String(b.drawingName||'')===dwg) total+=b.generalMinutes;
   }
-  return total;
+  // Setup/test time the AI couldn't tie to a single row is still per cable.
+  return total * _sdDwgUnits(dwg);
 }
 
 // One costed group per drawing, in first-seen order so the quote reads in the
@@ -5689,7 +5780,8 @@ function _sdComputeGroups(){
     const subtotal=partsTotal+laborCost;   // tools excluded by design
     const profitPct=_sdDwgProfit(dwg);
     const final=subtotal*(1+profitPct/100);
-    return {dwg, rows, partsTotal, autoToolsTotal, toolsTotal, autoLaborMinutes, laborMinutes,
+    return {dwg, rows, units:_sdDwgUnits(dwg),
+            partsTotal, autoToolsTotal, toolsTotal, autoLaborMinutes, laborMinutes,
             rate, laborCost, subtotal, profitPct, profit:final-subtotal, final,
             ownedToolRows, missingToolRows};
   });
@@ -5807,6 +5899,11 @@ async function renderSalesDesk(){
         </div>
         ${open?`
         <div style="padding:6px 0">
+          <div class="summary-row">
+            <span title="How many of this cable the quote covers. Changing it rescales every row's QTY and the labor time.">Units (cables)</span>
+            <input type="number" class="sd-in-units" data-dwg="${esc(g.dwg)}" min="1" step="1" value="${g.units}"
+              style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
+          </div>
           <div class="summary-row" style="color:var(--muted)">
             <span title="Crimp/insertion tools not yet in Stock. Never added into Subtotal or FINAL PRICE — type your own number to override.">Tools <em style="font-size:10px;font-style:normal">(not in price)</em></span>
             <span style="display:flex;align-items:center;gap:2px">$<input type="number" class="sd-in-tools" data-dwg="${esc(g.dwg)}" min="0" step="any"
@@ -5838,7 +5935,11 @@ async function renderSalesDesk(){
               style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
           </div>
         </div>
-        <div class="summary-total"><span>FINAL PRICE</span><span>${$(g.final)}</span></div>
+        <div class="summary-total">
+          <span>FINAL PRICE${g.units>1?` <em style="font-style:normal;font-weight:400;font-size:11px;opacity:.85">— ${g.units} cables</em>`:''}</span>
+          <span>${$(g.final)}</span>
+        </div>
+        ${g.units>1?`<div style="font-size:11px;color:var(--muted);text-align:right;margin-top:3px">${$(g.final/g.units)} per cable</div>`:''}
         ${miss.length?`<div style="font-size:13px;color:#92400e;background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;padding:8px 10px;margin-top:8px;line-height:1.4;font-weight:600">
             ⚠ Final price does NOT include manufacturing tools.<br>
             ${miss.length} tool${miss.length>1?'s':''} not in Stock — estimated <strong>${$(g.toolsTotal)}</strong>: ${esc(miss.map(r=>r.part_number||r.description||'tool').join(', '))}
@@ -5893,6 +5994,14 @@ async function renderSalesDesk(){
     bind('.sd-in-minutes','laborMinutes');
     bind('.sd-in-rate','laborRateMin');
     bind('.sd-in-profit','profitPct');
+    // Not part of bind(): this one rewrites every row's QTY, so the whole
+    // screen has to redraw, not just the summary panel.
+    host.querySelectorAll('.sd-in-units').forEach(inp=>inp.addEventListener('change',()=>{
+      const v=parseFloat(inp.value);
+      if(!isFinite(v)||v<=0){ inp.value=_sdDwgUnits(inp.dataset.dwg); return; }
+      _sdApplyUnits(inp.dataset.dwg, v);
+      renderSalesDesk();
+    }));
     host.querySelectorAll('.sd-btn-breakdown').forEach(b=>
       b.addEventListener('click',()=>openLaborBreakdownModal(b.dataset.dwg)));
   };
@@ -5932,6 +6041,7 @@ async function renderSalesDesk(){
           <td colspan="${SD_COLS.length+2}" style="padding:6px 10px;font-weight:700;color:var(--blue-dark)">
             <span style="display:inline-block;width:12px">${hidden?'▸':'▾'}</span>
             ${esc(dwg)}
+            ${_sdDwgUnits(dwg)>1?`<span style="margin-inline-start:6px;padding:1px 6px;border-radius:8px;background:#EDE9FE;color:#5B21B6;font-size:10px;font-weight:700" title="QTY on every row below is multiplied by this">× ${_sdDwgUnits(dwg)} cables</span>`:''}
             <span style="font-weight:400;color:var(--muted);font-size:11px;margin-inline-start:8px">${g?g.rows.length:0} rows</span>
             ${g?`<span style="float:inline-end;color:var(--green)">$${g.final.toFixed(2)}</span>`:''}
           </td></tr>`;
@@ -6144,13 +6254,10 @@ async function renderSalesDesk(){
     const targets = checked.length
       ? sdItems.filter((_,i)=>checked.includes(i))
       : sdItems;
-    const items=targets.filter(r=>r.part_number).map(r=>{
-      const sdIdx=sdItems.indexOf(r);
-      return{part_number:r.part_number, qty:parseFloat(r.qty)||1, unit:r.unit||'',
-        description:r.description||'', _sdIdx:sdIdx};
-    });
-    if(!items.length){toast('No parts to check','error');return;}
-    runFCCheckModal(items,'sd');
+    if(!targets.some(r=>r.part_number)){toast('No parts to check','error');return;}
+    // How many cables before what they cost — a price break for 10 pieces is a
+    // different number from the price break for 200.
+    _sdAskUnitsThenCheck(targets);
   });
 
   // From File (BOM extraction for Sales Desk)
@@ -6822,6 +6929,7 @@ async function exportSalesDeskExcel(){
       ['Drawing(s)', _dwgLines.join('\n')||'—', _dwgLines.length],
       ['Line items', String(sdItems.length)],
       ['Drawings', String(groups.length)],
+      ['Cables quoted', groups.map(g=>`${g.dwg} × ${g.units}`).join(', ')],
     ];
     meta.forEach(([k,v,lines])=>{
       const kc=ws.getCell(row,1); kc.value=k;
@@ -6879,7 +6987,10 @@ async function exportSalesDeskExcel(){
     //    before wading through the parts. Only when there IS more than one.
     if(groups.length>1){
       secTitle(`QUOTATION SUMMARY — ${groups.length} DRAWINGS`,'FF334155');
-      const sh=['Drawing #','Rows','Parts Total','Labor Cost','Subtotal','Profit %','FINAL PRICE'];
+      // Units sits right after Rows: the reader needs to know the price covers
+      // 10 cables before reading the price.
+      const sh=['Drawing #','Rows','Units','Parts Total','Labor Cost','Subtotal','Profit %','FINAL PRICE'];
+      const MONEY_COLS=[3,4,5,7], PCT_COL=6;
       sh.forEach((h,k)=>{
         const c=ws.getCell(row,k+1);
         c.value=h; c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};
@@ -6888,27 +6999,29 @@ async function exportSalesDeskExcel(){
       });
       row++;
       groups.forEach((g,k)=>{
-        const vals=[g.dwg,g.rows.length,+g.partsTotal.toFixed(2),+g.laborCost.toFixed(2),
+        const vals=[g.dwg,g.rows.length,g.units,+g.partsTotal.toFixed(2),+g.laborCost.toFixed(2),
                     +g.subtotal.toFixed(2),g.profitPct/100,+g.final.toFixed(2)];
         vals.forEach((v,ci)=>{
           const c=ws.getCell(row,ci+1);
           c.value=v; c.border=_xlBoxed; c.font={size:10};
-          if(ci>=2&&ci!==5) c.numFmt='$#,##0.00';
-          if(ci===5) c.numFmt='0%';
+          if(MONEY_COLS.includes(ci)) c.numFmt='$#,##0.00';
+          if(ci===PCT_COL) c.numFmt='0%';
           c.alignment={vertical:'middle',horizontal:ci?'right':'left'};
           if(k%2===1) fill(c,_XL.bomBand);
         });
         row++;
       });
       // Grand total sits in the same table, so the columns line up under it.
-      const gv=['GRAND TOTAL',sdItems.length,+partsTotal.toFixed(2),+laborCost.toFixed(2),
+      // Total cables across every drawing — the "how big is this order" number.
+      const totalUnits=groups.reduce((a,g)=>a+g.units,0);
+      const gv=['GRAND TOTAL',sdItems.length,totalUnits,+partsTotal.toFixed(2),+laborCost.toFixed(2),
                 +subtotal.toFixed(2),null,+final.toFixed(2)];
       gv.forEach((v,ci)=>{
         const c=ws.getCell(row,ci+1);
         if(v!==null) c.value=v;
         c.font={bold:true,size:11,color:{argb:'FFFFFFFF'}};
         fill(c,_XL.final); c.border=_xlBoxed;
-        if(ci>=2&&ci!==5) c.numFmt='$#,##0.00';
+        if(MONEY_COLS.includes(ci)) c.numFmt='$#,##0.00';
         c.alignment={vertical:'middle',horizontal:ci?'right':'left'};
       });
       ws.getRow(row).height=22;
@@ -6941,7 +7054,8 @@ async function exportSalesDeskExcel(){
 
     let firstHeaderRow=0;
     groups.forEach(g=>{
-      secTitle(`DRAWING ${g.dwg}   —   ${g.rows.length} row${g.rows.length===1?'':'s'}`,'FF334155');
+      secTitle(`DRAWING ${g.dwg}   —   ${g.rows.length} row${g.rows.length===1?'':'s'}`
+               + (g.units>1?`   —   ${g.units} cables   (QTY below is for all ${g.units})`:''),'FF334155');
       const hr=bomHeaderRow();
       if(!firstHeaderRow) firstHeaderRow=hr;
 
@@ -7013,8 +7127,9 @@ async function exportSalesDeskExcel(){
       money(`Labor  (${(+g.laborMinutes).toFixed(1)} min × $${g.rate}/min)`,+g.laborCost.toFixed(2));
       money('Subtotal',+g.subtotal.toFixed(2),{bold:true});
       money(`Profit (${g.profitPct}%)`,+(g.final-g.subtotal).toFixed(2));
-      money(`FINAL PRICE — ${g.dwg}`,+g.final.toFixed(2),
+      money(`FINAL PRICE — ${g.dwg}${g.units>1?`   (${g.units} cables)`:''}`,+g.final.toFixed(2),
             {bold:true,size:13,bg:_XL.final,fg:'FFFFFFFF',height:24});
+      if(g.units>1) money('Price per cable',+(g.final/g.units).toFixed(2),{size:9,fg:'FF64748B'});
 
       if(g.missingToolRows.length){
         merge(row,1,LAST);
