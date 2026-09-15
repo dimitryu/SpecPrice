@@ -645,7 +645,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.35.0';
+const APP_VER   = '1.35.1';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -5719,7 +5719,12 @@ function _sdDwgUnits(dwg){
   const n=parseFloat(_sdDwgSet(dwg).units);
   return (isFinite(n) && n>0) ? n : 1;
 }
-function _sdUnitsForRow(r){ return _sdDwgUnits(_sdDwgKey(r)); }
+// A crimp/insertion TOOL is bought ONCE for the whole production run — ten
+// cables off the same drawing still need one tool. So a tool row is never
+// multiplied: not its quantity, not its cost, not its time. Everything that
+// scales with the number of cables asks through here, so the rule lives in one
+// place instead of being remembered at each call site.
+function _sdUnitsForRow(r){ return _sdIsToolRow(r) ? 1 : _sdDwgUnits(_sdDwgKey(r)); }
 
 // Rescales one drawing's rows to `units` cables. The PER-CABLE quantity is
 // remembered on the row the first time this runs, and every later call is
@@ -5731,6 +5736,12 @@ function _sdApplyUnits(dwg, units){
   _sdDwgSet(dwg).units = u;
   for(const r of sdItems){
     if(_sdDwgKey(r)!==dwg) continue;
+    if(_sdIsToolRow(r)){
+      // Bought once per run — leave it alone, and undo any scaling a previous
+      // pass applied before the row was recognised as a tool.
+      if(r._qtyPerUnit!=null && r.qty!==r._qtyPerUnit){ r.qty=r._qtyPerUnit; _sdRecalcRow(r); }
+      continue;
+    }
     if(r._qtyPerUnit==null) r._qtyPerUnit = parseFloat(r.qty)||0;
     const q = r._qtyPerUnit * u;
     // Six decimals is past any real BOM quantity and keeps 0.1 × 3 from

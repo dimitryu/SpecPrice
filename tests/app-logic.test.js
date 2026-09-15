@@ -984,6 +984,59 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   reset();
 }
 
+
+// ──────────────────────────── 26. a tool is bought once, not once per cable
+{
+  const apply=G('_sdApplyUnits'), groups=G('_sdComputeGroups'), unitsFor=G('_sdUnitsForRow'),
+        labor=G('_sdRecalcLaborTotal'), items=G('sdItems'), settings=G('_sdDwgSettings'),
+        recalc=G('_sdRecalcRow');
+  const reset=()=>{ items.length=0; for(const k in settings) delete settings[k]; };
+
+  const part=(dwg)=>({drawing_number:dwg, part_number:'P1', description:'Connector 4pin',
+    qty:'2', unit:'pc', mouser_price:'5'});
+  const tool=(dwg)=>({drawing_number:dwg, part_number:'T1', description:'CRIMP TOOL for MICROFIT',
+    qty:'1', unit:'pc', mouser_price:'165'});
+
+  reset();
+  settings['A']={units:10};
+  t('unitsForRow: a part scales with the order', unitsFor(part('A')), 10);
+  t('unitsForRow: a tool never does', unitsFor(tool('A')), 1);
+
+  reset();
+  items.push(part('A'), tool('A'));
+  items.forEach(recalc);
+  const before=groups()[0];
+  t('tools: one cable — parts', before.partsTotal, 10);
+  t('tools: one cable — tools', before.toolsTotal, 165);
+
+  apply('A',10);
+  const after=groups()[0];
+  t('tools: the part QTY is multiplied', items[0].qty, 20);
+  t('tools: the TOOL QTY is not', items[1].qty, '1');
+  t('tools: parts scale to ten cables', after.partsTotal, 100);
+  t('tools: the tool still costs what one tool costs', after.toolsTotal, 165);
+  t('tools: and is still excluded from the subtotal', after.subtotal, after.partsTotal+after.laborCost);
+
+  // A tool carrying AI-estimated time must not scale either.
+  reset();
+  settings['A']={units:6};
+  t('tools: fixed labor on a tool row is not multiplied',
+    labor({drawing_number:'A', description:'CRIMP TOOL', labor_time:'4', qty:'1', unit:'pc', _laborFixedTotal:true}), 4);
+  t('tools: the same row as a part would be',
+    labor({drawing_number:'A', description:'Connector', labor_time:'4', qty:'1', unit:'pc', _laborFixedTotal:true}), 24);
+
+  // Self-heal: a tool scaled by an older build is put back on the next apply.
+  reset();
+  const stale=tool('A'); stale.qty=40; stale._qtyPerUnit=1;
+  items.push(part('A'), stale);
+  items.forEach(recalc);
+  apply('A',10);
+  t('tools: a previously multiplied tool is restored', items[1].qty, 1);
+  t('tools: ...and its cost with it', groups()[0].toolsTotal, 165);
+
+  reset();
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }
