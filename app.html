@@ -339,11 +339,46 @@
     /* A Home button a role may see but not use. Kept legible rather than
        ghosted — it is information, not decoration — but plainly inert: no
        hover, no pointer, no colour. */
+    /* The order line: same weight class as the unit price but a different
+       colour, so the two read as two answers to two questions rather than one
+       number repeated. */
+    .summary-order { background:#1F8B4C; color:#fff; padding:10px 13px; margin-top:6px;
+                     border-radius:6px; display:flex; justify-content:space-between;
+                     align-items:center; font-size:15px; font-weight:700; }
+    .summary-order .lbl { font-size:13px; font-weight:600; opacity:.95; }
+
     .home-btn-off { background:#F1F5F9 !important; color:#94A3B8 !important;
                     border-color:#E2E8F0 !important; box-shadow:none !important;
                     cursor:not-allowed; opacity:.85; }
     .home-btn-off:hover { transform:none !important; }
     .home-btn-off .home-btn-icon { filter:grayscale(1); opacity:.55; }
+
+    /* ── Statistics dashboard ── */
+    .stat-wrap { max-width:1500px; margin:0 auto; padding-bottom:30px; }
+    .stat-filter { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+    .stat-tiles { display:grid; gap:10px; margin:4px 0 2px;
+                  grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); }
+    .stat-tile { background:var(--blue-light); border:1px solid var(--border);
+                 border-radius:8px; padding:11px 13px; }
+    .stat-tile-v { font-size:22px; font-weight:800; color:var(--blue-dark); line-height:1.1; }
+    .stat-tile-l { font-size:11px; color:var(--muted); margin-top:3px;
+                   text-transform:uppercase; letter-spacing:.4px; }
+    .stat-tile-s { font-size:11px; color:#94A3B8; margin-top:2px; }
+    .stat-block-head { display:flex; align-items:flex-start; justify-content:space-between;
+                       gap:12px; margin-bottom:10px; }
+    .stat-block-title { font-size:14px; font-weight:700; color:var(--blue-dark); }
+    .stat-block-note { font-size:11px; color:var(--muted); margin-top:2px; }
+    .stat-sub { font-size:11px; font-weight:700; color:var(--muted); margin:14px 0 6px;
+                text-transform:uppercase; letter-spacing:.4px; }
+    .stat-bars { display:flex; flex-direction:column; gap:4px; }
+    .stat-bar-row { display:flex; align-items:center; gap:9px; font-size:12px; }
+    .stat-bar-k { width:190px; flex-shrink:0; color:#334155; overflow:hidden;
+                  text-overflow:ellipsis; white-space:nowrap; }
+    .stat-bar-t { flex:1; height:13px; background:#F1F5F9; border-radius:3px; overflow:hidden; }
+    .stat-bar-f { display:block; height:100%; background:var(--blue); border-radius:3px; }
+    .stat-bar-v { width:62px; text-align:right; flex-shrink:0; font-weight:700;
+                  color:var(--blue-dark); }
+    .stat-empty { font-size:12px; color:var(--muted); padding:8px 0; }
 
     .settings-panel { background:#fff; border:1px solid var(--border); border-radius:9px; }
     .sd-panel-title { padding:9px 13px; font-size:12px; font-weight:700;
@@ -533,7 +568,7 @@ let currentUserRole = '';
 // cannot lose those two screens. Its name and everything else about it are
 // editable like any other role.
 const SEED_ROLE_VIEWS = {
-  admin:  ['rfq','sales-desk','part-stock','cut-strip','customers','settings','admin'],
+  admin:  ['rfq','sales-desk','part-stock','cut-strip','customers','statistics','settings','admin'],
   agent:  ['rfq','sales-desk','part-stock','cut-strip','customers'],
   // 'viewer' gets cut-strip too: the whole point of a cut & strip sheet is that
   // the person on the bench can pull it up, and a shop-floor account is exactly
@@ -543,6 +578,14 @@ const SEED_ROLE_VIEWS = {
 };
 const PROTECTED_ROLE  = 'admin';
 const PROTECTED_VIEWS = ['settings','admin'];   // cannot be taken away from PROTECTED_ROLE
+// Screens added in a later version than the role documents in Firestore. A role
+// document is a snapshot of the screens that existed when it was written, so a
+// new screen is invisible to everyone — including the administrator who would
+// have to go and grant it — until someone edits the role. Administrators get
+// those screens automatically; every other role is granted them by hand, as
+// before. Unlike PROTECTED_VIEWS this is not a lock: an admin who doesn't want
+// the screen can still set it to Disabled in Settings > Roles.
+const ADMIN_AUTO_VIEWS = ['statistics'];
 
 // Seeding has to tell "this role has never been created" apart from "an admin
 // deleted this role on purpose". Without that distinction you get one of two
@@ -580,7 +623,7 @@ function allowedViews(){
             : (SEED_ROLE_VIEWS[currentUserRole] || SEED_ROLE_VIEWS['agent']);
   // Belt and braces on top of the save-time guard: however the admin role's
   // document ends up looking, an admin can always reach Settings and Admin.
-  if(currentUserRole===PROTECTED_ROLE) views=[...new Set([...views, ...PROTECTED_VIEWS])];
+  if(currentUserRole===PROTECTED_ROLE) views=[...new Set([...views, ...PROTECTED_VIEWS, ...ADMIN_AUTO_VIEWS])];
   return views;
 }
 // Screens a role can SEE but not open. A hidden screen tells a user nothing; a
@@ -673,7 +716,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.36.0';
+const APP_VER   = '1.37.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -907,7 +950,7 @@ function route(v){
   currentView=target;
   const btnHome=document.getElementById('btn-home');
   if(btnHome) btnHome.style.display = currentView==='home' ? 'none' : 'inline-flex';
-  const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','cut-strip':'✂️ Cut & Strip','customers':'👥 Customers','settings':'⚙️ Settings','admin':'🛡️ Admin'};
+  const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','cut-strip':'✂️ Cut & Strip','customers':'👥 Customers','statistics':'📊 Statistics','settings':'⚙️ Settings','admin':'🛡️ Admin'};
   document.getElementById('page-title').textContent=TITLES[currentView]||'';
   setActions('');
   if(currentView!=='home') logAudit('screen_open',{screen:currentView},true);
@@ -928,6 +971,7 @@ function route(v){
   // open last — a stale sheet on screen is how the wrong revision gets cut.
   else if(currentView==='cut-strip'){ csCurrent=null; renderCutStrip(); }
   else if(currentView==='customers') renderCustomers();
+  else if(currentView==='statistics') renderStatisticsPage();
   else if(currentView==='settings'){
     if(currentUserRole!=='admin'){ route('home'); return; }
     renderSettingsPage();
@@ -951,6 +995,7 @@ const HOME_BUTTONS = {
   'part-stock':  ['📦','Database'],
   'cut-strip':   ['✂️','Cut &amp; Strip'],
   'customers':   ['👥','Customers'],
+  'statistics':  ['📊','Statistics'],
   'settings':    ['⚙️','Settings'],
   'admin':       ['🛡️','Admin'],
 };
@@ -990,6 +1035,432 @@ function renderHome(){
     .forEach(b=>b.addEventListener('click',()=>route(b.dataset.view)));
   document.getElementById('btn-home-signout')?.addEventListener('click',
     () => logAudit('logout',null,true).finally(()=>signOut(auth).then(() => location.href = 'index.html')));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STATISTICS — how the system is actually being used
+// ══════════════════════════════════════════════════════════════════════════════
+// Every figure here is derived from data the app already writes: the audit trail
+// (companies/{id}/audit_logs) for anything that happened, and live collection
+// counts for anything that simply IS. The two are kept in separate blocks and
+// labelled as such, because only the first can honestly answer "in this date
+// range" — a count of parts in the Database is today's number whatever dates you
+// pick, and quietly filtering it would be a lie.
+//
+// audit_logs is admin-readable only (see firestore.rules), so this screen needs
+// the admin role — or a role an admin grants it to.
+let _statFrom=null, _statTo=null;      // Date objects; null until the page opens
+let _statBlocks={};                    // { key: {title, columns, rows} } for export
+
+const _STAT_PRESETS=[[7,'7 days'],[30,'30 days'],[90,'90 days'],[365,'12 months']];
+function _statIsoDay(d){
+  // Local calendar day, not UTC — "logins per day" must line up with the day the
+  // person actually worked, not with Greenwich.
+  const p=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
+function _statSetRangeDays(days){
+  const to=new Date(); to.setHours(23,59,59,999);
+  const from=new Date(); from.setDate(from.getDate()-(days-1)); from.setHours(0,0,0,0);
+  _statFrom=from; _statTo=to;
+}
+// Firestore timestamps come back as Timestamp objects, but a row written in the
+// same session can still be a pending serverTimestamp (null) — skip those rather
+// than counting them on 1970.
+function _statLogDate(l){
+  const t=l && l.timestamp;
+  if(!t) return null;
+  try{ return t.toDate ? t.toDate() : new Date(t); }catch{ return null; }
+}
+function _statDetails(l){
+  const d=l && l.details;
+  return (d && typeof d==='object') ? d : {};
+}
+
+// ── Aggregations. Pure functions over a plain array of log rows, so they can be
+//    tested without a browser or a database. ──────────────────────────────────
+function _statCount(logs, action, okOnly=true){
+  return logs.filter(l=>l.action===action && (!okOnly || l.success!==false)).length;
+}
+function _statSum(logs, action, field){
+  return logs.reduce((a,l)=>
+    l.action===action && l.success!==false ? a+(parseFloat(_statDetails(l)[field])||0) : a, 0);
+}
+// Average of a numeric detail, ignoring rows that never recorded it. Returns null
+// rather than 0 when nothing has been measured yet — "no data" and "zero" are
+// different answers and a dashboard must not blur them.
+function _statAvg(logs, action, field){
+  const vals=logs.filter(l=>l.action===action && l.success!==false)
+                 .map(l=>parseFloat(_statDetails(l)[field]))
+                 .filter(v=>isFinite(v) && v>0);
+  if(!vals.length) return null;
+  return vals.reduce((a,b)=>a+b,0)/vals.length;
+}
+function _statPerDay(logs, actions){
+  const want=new Set([].concat(actions));
+  const by={};
+  for(const l of logs){
+    if(!want.has(l.action) || l.success===false) continue;
+    const d=_statLogDate(l); if(!d) continue;
+    const k=_statIsoDay(d);
+    by[k]=(by[k]||0)+1;
+  }
+  return Object.entries(by).sort((a,b)=>a[0]<b[0]?-1:1);
+}
+function _statPerUser(logs, actions){
+  const want=new Set([].concat(actions));
+  const by={};
+  for(const l of logs){
+    if(!want.has(l.action) || l.success===false) continue;
+    const u=l.user||'(unknown)';
+    if(u==='SYSTEM') continue;          // automated work isn't a person signing in
+    by[u]=(by[u]||0)+1;
+  }
+  return Object.entries(by).sort((a,b)=>b[1]-a[1]);
+}
+// One row per drawing file the AI was asked to read. Keyed on the filename the
+// extraction logged, which is the only drawing identity present in the trail.
+function _statDrawings(logs){
+  const by={};
+  for(const l of logs){
+    if(l.action!=='drawing_bom_search') continue;
+    const d=_statDetails(l);
+    const name=String(d.filename||'(unnamed)');
+    const e=by[name]||(by[name]={drawing:name,runs:0,ok:0,failed:0,rows:[],ms:[],last:null});
+    e.runs++;
+    if(l.success===false){ e.failed++; }
+    else {
+      e.ok++;
+      // Only a run that produced something contributes to the averages: a
+      // failed extraction's duration is the time spent failing, which would
+      // quietly drag "avg time to read a drawing" in either direction.
+      const rows=parseFloat(d.rowsFound); if(isFinite(rows)) e.rows.push(rows);
+      const ms=parseFloat(d.ms);          if(isFinite(ms)&&ms>0) e.ms.push(ms);
+    }
+    const when=_statLogDate(l);
+    if(when && (!e.last || when>e.last)) e.last=when;
+  }
+  const avg=a=>a.length ? a.reduce((x,y)=>x+y,0)/a.length : null;
+  return Object.values(by).map(e=>({
+    drawing:e.drawing, runs:e.runs, ok:e.ok, failed:e.failed,
+    avgRows:avg(e.rows), avgMs:avg(e.ms), last:e.last,
+  })).sort((a,b)=>b.runs-a.runs || (a.drawing<b.drawing?-1:1));
+}
+// Price coverage: of the parts in the Database, how many carry a price from any
+// source. Answers "can we actually quote what we hold?".
+const _STAT_PRICE_FIELDS=['priority_price','mouser_price','digikey_price'];
+function _statCoverage(parts){
+  let withPrice=0;
+  const byDwg={};
+  for(const p of parts||[]){
+    const has=_STAT_PRICE_FIELDS.some(f=>(parseFloat(p[f])||0)>0);
+    if(has) withPrice++;
+    const d=String(p.drawing_number||'').trim()||'(no drawing #)';
+    const e=byDwg[d]||(byDwg[d]={drawing:d,parts:0,priced:0});
+    e.parts++; if(has) e.priced++;
+  }
+  const total=(parts||[]).length;
+  return {
+    total, withPrice, pct: total ? (100*withPrice/total) : null,
+    byDrawing: Object.values(byDwg)
+      .map(e=>({...e, pct: e.parts ? (100*e.priced/e.parts) : null}))
+      .sort((a,b)=>b.parts-a.parts || (a.drawing<b.drawing?-1:1)),
+  };
+}
+
+// ── Formatting ──────────────────────────────────────────────────────────────
+function _statFmtMs(ms){
+  if(ms==null) return '—';
+  return ms<1000 ? `${Math.round(ms)} ms`
+       : ms<60000 ? `${(ms/1000).toFixed(1)} s`
+       : `${Math.floor(ms/60000)}m ${Math.round((ms%60000)/1000)}s`;
+}
+function _statFmtNum(n,dp=0){ return n==null ? '—' : (+n).toLocaleString(undefined,{minimumFractionDigits:dp,maximumFractionDigits:dp}); }
+function _statFmtPct(p){ return p==null ? '—' : `${p.toFixed(1)}%`; }
+function _statFmtDate(d){ return d ? d.toLocaleDateString('en-GB') : '—'; }
+
+// ── Rendering helpers ───────────────────────────────────────────────────────
+function _statTile(label, value, sub){
+  return `<div class="stat-tile">
+    <div class="stat-tile-v">${esc(String(value))}</div>
+    <div class="stat-tile-l">${esc(label)}</div>
+    ${sub?`<div class="stat-tile-s">${esc(sub)}</div>`:''}
+  </div>`;
+}
+// A bar list rather than a chart library: the app loads no charting code, and a
+// ranked list with proportional bars answers "which days / who / what" without
+// 300KB of dependency.
+function _statBars(pairs, fmt){
+  if(!pairs.length) return `<p class="stat-empty">Nothing recorded in this range.</p>`;
+  const max=Math.max(...pairs.map(p=>p[1]));
+  return `<div class="stat-bars">${pairs.map(([k,v])=>`
+    <div class="stat-bar-row">
+      <span class="stat-bar-k" title="${esc(String(k))}">${esc(String(k))}</span>
+      <span class="stat-bar-t"><span class="stat-bar-f" style="width:${max?Math.max(2,100*v/max):0}%"></span></span>
+      <span class="stat-bar-v">${esc(String(fmt?fmt(v):v))}</span>
+    </div>`).join('')}</div>`;
+}
+function _statTable(columns, rows){
+  if(!rows.length) return `<p class="stat-empty">Nothing recorded in this range.</p>`;
+  return `<div class="table-wrap"><table style="font-size:12px">
+    <thead><tr>${columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${esc(String(c))}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table></div>`;
+}
+// Registers a block's tabular form for export at the same moment it is drawn, so
+// the spreadsheet can never disagree with the screen.
+function _statBlock(key, title, note, innerHTML, columns, rows){
+  _statBlocks[key]={title, columns, rows};
+  return `<div class="settings-panel stat-block" style="padding:16px 18px;margin-top:16px">
+    <div class="stat-block-head">
+      <div>
+        <div class="stat-block-title">${esc(title)}</div>
+        ${note?`<div class="stat-block-note">${esc(note)}</div>`:''}
+      </div>
+      <button class="btn btn-ghost btn-sm stat-export" data-block="${esc(key)}" title="Export just this block to Excel">📊 Export</button>
+    </div>
+    ${innerHTML}
+  </div>`;
+}
+
+// ── The screen ──────────────────────────────────────────────────────────────
+function renderStatisticsPage(){
+  setActions('');
+  if(!_statFrom) _statSetRangeDays(30);
+  setContent(`
+    <div class="stat-wrap">
+      <div class="settings-panel" style="padding:14px 18px">
+        <div class="stat-filter">
+          <strong style="font-size:13px;color:var(--blue-dark)">📊 Statistics</strong>
+          <span style="flex:1"></span>
+          ${_STAT_PRESETS.map(([d,l])=>`<button class="btn btn-ghost btn-sm stat-preset" data-days="${d}">${l}</button>`).join('')}
+          <label for="stat-from" style="font-size:11px;color:var(--muted)">From</label>
+          <input type="date" id="stat-from" class="form-input" style="width:150px;padding:4px 7px;font-size:12px" value="${_statIsoDay(_statFrom)}">
+          <label for="stat-to" style="font-size:11px;color:var(--muted)">To</label>
+          <input type="date" id="stat-to" class="form-input" style="width:150px;padding:4px 7px;font-size:12px" value="${_statIsoDay(_statTo)}">
+          <button class="btn btn-blue btn-sm" id="stat-apply">Apply</button>
+          <button class="btn btn-green btn-sm" id="stat-export-all" title="Every block, one sheet each">⬇ Export all</button>
+        </div>
+      </div>
+      <div id="stat-body"></div>
+    </div>`);
+
+  document.querySelectorAll('.stat-preset').forEach(b=>b.addEventListener('click',()=>{
+    _statSetRangeDays(parseInt(b.dataset.days,10)||30);
+    document.getElementById('stat-from').value=_statIsoDay(_statFrom);
+    document.getElementById('stat-to').value=_statIsoDay(_statTo);
+    _statLoad();
+  }));
+  document.getElementById('stat-apply').addEventListener('click',()=>{
+    const f=document.getElementById('stat-from').value, t=document.getElementById('stat-to').value;
+    if(!f||!t){ toast('Pick both dates','error'); return; }
+    const from=new Date(f+'T00:00:00'), to=new Date(t+'T23:59:59');
+    if(!(from<=to)){ toast('The From date must not be after the To date','error'); return; }
+    _statFrom=from; _statTo=to;
+    _statLoad();
+  });
+  document.getElementById('stat-export-all').addEventListener('click',()=>_statExportAll());
+  _statLoad();
+}
+
+async function _statLoad(){
+  const host=document.getElementById('stat-body');
+  if(!host) return;
+  _statBlocks={};
+  host.innerHTML=`<div class="ai-status" style="margin-top:20px"><div class="ring"></div>
+    <span>Reading the activity log…</span></div>`;
+
+  // Each source is fetched independently: a permissions error on the audit trail
+  // must not also blank the counts that come from elsewhere.
+  let logs=null, logErr='';
+  try{
+    const snap=await getDocs(query(
+      collection(db,'companies',companyId,'audit_logs'),
+      where('timestamp','>=',_statFrom), where('timestamp','<=',_statTo),
+      orderBy('timestamp','desc'), limit(5000)));
+    logs=snap.docs.map(d=>d.data());
+  }catch(e){
+    logErr = /permission|insufficient/i.test(e.message||'')
+      ? 'Reading the activity log needs the administrator role.'
+      : e.message;
+  }
+
+  let parts=[], counts={}, countErr='';
+  try{
+    await loadParts();
+    parts=allParts;
+    const [usersSnap, rolesSnap, projSnap, custSnap] = await Promise.all([
+      getDocs(collection(db,'users')),
+      getDocs(collection(db,'roles')),
+      getDocs(collection(db,'companies',companyId,'projects')),
+      getDocs(collection(db,'companies',companyId,'customers')),
+    ]);
+    counts={
+      users: usersSnap.size,
+      roles: rolesSnap.docs.filter(d=>_isRoleDocId(d.id)).length,
+      projects: projSnap.size,
+      customers: custSnap.size,
+      parts: parts.length,
+    };
+  }catch(e){ countErr=e.message; }
+
+  host.innerHTML=_statRender(logs, logErr, parts, counts, countErr);
+  host.querySelectorAll('.stat-export').forEach(b=>
+    b.addEventListener('click',()=>_statExportBlock(b.dataset.block)));
+}
+
+function _statRender(logs, logErr, parts, counts, countErr){
+  const rangeLabel=`${_statFmtDate(_statFrom)} – ${_statFmtDate(_statTo)}`;
+  let out='';
+
+  if(logErr){
+    out += `<div class="settings-panel" style="padding:16px 18px;margin-top:16px;border-color:#FCA5A5;background:#FEF2F2">
+      <strong style="color:#9B1C1C;font-size:13px">Activity data unavailable</strong>
+      <p style="font-size:12px;color:#7F1D1D;margin-top:4px">${esc(logErr)}</p></div>`;
+  }
+
+  if(logs){
+    // ── Activity ────────────────────────────────────────────────────────────
+    const analysed=_statCount(logs,'drawing_bom_search');
+    const analysedFail=logs.filter(l=>l.action==='drawing_bom_search'&&l.success===false).length;
+    const toSD=_statSum(logs,'sales_desk_add_from_drawing','count');
+    const rfqs=_statCount(logs,'rfq_created');
+    const boms=_statCount(logs,'rfq_bom_saved');
+    const exports=_statCount(logs,'sales_desk_export');
+    const failures=logs.filter(l=>l.success===false).length;
+    const actRows=[
+      ['Drawings analysed',analysed],['Failed analyses',analysedFail],
+      ['Parts sent to Sales Desk',toSD],['RFQs created',rfqs],
+      ['BOMs saved to RFQ',boms],['Quotations exported',exports],
+      ['Failed actions (all kinds)',failures],['Log entries read',logs.length],
+    ];
+    out += _statBlock('activity','Activity',`Audit trail · ${rangeLabel}`,
+      `<div class="stat-tiles">
+        ${_statTile('Drawings analysed',_statFmtNum(analysed), analysedFail?`${analysedFail} failed`:'')}
+        ${_statTile('Parts → Sales Desk',_statFmtNum(toSD))}
+        ${_statTile('RFQs created',_statFmtNum(rfqs))}
+        ${_statTile('Quotations exported',_statFmtNum(exports))}
+        ${_statTile('Failed actions',_statFmtNum(failures))}
+      </div>
+      <div class="stat-sub">Drawing analyses per day</div>
+      ${_statBars(_statPerDay(logs,'drawing_bom_search'))}`,
+      ['Metric','Value'], actRows);
+
+    // ── Drawings ────────────────────────────────────────────────────────────
+    const dwgs=_statDrawings(logs);
+    const dwgRows=dwgs.map(d=>[d.drawing,d.runs,d.ok,d.failed,
+      d.avgRows==null?'—':d.avgRows.toFixed(1), _statFmtMs(d.avgMs), _statFmtDate(d.last)]);
+    const avgAnalysis=_statAvg(logs,'drawing_bom_search','ms');
+    out += _statBlock('drawings','Drawings',
+      `One row per drawing file the AI was asked to read · ${rangeLabel}`,
+      `<div class="stat-tiles">
+        ${_statTile('Distinct drawings',_statFmtNum(dwgs.length))}
+        ${_statTile('Total analyses',_statFmtNum(dwgs.reduce((a,d)=>a+d.runs,0)))}
+        ${_statTile('Avg analysis time',_statFmtMs(avgAnalysis), avgAnalysis==null?'measured from v1.37 onward':'')}
+      </div>
+      ${_statTable(['Drawing','Analyses','OK','Failed','Avg rows','Avg time','Last'], dwgRows.slice(0,40))}
+      ${dwgRows.length>40?`<p class="stat-empty">Showing the 40 most analysed — Export for the full list.</p>`:''}`,
+      ['Drawing','Analyses','OK','Failed','Avg rows','Avg time','Last'], dwgRows);
+
+    // ── Pricing ─────────────────────────────────────────────────────────────
+    const runs=_statCount(logs,'price_check',false);
+    const checked=_statSum(logs,'price_check','checked');
+    const found=_statSum(logs,'price_check','found');
+    const failedParts=_statSum(logs,'price_check','failed');
+    const avgRun=_statAvg(logs,'price_check','ms');
+    const cov=_statCoverage(parts);
+    const priceRows=[
+      ['Price-check runs',runs],['Parts checked',checked],['Prices found',found],
+      ['Lookups failed',failedParts],
+      ['Hit rate',checked?_statFmtPct(100*found/checked):'—'],
+      ['Avg run time',_statFmtMs(avgRun)],
+      ['Parts in Database (now)',cov.total],
+      ['Parts with a price (now)',cov.withPrice],
+      ['Price coverage (now)',_statFmtPct(cov.pct)],
+    ];
+    out += _statBlock('pricing','Pricing',
+      `Runs are from the audit trail (${rangeLabel}); coverage is the Database as it stands now`,
+      `<div class="stat-tiles">
+        ${_statTile('Price-check runs',_statFmtNum(runs))}
+        ${_statTile('Parts checked',_statFmtNum(checked))}
+        ${_statTile('Hit rate',checked?_statFmtPct(100*found/checked):'—')}
+        ${_statTile('Avg run time',_statFmtMs(avgRun), avgRun==null?'measured from v1.37 onward':'')}
+        ${_statTile('Price coverage',_statFmtPct(cov.pct),'Database, now')}
+      </div>
+      <div class="stat-sub">Price coverage per drawing — Database, now</div>
+      ${_statTable(['Drawing','Parts','Priced','Coverage'],
+        cov.byDrawing.slice(0,25).map(d=>[d.drawing,d.parts,d.priced,_statFmtPct(d.pct)]))}`,
+      ['Metric','Value'], priceRows);
+
+    // ── People ──────────────────────────────────────────────────────────────
+    const logins=_statPerDay(logs,'login');
+    const byUser=_statPerUser(logs,'login');
+    const screens=_statPerUser(logs.map(l=>l.action==='screen_open'
+      ? {...l, user:_statDetails(l).screen||'?'} : l), 'screen_open');
+    out += _statBlock('people','People',`Audit trail · ${rangeLabel}`,
+      `<div class="stat-tiles">
+        ${_statTile('Sign-ins',_statFmtNum(_statCount(logs,'login')))}
+        ${_statTile('People who signed in',_statFmtNum(byUser.length))}
+        ${_statTile('Screens opened',_statFmtNum(_statCount(logs,'screen_open')))}
+      </div>
+      <div class="stat-sub">Sign-ins per day</div>
+      ${_statBars(logins)}
+      <div class="stat-sub">Sign-ins per person</div>
+      ${_statBars(byUser)}
+      <div class="stat-sub">Most opened screens</div>
+      ${_statBars(screens.slice(0,10))}`,
+      ['Person','Sign-ins'], byUser.map(([u,c])=>[u,c]));
+  }
+
+  // ── Current state ─────────────────────────────────────────────────────────
+  const nowRows=[
+    ['Parts in Database',counts.parts],['Customers',counts.customers],
+    ['RFQs / projects',counts.projects],['Users',counts.users],['Roles',counts.roles],
+  ].filter(r=>r[1]!=null);
+  out += _statBlock('now','System — right now',
+    'Live counts. Not affected by the date range above: these are totals as they stand today.',
+    countErr
+      ? `<p style="color:#9B1C1C;font-size:12px">${esc(countErr)}</p>`
+      : `<div class="stat-tiles">
+          ${_statTile('Parts in Database',_statFmtNum(counts.parts))}
+          ${_statTile('Customers',_statFmtNum(counts.customers))}
+          ${_statTile('RFQs',_statFmtNum(counts.projects))}
+          ${_statTile('Users',_statFmtNum(counts.users))}
+          ${_statTile('Roles',_statFmtNum(counts.roles))}
+        </div>`,
+    ['Metric','Value'], nowRows);
+
+  return out;
+}
+
+// ── Export. SheetJS, already loaded for every other spreadsheet in the app. ──
+function _statSheetName(s){ return String(s||'Sheet').replace(/[\\/?*\[\]:]/g,' ').slice(0,31); }
+function _statExportBlock(key){
+  const b=_statBlocks[key];
+  if(!b){ toast('Nothing to export in that block','error'); return; }
+  if(!window.XLSX){ toast('Excel library not loaded — please reload the page','error'); return; }
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,
+    XLSX.utils.aoa_to_sheet(_statSheetRows(b)), _statSheetName(b.title));
+  XLSX.writeFile(wb,`SpecPrice ${b.title} ${_statIsoDay(_statFrom)}_${_statIsoDay(_statTo)}.xlsx`);
+  toast(`${b.title} exported`,'success');
+}
+function _statExportAll(){
+  const keys=Object.keys(_statBlocks);
+  if(!keys.length){ toast('Nothing to export yet','error'); return; }
+  if(!window.XLSX){ toast('Excel library not loaded — please reload the page','error'); return; }
+  const wb=XLSX.utils.book_new();
+  keys.forEach(k=>XLSX.utils.book_append_sheet(wb,
+    XLSX.utils.aoa_to_sheet(_statSheetRows(_statBlocks[k])), _statSheetName(_statBlocks[k].title)));
+  XLSX.writeFile(wb,`SpecPrice Statistics ${_statIsoDay(_statFrom)}_${_statIsoDay(_statTo)}.xlsx`);
+  toast('Dashboard exported','success');
+  logAudit('statistics_export',{blocks:keys.length,from:_statIsoDay(_statFrom),to:_statIsoDay(_statTo)},true);
+}
+// Every sheet states the range it covers — a figure without its window is a
+// number nobody can check later.
+function _statSheetRows(b){
+  return [[b.title],[`Range: ${_statFmtDate(_statFrom)} – ${_statFmtDate(_statTo)}`],[],
+          b.columns, ...b.rows];
 }
 
 // ── Support ticket (floating headset button, every screen) ──────────────────────────
@@ -5828,16 +6299,35 @@ function _sdComputeGroups(){
     }
     autoLaborMinutes += _sdGeneralMinutesFor(dwg);
     const st=_sdDwgSet(dwg);
-    const laborMinutes = st.laborMinutes!=null && st.laborMinutes!=='' ? (parseFloat(st.laborMinutes)||0) : autoLaborMinutes;
+    const units=_sdDwgUnits(dwg);
+    // Everything above is summed across the whole order, because each row's QTY
+    // already carries the multiplier. The COST BREAKDOWN is read per cable
+    // though — that is the number an engineer reasons about and a customer
+    // compares — so the per-cable figures are derived here and the order totals
+    // are those multiplied back up. Both scale linearly, so the two can never
+    // disagree. A typed Labor Time override is minutes for ONE cable, matching
+    // everything else on that panel.
+    const partsTotalPerUnit = partsTotal/units;
+    const autoLaborMinutesPerUnit = autoLaborMinutes/units;
+    const laborMinutesPerUnit = st.laborMinutes!=null && st.laborMinutes!==''
+      ? (parseFloat(st.laborMinutes)||0) : autoLaborMinutesPerUnit;
+    const laborMinutes = laborMinutesPerUnit*units;
     const rate=_sdDwgRate(dwg);
-    const laborCost=laborMinutes*rate;
+    const laborCostPerUnit=laborMinutesPerUnit*rate;
+    const laborCost=laborCostPerUnit*units;
+    // Tools are bought once for the whole run, so this one figure is NOT
+    // per cable and is never divided.
     const toolsTotal = st.toolsTotal!=null && st.toolsTotal!=='' ? (parseFloat(st.toolsTotal)||0) : autoToolsTotal;
-    const subtotal=partsTotal+laborCost;   // tools excluded by design
+    const subtotalPerUnit=partsTotalPerUnit+laborCostPerUnit;   // tools excluded by design
+    const subtotal=subtotalPerUnit*units;
     const profitPct=_sdDwgProfit(dwg);
-    const final=subtotal*(1+profitPct/100);
-    return {dwg, rows, units:_sdDwgUnits(dwg),
+    const finalPerUnit=subtotalPerUnit*(1+profitPct/100);
+    const final=finalPerUnit*units;
+    return {dwg, rows, units,
             partsTotal, autoToolsTotal, toolsTotal, autoLaborMinutes, laborMinutes,
             rate, laborCost, subtotal, profitPct, profit:final-subtotal, final,
+            partsTotalPerUnit, autoLaborMinutesPerUnit, laborMinutesPerUnit,
+            laborCostPerUnit, subtotalPerUnit, finalPerUnit,
             ownedToolRows, missingToolRows};
   });
 }
@@ -5949,8 +6439,8 @@ async function renderSalesDesk(){
         <div class="sd-panel-title" style="display:flex;align-items:center;gap:7px;cursor:pointer" data-toggle="${esc(g.dwg)}">
           <span style="font-size:11px;width:10px;display:inline-block">${open?'▾':'▸'}</span>
           <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(g.dwg)}</span>
-          <span style="font-size:11px;color:var(--muted);font-weight:400">${g.rows.length} row${g.rows.length===1?'':'s'}</span>
-          <strong style="color:var(--green)">${$(g.final)}</strong>
+          <span style="font-size:11px;color:var(--muted);font-weight:400">${g.rows.length} row${g.rows.length===1?'':'s'}${g.units>1?` · ×${g.units}`:''}</span>
+          <strong style="color:var(--green)" title="${g.units>1?`Unit price — ${$(g.final)} for all ${g.units}`:'Unit price'}">${$(g.finalPerUnit)}</strong>
         </div>
         ${open?`
         <div style="padding:6px 0">
@@ -5960,46 +6450,41 @@ async function renderSalesDesk(){
               style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
           </div>
           <div class="summary-row" style="color:var(--muted)">
-            <span title="Crimp/insertion tools not yet in Stock. Never added into Subtotal or FINAL PRICE — type your own number to override.">Tools <em style="font-size:10px;font-style:normal">(not in price)</em></span>
+            <span title="Crimp/insertion tools not yet in Stock. Bought once for the whole order, not per cable, and never added into Subtotal or the price — type your own number to override.">Tools <em style="font-size:10px;font-style:normal">(not in price, whole order)</em></span>
             <span style="display:flex;align-items:center;gap:2px">$<input type="number" class="sd-in-tools" data-dwg="${esc(g.dwg)}" min="0" step="any"
               value="${g.toolsTotal?+g.toolsTotal.toFixed(2):''}"
               style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right"></span>
           </div>
           <div class="summary-row">
-            <span title="Sum of this drawing's row Labor Totals — type your own number to override" style="display:flex;align-items:center;gap:5px">
-              Labor Time (min)
+            <span title="Minutes to build ONE cable — the sum of this drawing's row Labor Totals divided by the order quantity. Type your own number to override; it is also per cable." style="display:flex;align-items:center;gap:5px">
+              Labor Time (min / cable)
               <button type="button" class="btn btn-ghost btn-sm sd-btn-breakdown" data-dwg="${esc(g.dwg)}" title="Manufacturing-step breakdown behind this number" style="padding:1px 6px;font-size:11px">📋</button>
             </span>
             <input type="number" class="sd-in-minutes" data-dwg="${esc(g.dwg)}" min="0" step="any"
-              value="${g.laborMinutes?+g.laborMinutes.toFixed(2):''}"
+              value="${g.laborMinutesPerUnit?+g.laborMinutesPerUnit.toFixed(2):''}"
               style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
           </div>
-          <div class="summary-row"><span>Parts Total</span><span>${$(g.partsTotal)}</span></div>
+          <div class="summary-row"><span>Parts Total</span><span>${$(g.partsTotalPerUnit)}</span></div>
           <div class="summary-row">
-            <span title="Labor Time × rate per minute for this drawing">Labor Cost</span>
+            <span title="Labor Time × rate per minute — for one cable">Labor Cost</span>
             <span style="display:flex;align-items:center;gap:4px">
               <input type="number" class="sd-in-rate" data-dwg="${esc(g.dwg)}" min="0" step="any" value="${g.rate}"
                 title="Rate per minute for this drawing" style="width:54px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:11px;text-align:right">
-              <span>${$(g.laborCost)}</span>
+              <span>${$(g.laborCostPerUnit)}</span>
             </span>
           </div>
-          <div class="summary-row"><span>Subtotal</span><span>${$(g.subtotal)}</span></div>
+          <div class="summary-row"><span>Subtotal</span><span>${$(g.subtotalPerUnit)}</span></div>
           <div class="summary-row">
             <span>Profit %</span>
             <input type="number" class="sd-in-profit" data-dwg="${esc(g.dwg)}" min="0" step="any" value="${g.profitPct}"
               style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
           </div>
         </div>
+        <div class="summary-total"><span>Unit Price</span><span>${$(g.finalPerUnit)}</span></div>
         ${g.units>1?`
-        <div class="summary-total">
-          <span>PRICE PER CABLE</span>
-          <span>${$(g.final/g.units)}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;
-                    color:var(--muted);margin-top:4px;padding:0 2px">
-          <span>Order total — ${g.units} cables</span><span>${$(g.final)}</span>
-        </div>`:`
-        <div class="summary-total"><span>FINAL PRICE</span><span>${$(g.final)}</span></div>`}
+        <div class="summary-order">
+          <span class="lbl">Price per ${g.units} units</span><span>${$(g.final)}</span>
+        </div>`:''}
         ${miss.length?`<div style="font-size:13px;color:#92400e;background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;padding:8px 10px;margin-top:8px;line-height:1.4;font-weight:600">
             ⚠ Final price does NOT include manufacturing tools.<br>
             ${miss.length} tool${miss.length>1?'s':''} not in Stock — estimated <strong>${$(g.toolsTotal)}</strong>: ${esc(miss.map(r=>r.part_number||r.description||'tool').join(', '))}
@@ -7049,8 +7534,10 @@ async function exportSalesDeskExcel(){
       secTitle(`QUOTATION SUMMARY — ${groups.length} DRAWINGS`,'FF334155');
       // Units sits right after Rows: the reader needs to know the price covers
       // 10 cables before reading the price.
-      const sh=['Drawing #','Rows','Units','Parts Total','Labor Cost','Subtotal','Profit %',
-                'PRICE / CABLE','Order Total'];
+      // Per-cable columns first — the breakdown people read — then the order
+      // total at the end, matching the panel in the app.
+      const sh=['Drawing #','Rows','Units','Parts / Cable','Labor / Cable','Subtotal / Cable','Profit %',
+                'UNIT PRICE','Order Total'];
       const MONEY_COLS=[3,4,5,7,8], PCT_COL=6;
       sh.forEach((h,k)=>{
         const c=ws.getCell(row,k+1);
@@ -7060,9 +7547,10 @@ async function exportSalesDeskExcel(){
       });
       row++;
       groups.forEach((g,k)=>{
-        const vals=[g.dwg,g.rows.length,g.units,+g.partsTotal.toFixed(2),+g.laborCost.toFixed(2),
-                    +g.subtotal.toFixed(2),g.profitPct/100,
-                    +(g.final/g.units).toFixed(2),+g.final.toFixed(2)];
+        const vals=[g.dwg,g.rows.length,g.units,
+                    +g.partsTotalPerUnit.toFixed(2),+g.laborCostPerUnit.toFixed(2),
+                    +g.subtotalPerUnit.toFixed(2),g.profitPct/100,
+                    +g.finalPerUnit.toFixed(2),+g.final.toFixed(2)];
         vals.forEach((v,ci)=>{
           const c=ws.getCell(row,ci+1);
           c.value=v; c.border=_xlBoxed; c.font={size:10};
@@ -7076,7 +7564,10 @@ async function exportSalesDeskExcel(){
       // Grand total sits in the same table, so the columns line up under it.
       // Total cables across every drawing — the "how big is this order" number.
       const totalUnits=groups.reduce((a,g)=>a+g.units,0);
-      const gv=['GRAND TOTAL',sdItems.length,totalUnits,+partsTotal.toFixed(2),+laborCost.toFixed(2),
+      // The grand total row is order-wide by definition, so its money columns
+      // are the full figures, not per-cable ones — labelled in the header above.
+      const gv=['GRAND TOTAL (all orders)',sdItems.length,totalUnits,
+                +partsTotal.toFixed(2),+laborCost.toFixed(2),
                 +subtotal.toFixed(2),null,null,+final.toFixed(2)];
       gv.forEach((v,ci)=>{
         const c=ws.getCell(row,ci+1);
@@ -7185,21 +7676,22 @@ async function exportSalesDeskExcel(){
       }
 
       // This drawing's own price build-up, immediately under its parts.
-      money('Parts Total',+g.partsTotal.toFixed(2));
-      money(`Labor  (${(+g.laborMinutes).toFixed(1)} min × $${g.rate}/min)`,+g.laborCost.toFixed(2));
-      money('Subtotal',+g.subtotal.toFixed(2),{bold:true});
-      money(`Profit (${g.profitPct}%)`,+(g.final-g.subtotal).toFixed(2));
+      money('Parts  (per cable)',+g.partsTotalPerUnit.toFixed(2));
+      money(`Labor  (${(+g.laborMinutesPerUnit).toFixed(1)} min × $${g.rate}/min, per cable)`,
+            +g.laborCostPerUnit.toFixed(2));
+      money('Subtotal  (per cable)',+g.subtotalPerUnit.toFixed(2),{bold:true});
+      money(`Profit (${g.profitPct}%)`,+(g.finalPerUnit-g.subtotalPerUnit).toFixed(2));
       // Per cable is the number the customer compares and the one the sales
       // conversation is actually about, so it takes the highlighted band; the
       // order total follows in the quieter style underneath. With a single
       // cable the two are the same figure, so only one line is printed.
+      money(`Unit Price — ${g.dwg}`,+g.finalPerUnit.toFixed(2),
+            {bold:true,size:13,bg:_XL.final,fg:'FFFFFFFF',height:24});
       if(g.units>1){
-        money(`PRICE PER CABLE — ${g.dwg}`,+(g.final/g.units).toFixed(2),
-              {bold:true,size:13,bg:_XL.final,fg:'FFFFFFFF',height:24});
-        money(`Order total — ${g.units} cables`,+g.final.toFixed(2),{size:10,fg:'FF64748B'});
-      } else {
-        money(`FINAL PRICE — ${g.dwg}`,+g.final.toFixed(2),
-              {bold:true,size:13,bg:_XL.final,fg:'FFFFFFFF',height:24});
+        // Its own green band rather than a footnote: the order total is the
+        // second real answer on the page, not a remark about the first.
+        money(`Price per ${g.units} units`,+g.final.toFixed(2),
+              {bold:true,size:12,bg:'FF1F8B4C',fg:'FFFFFFFF',height:22});
       }
 
       if(g.missingToolRows.length){
@@ -8342,18 +8834,23 @@ async function renderSettingsRolesSection(){
         <td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(r._id)}</td>
         ${viewKeys.map(v=>{
           const pin = locked && PROTECTED_VIEWS.includes(v);
-          // Three states, not two: On (opens normally), Disabled (visible on the
-          // Home screen but greyed and inert), Off (not there at all).
+          // Screens newer than this role document are on for administrators (see
+          // ADMIN_AUTO_VIEWS), so the table has to show them that way — a row
+          // reading "Off" beside a button that is plainly there is worse than no
+          // table at all. They can still be turned off by disabling them, so the
+          // only state withheld is "Off".
+          const auto = locked && !pin && ADMIN_AUTO_VIEWS.includes(v);
           const state = pin ? 'on'
                       : (r.disabledViews||[]).includes(v) ? 'disabled'
-                      : (r.views||[]).includes(v) ? 'on' : 'off';
+                      : (r.views||[]).includes(v) || auto ? 'on' : 'off';
           return `<td style="text-align:center"><select class="role-view-sel"
             data-key="${esc(r._id)}" data-view="${v}" ${pin?'disabled':''}
-            ${pin?'title="Administrators must keep access to this screen — removing it would lock the system out of its own administration."':''}
+            ${pin?'title="Administrators must keep access to this screen — removing it would lock the system out of its own administration."'
+                 :auto?'title="New screens are switched on for administrators automatically. Set it to Disabled to grey it out."':''}
             style="padding:2px 4px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:#fff">
             <option value="on" ${state==='on'?'selected':''}>On</option>
             <option value="disabled" ${state==='disabled'?'selected':''}>Disabled</option>
-            <option value="off" ${state==='off'?'selected':''}>Off</option>
+            ${auto?'':`<option value="off" ${state==='off'?'selected':''}>Off</option>`}
           </select></td>`;
         }).join('')}
         <td style="text-align:right;white-space:nowrap">
@@ -8381,7 +8878,9 @@ async function renderSettingsRolesSection(){
     // is the write path, so it is where the guarantee has to hold. A disabled
     // select submits nothing, and an admin locked out of Admin could not undo it.
     if(key===PROTECTED_ROLE){
-      views=[...new Set([...views, ...PROTECTED_VIEWS])];
+      // ADMIN_AUTO_VIEWS goes into the document on the first save so the grant
+      // stops being implicit — after this the role record says what it means.
+      views=[...new Set([...views, ...PROTECTED_VIEWS, ...ADMIN_AUTO_VIEWS])];
       disabledViews=disabledViews.filter(v=>!PROTECTED_VIEWS.includes(v));
     }
     btn.disabled=true; btn.textContent='Saving…';

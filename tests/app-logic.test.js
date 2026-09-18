@@ -1079,6 +1079,179 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   delete map[''];
 }
 
+// ──────────────────────────── 28. the breakdown is priced per cable
+{
+  const apply=G('_sdApplyUnits'), groups=G('_sdComputeGroups'),
+        items=G('sdItems'), settings=G('_sdDwgSettings'), recalc=G('_sdRecalcRow');
+  const reset=()=>{ items.length=0; for(const k in settings) delete settings[k]; };
+
+  const part=(dwg,price,qty)=>({drawing_number:dwg, part_number:'P'+price,
+    description:'Connector 4pin', qty:String(qty), unit:'pc', mouser_price:String(price),
+    labor_time:'3'});
+
+  reset();
+  items.push(part('A',5,2));
+  items.forEach(recalc);
+  settings['A']={profitPct:0};
+  const one=groups()[0];
+  t('per cable: a single cable is its own order', one.units, 1);
+  t('per cable: parts', one.partsTotalPerUnit, one.partsTotal);
+  t('per cable: subtotal', one.subtotalPerUnit, one.subtotal);
+  t('per cable: price', one.finalPerUnit, one.final);
+
+  apply('A',10);
+  const ten=groups()[0];
+  t('per cable: the order now covers ten', ten.units, 10);
+  t('per cable: parts per cable are unchanged by the quantity',
+    +ten.partsTotalPerUnit.toFixed(6), +one.partsTotal.toFixed(6));
+  t('per cable: ...and the order total is ten of them',
+    +ten.partsTotal.toFixed(6), +(ten.partsTotalPerUnit*10).toFixed(6));
+  t('per cable: labor minutes per cable are unchanged',
+    +ten.laborMinutesPerUnit.toFixed(6), +one.laborMinutes.toFixed(6));
+  t('per cable: labor cost scales with the order',
+    +ten.laborCost.toFixed(6), +(ten.laborCostPerUnit*10).toFixed(6));
+  t('per cable: subtotal per cable = parts + labor, per cable',
+    +ten.subtotalPerUnit.toFixed(6), +(ten.partsTotalPerUnit+ten.laborCostPerUnit).toFixed(6));
+  t('per cable: the unit price times the quantity is the order total',
+    +ten.final.toFixed(6), +(ten.finalPerUnit*10).toFixed(6));
+  ok('per cable: ten cables cost more than one', ten.final > one.final);
+  t('per cable: but one of them costs the same',
+    +ten.finalPerUnit.toFixed(6), +one.finalPerUnit.toFixed(6));
+
+  // A typed Labor Time override is minutes for ONE cable — the panel says so,
+  // and the order total must multiply it back up rather than treating it as the
+  // time for the whole run.
+  settings['A'].laborMinutes='30';
+  const ovr=groups()[0];
+  t('per cable: a typed override is per cable', ovr.laborMinutesPerUnit, 30);
+  t('per cable: ...and the run takes ten times as long', ovr.laborMinutes, 300);
+  t('per cable: ...costed at the same rate', +ovr.laborCost.toFixed(6), +(30*10*ovr.rate).toFixed(6));
+
+  // Profit is a percentage, so it applies identically at both scales.
+  settings['A'].laborMinutes=''; settings['A'].profitPct=25;
+  const pr=groups()[0];
+  t('per cable: profit % applies per cable',
+    +pr.finalPerUnit.toFixed(6), +(pr.subtotalPerUnit*1.25).toFixed(6));
+  t('per cable: ...and to the order the same way',
+    +pr.final.toFixed(6), +(pr.subtotal*1.25).toFixed(6));
+
+  reset();
+}
+
+// ──────────────────────────── 29. statistics: counting what actually happened
+{
+  const count=G('_statCount'), sum=G('_statSum'), avg=G('_statAvg'),
+        perDay=G('_statPerDay'), perUser=G('_statPerUser'), drawings=G('_statDrawings'),
+        coverage=G('_statCoverage'), isoDay=G('_statIsoDay'), logDate=G('_statLogDate'),
+        details=G('_statDetails'), fmtMs=G('_statFmtMs'), fmtPct=G('_statFmtPct'),
+        setRange=G('_statSetRangeDays'), sheetName=G('_statSheetName'), sheetRows=G('_statSheetRows');
+
+  const log=(action,user,details,success=true,day=null)=>({
+    action, user, details, success,
+    timestamp: day ? {toDate:()=>new Date(day+'T09:00:00')} : null});
+
+  const L=[
+    log('drawing_bom_search','a@x',{filename:'D1.pdf',rowsFound:20,ms:4000},true,'2026-09-01'),
+    log('drawing_bom_search','a@x',{filename:'D1.pdf',rowsFound:30,ms:6000},true,'2026-09-01'),
+    log('drawing_bom_search','b@x',{filename:'D2.pdf',rowsFound:10,ms:2000},false,'2026-09-02'),
+    log('drawing_bom_search','b@x',{filename:'D2.pdf',rowsFound:12},true,'2026-09-03'),
+    log('price_check','a@x',{checked:50,found:40,failed:10,ms:30000},true,'2026-09-03'),
+    log('login','a@x',null,true,'2026-09-01'),
+    log('login','a@x',null,true,'2026-09-02'),
+    log('login','b@x',null,true,'2026-09-02'),
+    log('login','SYSTEM',null,true,'2026-09-02'),
+    log('login','c@x',null,false,'2026-09-02'),
+  ];
+
+  t('stat: successful runs are counted', count(L,'drawing_bom_search'), 3);
+  t('stat: failures can be counted too', count(L,'drawing_bom_search',false), 4);
+  t('stat: an action nobody performed is zero', count(L,'rfq_created'), 0);
+  t('stat: a numeric detail is summed', sum(L,'price_check','checked'), 50);
+  t('stat: a detail nothing carries sums to zero', sum(L,'price_check','nosuch'), 0);
+  t('stat: averages ignore rows that never measured', avg(L,'drawing_bom_search','ms'), 5000);
+  t('stat: nothing measured is "no data", not zero', avg(L,'rfq_created','ms'), null);
+  t('stat: a failed run is left out of the average', avg(L,'price_check','ms'), 30000);
+
+  t('stat: per day, oldest first', perDay(L,'drawing_bom_search'),
+    [['2026-09-01',2],['2026-09-03',1]]);
+  t('stat: per day counts only successes', perDay(L,'login').length, 2);
+  t('stat: per person, busiest first', perUser(L,'login'), [['a@x',2],['b@x',1]]);
+  t('stat: automated work is not a person', perUser(L,'login').some(p=>p[0]==='SYSTEM'), false);
+  t('stat: a failed sign-in is not a sign-in', perUser(L,'login').some(p=>p[0]==='c@x'), false);
+
+  const d=drawings(L);
+  t('stat: one row per drawing file', d.length, 2);
+  t('stat: busiest drawing first', d[0].drawing, 'D1.pdf');
+  t('stat: runs', d[0].runs, 2);
+  t('stat: successes and failures are kept apart', [d[1].ok,d[1].failed], [1,1]);
+  t('stat: average rows found', d[0].avgRows, 25);
+  t('stat: average time', d[0].avgMs, 5000);
+  t('stat: a drawing with no timings reports none', d[1].avgMs, null);
+  t('stat: the last time it ran', isoDay(d[1].last), '2026-09-03');
+  t('stat: an unnamed extraction is not dropped', drawings([log('drawing_bom_search','a',{})]) [0].drawing, '(unnamed)');
+
+  const cov=coverage([
+    {drawing_number:'D1',mouser_price:'5'},
+    {drawing_number:'D1',priority_price:'0'},
+    {drawing_number:'D1'},
+    {drawing_number:'',digikey_price:'2'},
+  ]);
+  t('stat: parts held', cov.total, 4);
+  t('stat: parts we can quote', cov.withPrice, 2);
+  t('stat: coverage %', cov.pct, 50);
+  t('stat: a zero price is not a price', cov.byDrawing.find(x=>x.drawing==='D1').priced, 1);
+  t('stat: parts with no drawing are still counted somewhere',
+    cov.byDrawing.some(x=>x.drawing==='(no drawing #)'), true);
+  t('stat: an empty database is "no data", not 0%', coverage([]).pct, null);
+  t('stat: ...and does not crash on undefined', coverage(undefined).total, 0);
+
+  t('stat: a pending serverTimestamp is skipped, not dated 1970', logDate({timestamp:null}), null);
+  t('stat: details of a string-detail row read as empty', details({details:'text'}), {});
+  t('stat: a missing row reads as empty', details(null), {});
+  t('stat: sub-second timings read in ms', fmtMs(450), '450 ms');
+  t('stat: seconds', fmtMs(4500), '4.5 s');
+  t('stat: minutes', fmtMs(125000), '2m 5s');
+  t('stat: no measurement shows a dash', fmtMs(null), '—');
+  t('stat: percentages carry one decimal', fmtPct(33.333), '33.3%');
+  t('stat: no percentage shows a dash', fmtPct(null), '—');
+
+  // The range itself: _statFrom/_statTo are module state a CommonJS export can't
+  // observe, so the day arithmetic is checked on the pure day formatter instead.
+  t('stat: a day is the local calendar day, not UTC',
+    isoDay(new Date(2026,8,3,23,30)), '2026-09-03');
+  t('stat: ...zero-padded', isoDay(new Date(2026,0,7)), '2026-01-07');
+  ok('stat: setting a range does not throw', (()=>{ setRange(7); setRange(365); return true; })());
+
+  t('stat: a sheet name cannot contain a character Excel rejects',
+    sheetName('a/b:c*d?e[f]'), 'a b c d e f ');
+  t('stat: ...and is never longer than Excel allows', sheetName('x'.repeat(50)).length, 31);
+  const rows=sheetRows({title:'Activity',columns:['Metric','Value'],rows:[['RFQs',3]]});
+  t('stat: every sheet names itself', rows[0], ['Activity']);
+  ok('stat: ...and states the range it covers', /Range: /.test(rows[1][0]));
+  t('stat: the header row is the block header', rows[3], ['Metric','Value']);
+  t('stat: the data follows it', rows[4], ['RFQs',3]);
+}
+
+// ──────────────────────────── 30. a new screen reaches the administrator
+{
+  const buttons=G('HOME_BUTTONS'), seed=G('SEED_ROLE_VIEWS'), auto=G('ADMIN_AUTO_VIEWS'),
+        protectedViews=G('PROTECTED_VIEWS');
+  ok('new screen: Statistics has a Home button', !!buttons['statistics']);
+  t('new screen: with an icon and a label', buttons['statistics'].length, 2);
+  ok('new screen: a fresh installation gives it to the admin role',
+     seed.admin.includes('statistics'));
+  ok('new screen: an existing admin role gets it without editing anything',
+     auto.includes('statistics'));
+  // Auto-granted is not the same as locked: PROTECTED_VIEWS can never be taken
+  // away, ADMIN_AUTO_VIEWS can still be disabled.
+  t('new screen: ...but it is not locked on', protectedViews.includes('statistics'), false);
+  // Every Home button must be routable, or a role could be granted a screen
+  // that opens nothing.
+  const routed=['rfq','sales-desk','part-stock','cut-strip','customers','statistics','settings','admin'];
+  t('new screen: every Home button has a screen behind it',
+    Object.keys(buttons).filter(k=>!routed.includes(k)), []);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }
