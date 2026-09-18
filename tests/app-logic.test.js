@@ -1037,6 +1037,48 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   reset();
 }
 
+
+// ──────────────────────────── 27. screens a role can see but not open
+{
+  const allowed=G('allowedViews'), disabled=G('disabledViews'), can=G('canView'),
+        isOff=G('isViewDisabled'), map=G('roleViewsMap');
+  // currentUserRole is '' in a fresh module, so the role document under that key
+  // is the one the gate reads.
+  const set=(views,disabledViews)=>{ map['']={name:'test',views,disabledViews}; };
+
+  set(['rfq','sales-desk','part-stock'],[]);
+  t('gate: nothing disabled', disabled(), []);
+  t('gate: an allowed screen opens', can('rfq'), true);
+  t('gate: an absent screen does not', can('admin'), false);
+  t('gate: home always opens', can('home'), true);
+
+  set(['rfq','sales-desk','part-stock'],['sales-desk']);
+  t('gate: the disabled screen is still in views', allowed().includes('sales-desk'), true);
+  t('gate: ...and listed as disabled', disabled(), ['sales-desk']);
+  t('gate: isViewDisabled says so', isOff('sales-desk'), true);
+  t('gate: but it cannot be opened', can('sales-desk'), false);
+  t('gate: its neighbours still open', can('rfq'), true);
+  t('gate: home is unaffected', can('home'), true);
+
+  // Disabling something the role never had is meaningless but must not crash
+  // or accidentally grant it.
+  set(['rfq'],['admin']);
+  t('gate: disabling a screen the role lacks grants nothing', can('admin'), false);
+  t('gate: and the rest is untouched', can('rfq'), true);
+
+  // A role document with no disabledViews at all (every existing record).
+  map['']={name:'legacy',views:['rfq','admin']};
+  t('gate: a record with no disabled list reads as none', disabled(), []);
+  t('gate: legacy records keep working', can('admin'), true);
+
+  // Malformed data must fail closed-ish, not throw.
+  map['']={name:'broken',views:['rfq'],disabledViews:'not-an-array'};
+  t('gate: a non-array disabled list is ignored', disabled(), []);
+  t('gate: ...and access still resolves', can('rfq'), true);
+
+  delete map[''];
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

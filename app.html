@@ -333,6 +333,18 @@
        clipping content (e.g. the Save Settings button) when reused on the
        Settings page, whose panels can be taller than 60vh and have no inner
        scroll region of their own. */
+    /* Full width on purpose: these panels hold wide tables (users, roles, logs)
+       and a fixed max-width left half the window empty with no way to widen
+       them. The page's own padding is the only margin they need. */
+    /* A Home button a role may see but not use. Kept legible rather than
+       ghosted — it is information, not decoration — but plainly inert: no
+       hover, no pointer, no colour. */
+    .home-btn-off { background:#F1F5F9 !important; color:#94A3B8 !important;
+                    border-color:#E2E8F0 !important; box-shadow:none !important;
+                    cursor:not-allowed; opacity:.85; }
+    .home-btn-off:hover { transform:none !important; }
+    .home-btn-off .home-btn-icon { filter:grayscale(1); opacity:.55; }
+
     .settings-panel { background:#fff; border:1px solid var(--border); border-radius:9px; }
     .sd-panel-title { padding:9px 13px; font-size:12px; font-weight:700;
                       color:var(--blue-dark); background:var(--blue-light);
@@ -571,7 +583,23 @@ function allowedViews(){
   if(currentUserRole===PROTECTED_ROLE) views=[...new Set([...views, ...PROTECTED_VIEWS])];
   return views;
 }
-function canView(v){ return v==='home' || allowedViews().includes(v); }
+// Screens a role can SEE but not open. A hidden screen tells a user nothing; a
+// greyed-out one says "this exists, it isn't yours" — which is the honest answer
+// when a feature is being rolled out, or belongs to another team. Disabled
+// screens are never openable, so every access check treats them as closed.
+function disabledViews(){
+  const r = roleViewsMap[currentUserRole];
+  let list = (r && Array.isArray(r.disabledViews)) ? r.disabledViews : [];
+  // An administrator locked out of Settings or Admin could not undo it, so those
+  // two can never be disabled for the admin role however the document looks.
+  if(currentUserRole===PROTECTED_ROLE) list = list.filter(v=>!PROTECTED_VIEWS.includes(v));
+  return list;
+}
+function isViewDisabled(v){ return disabledViews().includes(v); }
+function canView(v){
+  if(v==='home') return true;
+  return allowedViews().includes(v) && !isViewDisabled(v);
+}
 // Every role key the app knows about.
 //
 // Before the seed has been written, the seed roles exist conceptually even
@@ -645,7 +673,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.35.1';
+const APP_VER   = '1.36.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -941,15 +969,25 @@ function renderHome(){
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px">${esc(currentUserEmail)}</div>
       <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:28px">${esc(currentUserRole||'—')}</div>
       <div class="home-btn-grid">
-        ${views.map(v=>{
-          const [icon,label]=HOME_BUTTONS[v]||['❓',v];
-          return `<button class="home-btn" data-view="${v}"><span class="home-btn-icon">${icon}</span><span>${label}</span></button>`;
-        }).join('')}
+        ${(()=>{
+          // Disabled buttons are pushed to the end so the working ones stay
+          // together at the front — a greyed tile in the middle of the grid
+          // breaks the scan for the button someone actually came to press.
+          const off=new Set(disabledViews());
+          const ordered=[...views.filter(v=>!off.has(v)), ...views.filter(v=>off.has(v))];
+          return ordered.map(v=>{
+            const [icon,label]=HOME_BUTTONS[v]||['❓',v];
+            const dis=off.has(v);
+            return `<button class="home-btn${dis?' home-btn-off':''}" data-view="${v}"${dis?' disabled aria-disabled="true" title="This screen is turned off for your role"':''}>`
+                 + `<span class="home-btn-icon">${icon}</span><span>${label}</span></button>`;
+          }).join('');
+        })()}
       </div>
       <button class="btn btn-ghost" id="btn-home-signout" style="margin-top:36px">Sign Out</button>
       <div style="margin-top:10px;font-size:10px;color:#94A3B8">v${APP_VER}</div>
     </div>`);
-  document.querySelectorAll('.home-btn').forEach(b=>b.addEventListener('click',()=>route(b.dataset.view)));
+  document.querySelectorAll('.home-btn:not(.home-btn-off)')
+    .forEach(b=>b.addEventListener('click',()=>route(b.dataset.view)));
   document.getElementById('btn-home-signout')?.addEventListener('click',
     () => logAudit('logout',null,true).finally(()=>signOut(auth).then(() => location.href = 'index.html')));
 }
@@ -3423,13 +3461,17 @@ async function _fetchWithRetry(url, opts, timeoutMs){
 // sourceType: 'drawing' (default — PDF text or page image) or 'excel'
 // (spreadsheet grid from extractExcelText, which needs its own prompt).
 async function aiExtractBOM(text, isImage, imgData, filename, sourceType='drawing'){
+  // ms is written on both paths so the Statistics screen can average how long a
+  // drawing takes to analyse — and so a run that failed after 60 seconds is
+  // distinguishable from one that failed immediately for want of a key.
+  const _t0=Date.now();
   try{
     if(!anthKey) throw new Error(_AI_NO_KEY);
     const rows=await _anthropicBOM(text, isImage, imgData, filename, sourceType);
-    logSystemAudit('drawing_bom_search',{filename,provider:'anthropic',mode:sourceType==='excel'?'excel':(isImage?'vision':'text'),rowsFound:rows.length},true);
+    logSystemAudit('drawing_bom_search',{filename,provider:'anthropic',mode:sourceType==='excel'?'excel':(isImage?'vision':'text'),rowsFound:rows.length,ms:Date.now()-_t0},true);
     return rows;
   }catch(e){
-    logSystemAudit('drawing_bom_search',{filename,error:e.message},false);
+    logSystemAudit('drawing_bom_search',{filename,error:e.message,ms:Date.now()-_t0},false);
     throw e;
   }
 }
@@ -3583,15 +3625,16 @@ async function _anthropicCableProcess(text, isImage, imgData, rowsList, hasDrawi
 }
 async function aiAnalyzeCableProcess(text, isImage, imgData, rowsList, hasDrawing=true){
   if(!rowsList || !anthKey) return null;
+  const _t0=Date.now();
   let proc;
   try { proc=await _anthropicCableProcess(text, isImage, imgData, rowsList, hasDrawing); }
   catch(e){
     console.warn('Cable-process analysis failed:', e.message);
-    logSystemAudit('drawing_price_calculation',{error:e.message},false);
+    logSystemAudit('drawing_price_calculation',{error:e.message,ms:Date.now()-_t0},false);
     throw e;
   }
   if(!proc) return null;
-  logSystemAudit('drawing_price_calculation',{provider:'anthropic',stepsFound:proc?.steps?.length||0},true);
+  logSystemAudit('drawing_price_calculation',{provider:'anthropic',stepsFound:proc?.steps?.length||0,ms:Date.now()-_t0},true);
   return proc;
 }
 
@@ -3977,6 +4020,7 @@ async function runFCCheckModal(items, mode){
   if(!items.length){toast('No parts to check','error');return;}
   let stopped=false;
   const total=items.length;
+  const _fcT0=Date.now();   // how long the whole run took — logged at the end
 
   const money=v=>v>0?('$'+(+v).toFixed(2)):'';
   // Unit prices need more places than line totals: a connector at $0.0032 and
@@ -4373,7 +4417,7 @@ async function runFCCheckModal(items, mode){
   // found nothing is distinguishable from one that never reached the vendors.
   logSystemAudit('price_check',{
     screen: mode==='parts'?'Database':'Sales Desk',
-    checked: done, found, failed: failures, stopped,
+    checked: done, found, failed: failures, stopped, ms: Date.now()-_fcT0,
     ...(failures?{error:lastError}:{})
   }, failures!==total || total===0);
 }
@@ -5946,11 +5990,16 @@ async function renderSalesDesk(){
               style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right">
           </div>
         </div>
+        ${g.units>1?`
         <div class="summary-total">
-          <span>FINAL PRICE${g.units>1?` <em style="font-style:normal;font-weight:400;font-size:11px;opacity:.85">— ${g.units} cables</em>`:''}</span>
-          <span>${$(g.final)}</span>
+          <span>PRICE PER CABLE</span>
+          <span>${$(g.final/g.units)}</span>
         </div>
-        ${g.units>1?`<div style="font-size:11px;color:var(--muted);text-align:right;margin-top:3px">${$(g.final/g.units)} per cable</div>`:''}
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;
+                    color:var(--muted);margin-top:4px;padding:0 2px">
+          <span>Order total — ${g.units} cables</span><span>${$(g.final)}</span>
+        </div>`:`
+        <div class="summary-total"><span>FINAL PRICE</span><span>${$(g.final)}</span></div>`}
         ${miss.length?`<div style="font-size:13px;color:#92400e;background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;padding:8px 10px;margin-top:8px;line-height:1.4;font-weight:600">
             ⚠ Final price does NOT include manufacturing tools.<br>
             ${miss.length} tool${miss.length>1?'s':''} not in Stock — estimated <strong>${$(g.toolsTotal)}</strong>: ${esc(miss.map(r=>r.part_number||r.description||'tool').join(', '))}
@@ -7000,8 +7049,9 @@ async function exportSalesDeskExcel(){
       secTitle(`QUOTATION SUMMARY — ${groups.length} DRAWINGS`,'FF334155');
       // Units sits right after Rows: the reader needs to know the price covers
       // 10 cables before reading the price.
-      const sh=['Drawing #','Rows','Units','Parts Total','Labor Cost','Subtotal','Profit %','FINAL PRICE'];
-      const MONEY_COLS=[3,4,5,7], PCT_COL=6;
+      const sh=['Drawing #','Rows','Units','Parts Total','Labor Cost','Subtotal','Profit %',
+                'PRICE / CABLE','Order Total'];
+      const MONEY_COLS=[3,4,5,7,8], PCT_COL=6;
       sh.forEach((h,k)=>{
         const c=ws.getCell(row,k+1);
         c.value=h; c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};
@@ -7011,7 +7061,8 @@ async function exportSalesDeskExcel(){
       row++;
       groups.forEach((g,k)=>{
         const vals=[g.dwg,g.rows.length,g.units,+g.partsTotal.toFixed(2),+g.laborCost.toFixed(2),
-                    +g.subtotal.toFixed(2),g.profitPct/100,+g.final.toFixed(2)];
+                    +g.subtotal.toFixed(2),g.profitPct/100,
+                    +(g.final/g.units).toFixed(2),+g.final.toFixed(2)];
         vals.forEach((v,ci)=>{
           const c=ws.getCell(row,ci+1);
           c.value=v; c.border=_xlBoxed; c.font={size:10};
@@ -7026,7 +7077,7 @@ async function exportSalesDeskExcel(){
       // Total cables across every drawing — the "how big is this order" number.
       const totalUnits=groups.reduce((a,g)=>a+g.units,0);
       const gv=['GRAND TOTAL',sdItems.length,totalUnits,+partsTotal.toFixed(2),+laborCost.toFixed(2),
-                +subtotal.toFixed(2),null,+final.toFixed(2)];
+                +subtotal.toFixed(2),null,null,+final.toFixed(2)];
       gv.forEach((v,ci)=>{
         const c=ws.getCell(row,ci+1);
         if(v!==null) c.value=v;
@@ -7138,9 +7189,18 @@ async function exportSalesDeskExcel(){
       money(`Labor  (${(+g.laborMinutes).toFixed(1)} min × $${g.rate}/min)`,+g.laborCost.toFixed(2));
       money('Subtotal',+g.subtotal.toFixed(2),{bold:true});
       money(`Profit (${g.profitPct}%)`,+(g.final-g.subtotal).toFixed(2));
-      money(`FINAL PRICE — ${g.dwg}${g.units>1?`   (${g.units} cables)`:''}`,+g.final.toFixed(2),
-            {bold:true,size:13,bg:_XL.final,fg:'FFFFFFFF',height:24});
-      if(g.units>1) money('Price per cable',+(g.final/g.units).toFixed(2),{size:9,fg:'FF64748B'});
+      // Per cable is the number the customer compares and the one the sales
+      // conversation is actually about, so it takes the highlighted band; the
+      // order total follows in the quieter style underneath. With a single
+      // cable the two are the same figure, so only one line is printed.
+      if(g.units>1){
+        money(`PRICE PER CABLE — ${g.dwg}`,+(g.final/g.units).toFixed(2),
+              {bold:true,size:13,bg:_XL.final,fg:'FFFFFFFF',height:24});
+        money(`Order total — ${g.units} cables`,+g.final.toFixed(2),{size:10,fg:'FF64748B'});
+      } else {
+        money(`FINAL PRICE — ${g.dwg}`,+g.final.toFixed(2),
+              {bold:true,size:13,bg:_XL.final,fg:'FFFFFFFF',height:24});
+      }
 
       if(g.missingToolRows.length){
         merge(row,1,LAST);
@@ -7447,7 +7507,7 @@ async function deleteCustomer(id,name){
 function renderAdminPage(){
   setActions('');
   setContent(`
-    <div class="settings-panel" style="padding:20px 22px;max-width:520px">
+    <div class="settings-panel" style="padding:20px 22px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🔑 AI API Keys</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Used for extracting BOMs from PDF/image drawings and for the Sales Desk process/notes analysis.</p>
       <div class="form-field">
@@ -7458,7 +7518,7 @@ function renderAdminPage(){
       <button class="btn btn-green" id="btn-adm-save-keys" style="margin-top:14px">💾 Save API Keys</button>
     </div>
 
-    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:520px">
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🔌 Distributor Price APIs</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Official Mouser and DigiKey APIs, used by CHECK PRICE to fill the Mouser Price and DigiKey Price columns. Set up either one on its own — you don't need both.</p>
       <div id="adm-dist-status" style="font-size:11px;color:var(--muted);margin-bottom:14px">Loading current status…</div>
@@ -7487,19 +7547,19 @@ function renderAdminPage(){
       <div id="adm-dist-test" style="margin-top:12px"></div>
     </div>
 
-    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">${_SUPPORT_ICON_SVG} Support Tickets</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Requests and problem reports submitted via the Support button. Reply and set a status — the user sees your reply the next time they open Support.</p>
       <div id="adm-tickets-body"></div>
     </div>
 
-    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">📜 System Logs</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Login/logout, screen opens, and key actions across every user — most recent 500 entries.</p>
       <div id="adm-logs-body"></div>
     </div>
 
-    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:900px">
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🤖 AI Prompts</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">The exact instructions sent to the AI for each kind of analysis. Read-only — shown so you can see what the AI is being asked to do.</p>
       <div id="adm-prompts-body"></div>
@@ -7833,7 +7893,7 @@ function _admLogsFilterRows(){
 function renderSettingsPage(){
   setActions('');
   setContent(`
-    <div class="settings-panel" style="padding:20px 22px;max-width:520px">
+    <div class="settings-panel" style="padding:20px 22px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Sales Desk</h3>
       <div class="form-field" style="margin-top:10px">
         <label>Labor Rate ($ / minute)</label>
@@ -7846,19 +7906,19 @@ function renderSettingsPage(){
       <p style="font-size:11px;color:var(--muted);margin-top:10px">AI API keys have moved to the 🛡️ Admin screen.</p>
     </div>
 
-    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:520px">
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Logo</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Shown on the Home screen and in the top bar.</p>
       <div id="stg-logo-body"></div>
     </div>
 
-    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Users</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Manage user accounts and roles.</p>
       <div id="stg-users-body"></div>
     </div>
 
-    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;max-width:760px">
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Roles</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Create new roles and control which Home-screen buttons each role can see.</p>
       <div id="stg-roles-body"></div>
@@ -8267,6 +8327,7 @@ async function renderSettingsRolesSection(){
     _id:k,
     name: saved[k]?.name || (k.charAt(0).toUpperCase()+k.slice(1)),
     views: Array.isArray(saved[k]?.views) ? saved[k].views : (SEED_ROLE_VIEWS[k]||[]),
+    disabledViews: Array.isArray(saved[k]?.disabledViews) ? saved[k].disabledViews : [],
   }));
   const viewKeys=Object.keys(HOME_BUTTONS);
   body.innerHTML=`
@@ -8281,10 +8342,19 @@ async function renderSettingsRolesSection(){
         <td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(r._id)}</td>
         ${viewKeys.map(v=>{
           const pin = locked && PROTECTED_VIEWS.includes(v);
-          return `<td style="text-align:center"><input type="checkbox" class="role-view-chk"
-            data-key="${esc(r._id)}" data-view="${v}"
-            ${(r.views||[]).includes(v)||pin?'checked':''} ${pin?'disabled':''}
-            ${pin?'title="Administrators must keep access to this screen — removing it would lock the system out of its own administration."':''}></td>`;
+          // Three states, not two: On (opens normally), Disabled (visible on the
+          // Home screen but greyed and inert), Off (not there at all).
+          const state = pin ? 'on'
+                      : (r.disabledViews||[]).includes(v) ? 'disabled'
+                      : (r.views||[]).includes(v) ? 'on' : 'off';
+          return `<td style="text-align:center"><select class="role-view-sel"
+            data-key="${esc(r._id)}" data-view="${v}" ${pin?'disabled':''}
+            ${pin?'title="Administrators must keep access to this screen — removing it would lock the system out of its own administration."':''}
+            style="padding:2px 4px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:#fff">
+            <option value="on" ${state==='on'?'selected':''}>On</option>
+            <option value="disabled" ${state==='disabled'?'selected':''}>Disabled</option>
+            <option value="off" ${state==='off'?'selected':''}>Off</option>
+          </select></td>`;
         }).join('')}
         <td style="text-align:right;white-space:nowrap">
           <button class="btn btn-green btn-sm role-save" data-key="${esc(r._id)}">💾 Save</button>
@@ -8300,18 +8370,26 @@ async function renderSettingsRolesSection(){
   body.querySelectorAll('.role-save').forEach(btn=>btn.addEventListener('click',async()=>{
     const key=btn.dataset.key;
     const name=(body.querySelector(`.role-name-inp[data-key="${key}"]`).value||'').trim()||key;
-    let views=[...body.querySelectorAll(`.role-view-chk[data-key="${key}"]:checked`)].map(c=>c.dataset.view);
-    // A disabled checkbox is still checked but is NOT submitted by a form read,
-    // and more importantly the protected screens must survive regardless of what
-    // the DOM says — this is the write path, so it is where the guarantee has to
-    // hold.
-    if(key===PROTECTED_ROLE) views=[...new Set([...views, ...PROTECTED_VIEWS])];
+    // "Disabled" screens are stored in BOTH lists: they are part of what the
+    // role can see (views) and separately marked inert (disabledViews), so any
+    // older client that doesn't know about disabling still renders a button
+    // rather than losing the screen entirely.
+    const sels=[...body.querySelectorAll(`.role-view-sel[data-key="${key}"]`)];
+    let views=sels.filter(s2=>s2.value!=='off').map(s2=>s2.dataset.view);
+    let disabledViews=sels.filter(s2=>s2.value==='disabled').map(s2=>s2.dataset.view);
+    // The protected screens must survive regardless of what the DOM says — this
+    // is the write path, so it is where the guarantee has to hold. A disabled
+    // select submits nothing, and an admin locked out of Admin could not undo it.
+    if(key===PROTECTED_ROLE){
+      views=[...new Set([...views, ...PROTECTED_VIEWS])];
+      disabledViews=disabledViews.filter(v=>!PROTECTED_VIEWS.includes(v));
+    }
     btn.disabled=true; btn.textContent='Saving…';
     try{
-      await setDoc(doc(db,'roles',key),{name,views,updatedAt:serverTimestamp()},{merge:true});
-      roleViewsMap[key]={name,views};
+      await setDoc(doc(db,'roles',key),{name,views,disabledViews,updatedAt:serverTimestamp()},{merge:true});
+      roleViewsMap[key]={name,views,disabledViews};
       toast(`Role "${name}" saved`,'success');
-      logAudit('role_saved',{role:key,name,views},true);
+      logAudit('role_saved',{role:key,name,views,disabledViews},true);
       // The current user may have just changed their own permissions.
       if(key===currentUserRole) renderHomeIfActive();
     }catch(e){ toast('Error: '+e.message,'error'); logAudit('role_saved',{role:key,error:e.message},false); }
