@@ -4,6 +4,9 @@ global.document={createElement:()=>({style:{},classList:{add(){},remove(){}},app
 global.window={addEventListener(){},location:{href:''}};
 global.localStorage={getItem:()=>null,setItem(){},removeItem(){}};
 global.navigator={};
+// _csLang and csCurrent are module state the extractor cannot lift (their
+// initialisers read localStorage), so the sheet helpers see them as globals.
+global._csLang='en'; global.csCurrent=null;
 const M=require('./extracted.js');
 
 let pass=0, fail=0; const failures=[];
@@ -1247,7 +1250,7 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('new screen: ...but it is not locked on', protectedViews.includes('statistics'), false);
   // Every Home button must be routable, or a role could be granted a screen
   // that opens nothing.
-  const routed=['rfq','sales-desk','part-stock','cut-strip','customers','statistics','settings','admin'];
+  const routed=['rfq','sales-desk','part-stock','cut-strip','manufacturing','customers','statistics','settings','admin'];
   t('new screen: every Home button has a screen behind it',
     Object.keys(buttons).filter(k=>!routed.includes(k)), []);
 }
@@ -1339,6 +1342,119 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   // The cap has to stay under Firestore's 1 MiB document limit with room for
   // the rest of the fields.
   ok('support: the attachment cap fits in a Firestore document', maxB64 < 1048576*0.95);
+}
+
+// ──────────────────────────── 32. the cutting form's own rows
+{
+  const rows=G('_csFormRows'), stripRows=G('_csStripRows'), summary=G('_csStripSummary'),
+        wire=G('_csWireEndSVG'), today=G('_csToday'), cut=G('_csCutLength');
+
+  const spec={
+    drawing_number:'CBL-1', revision:'2', customer:'Politex',
+    segments:[{id:'S1', from:'P1', to:'P2', cable_part_number:'STJ14X3-622-4',
+      cable_description:'14AWG x 3C', finished_length_mm:4000, conductor_strip_mm:45,
+      conductor_strip_confirmed:true,
+      ends:[{ref:'P1', strip:[{code:'A', label:'Jacket', value_mm:170, confirmed:true}]},
+            {ref:'P2', strip:[{code:'A', label:'Jacket', value_mm:170, confirmed:true},
+                              {code:'B', label:'Shield', value_mm:12, derived:true}]}]}],
+    connectors:[{ref:'P1', part_number:'TV06RW1135SF472A', contact_pn:'55A0111-22-0',
+                 termination:'crimp'},{ref:'P2', part_number:'OPEN'}],
+  };
+
+  const r=rows(spec);
+  t('form: one line per cable run', r.length, 1);
+  t('form: the part number is the cable, not the connector', r[0].pn, 'STJ14X3-622-4');
+  t('form: the length column is the CUT length, not the drawing length',
+    r[0].cut, cut(spec.segments[0], spec).total);
+  ok('form: ...which is not the finished length', r[0].cut!==4000);
+  t('form: the strip column reads jacket/conductor, as the paper form does', r[0].strip, '170/45');
+  t('form: a confirmed sheet is not flagged', r[0].tbc, false);
+  t('form: quantity defaults to one', r[0].qty, 1);
+
+  // The same dimension at both ends is one number on the form, not two.
+  t('form: a repeated jacket strip is stated once', summary(spec.segments[0], spec).text, '170/45');
+  // A derived value is a consequence of another cut, not an instruction.
+  t('form: derived values stay off the form',
+    summary(spec.segments[0], spec).text.includes('12'), false);
+
+  const unconf=JSON.parse(JSON.stringify(spec));
+  unconf.segments[0].ends[0].strip[0].confirmed=false;
+  t('form: an unverified dimension is flagged on its row', rows(unconf)[0].tbc, true);
+
+  const sr=stripRows(spec);
+  t('form: the strip detail lists every real cut plus the conductor', sr.length, 3);
+  t('form: ...the conductor strip carries code W', sr[sr.length-1].code, 'W');
+  t('form: a spec with no runs produces no rows', rows({}).length, 0);
+  t('form: ...and no strip detail either', stripRows({}).length, 0);
+  ok('form: the date is dd.mm.yyyy', /^\d{2}\.\d{2}\.\d{4}$/.test(today()));
+
+  // ── the wire-end figure ─────────────────────────────────────────────────
+  const svg=wire(spec.segments[0], spec.segments[0].ends[0], spec);
+  ok('wire figure: it is an SVG', /^<svg /.test(svg.trim()));
+  ok('wire figure: titled as the shop titles it', /WIRE END PREPARATION/.test(svg));
+  ok('wire figure: states the strip in mm', />45 mm/.test(svg) || /45 mm/.test(svg));
+  ok('wire figure: ...and in inches, because the contact datasheet is',
+     /1\.772 in/.test(svg));
+  ok('wire figure: names the wire and the contact',
+     /STJ14X3-622-4/.test(svg) && /55A0111-22-0/.test(svg));
+  ok('wire figure: a crimp contact is never tinned', /DO NOT TIN/.test(svg));
+  ok('wire figure: and the strands are never nicked', /NICK CONDUCTOR STRANDS/.test(svg));
+  t('wire figure: a confirmed dimension carries no asterisk', /\* /.test(svg), false);
+
+  const tbcSvg=wire(unconf.segments[0], unconf.segments[0].ends[0], unconf);
+  ok('wire figure: nothing to draw is nothing drawn',
+     wire({}, {}, {})==='' );
+  ok('wire figure: an unconfirmed conductor strip is still drawn', tbcSvg.length>0);
+
+  // No conductor strip at all: the figure falls back to the smallest real cut,
+  // which on a single-conductor wire IS the wire preparation.
+  const oneWire={segments:[{id:'S1', ends:[{ref:'P1', strip:[
+    {code:'A', label:'Insulation', value_mm:3.18, confirmed:true}]}]}], connectors:[]};
+  const f2=wire(oneWire.segments[0], oneWire.segments[0].ends[0], oneWire);
+  ok('wire figure: falls back to the strip when there is no conductor dimension', /3\.18 mm/.test(f2));
+  ok('wire figure: ...with the inch value the datasheet quotes', /0\.125 in/.test(f2));
+}
+
+// ──────────────────────────── 33. manufacturing instructions
+{
+  const fromSpec=G('_mfgFromSpec'), blank=G('_mfgBlank'), docId=G('_mfgDocId'),
+        isDoc=G('_mfgIsDoc'), PREFIX=G('MFG_PREFIX');
+
+  const spec={_id:'CBL-1', drawing_number:'CBL-1', drawing_name:'Power harness',
+    revision:'2', project:'Politex', standard:'IPC/WHMA-A-620',
+    materials:[{item:1, part_number:'P1', description:'Connector', qty:2, ref:'P1'}],
+    steps:[{n:1, title:'Cut', body:'Cut to length', critical:'Square the end'}],
+    inspection:['No nicked strands'],
+    tools:[{tool:'Crimper', setting:'4', note:'Calibrated'}],
+    segments:[{id:'S1'}]};
+
+  const d=fromSpec(spec);
+  t('mfg: it is an instruction document', d.kind, 'mfg');
+  t('mfg: the material list comes across', d.materials.length, 1);
+  t('mfg: the operation steps come across', d.steps.length, 1);
+  t('mfg: the inspection checks come across', d.inspection.length, 1);
+  t('mfg: the tooling comes across', d.tools.length, 1);
+  t('mfg: it remembers where it came from', d.source_spec, 'CBL-1');
+  t('mfg: the workmanship standard travels with it', d.standard, 'IPC/WHMA-A-620');
+  ok('mfg: it gets a document number of its own', /^MI-CBL-1/.test(d.doc_no));
+  t('mfg: cutting content does NOT come across — that is the other form',
+    d.segments===undefined && d.ends===undefined, true);
+
+  // A copy, not a reference: editing the instruction must not reach back.
+  d.materials[0].description='Changed';
+  t('mfg: editing the copy leaves the specification alone', spec.materials[0].description, 'Connector');
+
+  t('mfg: a blank document is empty but well formed',
+    [blank().kind, blank().materials.length, blank().steps.length], ['mfg',0,0]);
+
+  // Ids are prefixed so the two document kinds can never collide in the one
+  // collection they share.
+  ok('mfg: the id is prefixed', docId(d).startsWith(PREFIX));
+  t('mfg: ...and slugged from the document number', docId({doc_no:'MI-CBL 1/01'}), PREFIX+'MI-CBL-1-01');
+  t('mfg: a document with nothing to name it still gets an id', docId({}), PREFIX+'DOC');
+  t('mfg: a cut & strip spec is not an instruction', isDoc(spec), false);
+  t('mfg: an instruction is', isDoc(d), true);
+  t('mfg: and neither is nothing', isDoc(null), false);
 }
 
 // ─────────────────────────────────────────── report

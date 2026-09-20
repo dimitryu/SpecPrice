@@ -159,6 +159,26 @@
     .cs-banner { background:repeating-linear-gradient(135deg,#FDE68A,#FDE68A 14px,#FCD34D 14px,#FCD34D 28px);
                  color:#78350F; font-weight:800; font-size:12.5px; text-align:center;
                  padding:10px 34px; border-bottom:2px solid #B45309; }
+    /* ── The works' own form: a company block, a centred title, boxed
+          planning/execution/approval tables and a signature cell that is empty
+          on purpose — it is signed with a pen. ── */
+    .cs-form-head { display:flex; align-items:center; gap:22px; padding:20px 34px 16px;
+                    border-bottom:3px solid #1E293B; }
+    .cs-form-co { width:190px; flex-shrink:0; display:flex; align-items:center; }
+    .cs-form-co img { max-width:100%; max-height:62px; object-fit:contain; }
+    .cs-form-co-n { font-size:15px; font-weight:800; color:#1E293B; line-height:1.3; }
+    .cs-form-t { flex:1; text-align:center; }
+    .cs-form-t1 { font-size:23px; font-weight:800; letter-spacing:-.01em;
+                  text-decoration:underline; text-underline-offset:5px; }
+    .cs-form-t2 { font-size:14px; color:#334155; margin-top:5px; }
+    .cs-tbl.cs-form-tbl th { background:#fff; border:1px solid #0F172A; text-align:center !important; }
+    .cs-tbl.cs-form-tbl td { border:1px solid #0F172A; }
+    .cs-tbl.cs-form-tbl tr:nth-child(even) td { background:#fff; }
+    .cs-formula { font:11.5px/1.45 monospace; color:#7C2D12; margin-top:3px; }
+    .cs-notes-box { border:1px solid #0F172A; min-height:58px; padding:9px 11px;
+                    font-size:13px; white-space:pre-wrap; }
+    .cs-sig-cell { height:44px; }
+    .cs-role { font-size:10.5px; color:#64748B; text-transform:uppercase; letter-spacing:.4px; }
     .cs-tb { display:grid; grid-template-columns:1.5fr 1fr; border-bottom:3px solid #1E293B; }
     .cs-tb-l { padding:22px 34px 18px; }
     .cs-tb-r { padding:18px 26px; background:#F8FAFC; }
@@ -584,8 +604,8 @@ let currentUserRole = '';
 // cannot lose those two screens. Its name and everything else about it are
 // editable like any other role.
 const SEED_ROLE_VIEWS = {
-  admin:  ['rfq','sales-desk','part-stock','cut-strip','customers','statistics','settings','admin'],
-  agent:  ['rfq','sales-desk','part-stock','cut-strip','customers'],
+  admin:  ['rfq','sales-desk','part-stock','cut-strip','manufacturing','customers','statistics','settings','admin'],
+  agent:  ['rfq','sales-desk','part-stock','cut-strip','manufacturing','customers'],
   // 'viewer' gets cut-strip too: the whole point of a cut & strip sheet is that
   // the person on the bench can pull it up, and a shop-floor account is exactly
   // the kind of read-only user 'viewer' exists for.
@@ -601,7 +621,7 @@ const PROTECTED_VIEWS = ['settings','admin'];   // cannot be taken away from PRO
 // those screens automatically; every other role is granted them by hand, as
 // before. Unlike PROTECTED_VIEWS this is not a lock: an admin who doesn't want
 // the screen can still set it to Disabled in Settings > Roles.
-const ADMIN_AUTO_VIEWS = ['statistics'];
+const ADMIN_AUTO_VIEWS = ['statistics','manufacturing'];
 
 // Seeding has to tell "this role has never been created" apart from "an admin
 // deleted this role on purpose". Without that distinction you get one of two
@@ -732,7 +752,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.38.0';
+const APP_VER   = '1.39.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -967,7 +987,7 @@ function route(v){
   currentView=target;
   const btnHome=document.getElementById('btn-home');
   if(btnHome) btnHome.style.display = currentView==='home' ? 'none' : 'inline-flex';
-  const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','cut-strip':'✂️ Cut & Strip','customers':'👥 Customers','statistics':'📊 Statistics','settings':'⚙️ Settings','admin':'🛡️ Admin'};
+  const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','cut-strip':'✂️ Cut & Strip','customers':'👥 Customers','manufacturing':'🛠️ Manufacturing Instructions','statistics':'📊 Statistics','settings':'⚙️ Settings','admin':'🛡️ Admin'};
   document.getElementById('page-title').textContent=TITLES[currentView]||'';
   setActions('');
   if(currentView!=='home') logAudit('screen_open',{screen:currentView},true);
@@ -988,6 +1008,9 @@ function route(v){
   // open last — a stale sheet on screen is how the wrong revision gets cut.
   else if(currentView==='cut-strip'){ csCurrent=null; renderCutStrip(); }
   else if(currentView==='customers') renderCustomers();
+  // Always lands on the document list, never on whatever instruction happened
+  // to be open last — same reasoning as Cut & Strip above.
+  else if(currentView==='manufacturing'){ mfgCurrent=null; renderManufacturing(); }
   else if(currentView==='statistics') renderStatisticsPage();
   else if(currentView==='settings'){
     if(currentUserRole!=='admin'){ route('home'); return; }
@@ -1012,6 +1035,7 @@ const HOME_BUTTONS = {
   'part-stock':  ['📦','Database'],
   'cut-strip':   ['✂️','Cut &amp; Strip'],
   'customers':   ['👥','Customers'],
+  'manufacturing':['🛠️','Manufacturing'],
   'statistics':  ['📊','Statistics'],
   'settings':    ['⚙️','Settings'],
   'admin':       ['🛡️','Admin'],
@@ -9913,6 +9937,41 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    // The cutting form, in the words the works' own paper form uses.
+    "Wire & cable cutting and stripping form":"טופס חיתוך ופריסות חוטים וכבלים",
+    "Planning":"תכנון",
+    "Execution — cut & strip":"בצוע — חיתוך וחשיפה",
+    "Schematic — cut & strip":"תצוגה סכמטית — חיתוך וחשיפה",
+    "Customer":"שם הלקוח",
+    "Length [mm]":"אורך [מ״מ]",
+    "Strip [mm]":"חשיפה [מ״מ]",
+    "Operator":"שם המבצע",
+    "Approval":"אישור",
+    "Approved by":"אישור",
+    "Approved for production":"אישור ליצור",
+    "Prepared by":"ערך",
+    "Name":"שם",
+    "Signature":"חתימה",
+    "Notes":"הערות",
+    "Date":"תאריך",
+    "Qty":"כמות",
+    "Description":"תאור",
+    "Part number":"מק״ט",
+    "Revision":"מהדורה",
+    "Harness layout":"מבנה המערכת",
+    "Connectors":"מחברים",
+    "Strip detail":"פירוט חשיפה",
+    "Value":"ערך",
+    "cut":"חיתוך",
+    "To Manufacturing":"להוראות יצור",
+    "Copy the material list, operation steps, inspection checks and tooling into a manufacturing instruction":"להעתיק את רשימת החומרים, שלבי העבודה, הבדיקות והכלים למסמך הוראות יצור",
+    "Length is the length to CUT — it already includes the connector allowances and the trim. Strip is jacket / conductor.":"האורך הוא האורך לחיתוך — הוא כבר כולל את תוספות המחברים ואת הקיצוץ. החשיפה היא מעטפת / מוליך.",
+    // The wire-end figure. Kept short — it is drawn inside the picture.
+    "WIRE END PREPARATION":"הכנת קצה חוט",
+    "STRIP INSULATION ONLY — DO NOT CUT OR NICK CONDUCTOR STRANDS":"חשיפת בידוד בלבד — אין לחתוך או לפגוע בגידי המוליך",
+    "CRIMP TERMINATION — DO NOT TIN":"חיבור בקרימפ — אין לבדל את הגידים",
+    "SOLDER TERMINATION":"חיבור בהלחמה",
+    "DO NOT TIN STRANDS BEFORE TERMINATION":"אין לבדל את הגידים לפני החיבור",
     "Search saved specifications…":"חיפוש במפרטים שמורים…",
     "No saved specification matches that search.":"אין מפרט שמור שתואם לחיפוש.",
     "Sort by this column":"מיון לפי עמודה זו",
@@ -11545,7 +11604,9 @@ async function loadCutStripSpecs(force){
   const snap=await getDocs(query(collection(db,'companies',companyId,'cut_strip_specs'),orderBy('updatedAt','desc')));
   // Migrated on read so a spec saved under the old single-cable shape renders
   // through exactly the same code path as one made today.
-  csSpecs=snap.docs.map(d=>_csNormalize({_id:d.id, ...d.data()}));
+  // Manufacturing instructions share this collection (see the Manufacturing
+  // Instructions screen for why) and are not cut & strip specifications.
+  csSpecs=snap.docs.filter(d=>!_mfgIsDoc(d.data())).map(d=>_csNormalize({_id:d.id, ...d.data()}));
   return csSpecs;
 }
 
@@ -11851,6 +11912,139 @@ async function handleCSFile(file){
   }
 }
 
+// ── The form's own rows ───────────────────────────────────────────────────────
+// The shop's paper form has one line per thing you cut, with the strip written
+// beside it as "jacket/conductor" — 170/45 means strip 170 of jacket and bare
+// 45 of each conductor. These two helpers produce exactly those lines from the
+// same fields the diagrams read, so the form and the figures cannot disagree.
+function _csToday(){
+  const d=new Date(), p=n=>String(n).padStart(2,'0');
+  return `${p(d.getDate())}.${p(d.getMonth()+1)}.${d.getFullYear()}`;
+}
+function _csStripRows(spec){
+  const out=[];
+  _csSegments(spec).forEach(seg=>{
+    (_csSegEnds(seg, spec)||[]).forEach(e=>{
+      (e.strip||[]).filter(x=>!x.derived && _csNum(x.value_mm)!=null).forEach(x=>
+        out.push({seg:seg.id, ref:e.ref, code:x.code, label:x.label, mm:x.value_mm, ok:x.confirmed!==false}));
+    });
+    if(_csNum(seg.conductor_strip_mm)!=null)
+      out.push({seg:seg.id, ref:_csT('each conductor'), code:'W', label:_csT('Insulation removed from each individual conductor for its contact'),
+                mm:seg.conductor_strip_mm, ok:seg.conductor_strip_confirmed!==false});
+  });
+  return out;
+}
+// The strip column: the jacket dimensions of the run, then the conductor strip,
+// in the order the operator works them — "170/45", never a number on its own
+// with no way to tell which cut it belongs to.
+function _csStripSummary(seg, spec){
+  const vals=[], tbc=[];
+  (_csSegEnds(seg, spec)||[]).forEach(e=>{
+    (e.strip||[]).filter(x=>!x.derived && _csNum(x.value_mm)!=null).forEach(x=>{
+      const v=_csNum(x.value_mm);
+      if(!vals.includes(v)){ vals.push(v); tbc.push(x.confirmed===false); }
+    });
+  });
+  const cs=_csNum(seg.conductor_strip_mm);
+  if(cs!=null){ vals.push(cs); tbc.push(seg.conductor_strip_confirmed===false); }
+  return {text: vals.length?vals.join('/'):'', tbc: tbc.some(Boolean)};
+}
+function _csFormRows(spec){
+  return _csSegments(spec).map(seg=>{
+    const cut=_csCutLength(seg, spec);
+    const st=_csStripSummary(seg, spec);
+    return {
+      id: seg.id||'',
+      pn: seg.cable_part_number||'',
+      desc: seg.cable_description || _csSegLabel(seg) || '',
+      cut: _csNum(cut.total),
+      formula: cut.hasBreakdown ? _csCutFormula(seg, spec) : '',
+      strip: st.text,
+      tbc: st.tbc,
+      qty: _csNum(seg.qty)!=null ? _csNum(seg.qty) : 1,
+    };
+  });
+}
+
+// ── Wire end preparation figure ───────────────────────────────────────────────
+// Drawn the way the shop's own wire-prep sheets are drawn: the insulation as a
+// solid body, the bared strands fanning out of it, and one dimension under the
+// bared length in millimetres with the inch value beside it, because the
+// contact datasheets these numbers come from are written in inches.
+//
+// This is deliberately NOT the cable figure above it. That one shows the
+// jacket, the shield and where each cut lands on a multi-layer cable; this one
+// shows a single conductor at the scale the operator works at, and carries the
+// two instructions that ruin a crimp when ignored — do not nick the strands,
+// do not tin a crimped contact.
+const _CS_WIRE_STRANDS=7;
+function _csWireEndSVG(seg, end, spec){
+  const T=_csT;
+  let mm=_csNum(seg?.conductor_strip_mm), confirmed=seg?.conductor_strip_confirmed!==false;
+  if(mm==null){
+    // No conductor strip on this spec — fall back to the smallest real cut at
+    // this end, which on a single-conductor wire IS the wire prep.
+    const cuts=(end?.strip||[]).filter(s=>!s.derived && _csNum(s.value_mm)>0)
+                               .sort((a,b)=>_csNum(a.value_mm)-_csNum(b.value_mm));
+    if(!cuts.length) return '';
+    mm=_csNum(cuts[0].value_mm); confirmed=cuts[0].confirmed!==false;
+  }
+  if(mm==null || mm<=0) return '';
+
+  const conn=(_csConnectors(spec)||[]).find(c=>String(c.ref||'').toUpperCase()===String(end?.ref||'').toUpperCase());
+  const sub=[seg?.cable_part_number, conn&&conn.part_number, conn&&conn.contact_pn]
+    .map(s=>String(s||'').trim()).filter(Boolean).join('   |   ');
+  const term=String(conn&&conn.termination||'').toLowerCase();
+  const termLine = /solder/.test(term) ? T('SOLDER TERMINATION')
+                 : /crimp/.test(term)  ? T('CRIMP TERMINATION — DO NOT TIN')
+                 : T('DO NOT TIN STRANDS BEFORE TERMINATION');
+
+  const inch=(mm/25.4);
+  const X_STRIP_L=120, X_STRIP_R=330, X_TIP=980;
+  const CY=150, JH=62, SPREAD=9;
+  const col=confirmed?'#0F172A':'#DC2626';
+
+  let strands='';
+  for(let i=0;i<_CS_WIRE_STRANDS;i++){
+    const off=(i-(_CS_WIRE_STRANDS-1)/2)*SPREAD;
+    // Two shallow crossings make it read as a stranded conductor rather than a
+    // comb of parallel wires; a solid-core wire is drawn as one line.
+    const y0=CY+off*0.72, y1=CY-off*0.5, y2=CY+off*0.62, y3=CY+off*0.28;
+    strands+=`<path d="M${X_STRIP_L},${y0.toFixed(1)} C${X_STRIP_L+70},${y1.toFixed(1)} ${X_STRIP_R-90},${y2.toFixed(1)} ${X_STRIP_R},${y3.toFixed(1)}"
+      fill="none" stroke="#C2703A" stroke-width="2.1" stroke-linecap="round"/>`;
+  }
+
+  return `<svg viewBox="0 0 1100 372" xmlns="http://www.w3.org/2000/svg" font-family="Heebo, Public Sans, Arial, sans-serif" direction="ltr">
+    <defs>
+      <marker id="csWAr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="${col}"/></marker>
+      <marker id="csWArL" markerWidth="9" markerHeight="9" refX="1" refY="4.5" orient="auto"><path d="M9,0 L0,4.5 L9,9 z" fill="${col}"/></marker>
+    </defs>
+    <rect x="6" y="6" width="1088" height="360" fill="#fff" stroke="#0F172A" stroke-width="1.6"/>
+    <text x="24" y="28" font-size="12" fill="#94A3B8">${_csSvgTxt(`${seg?.id||''} · ${end?.ref||''}`)}</text>
+    <text x="550" y="56" text-anchor="middle" font-size="27" font-weight="800" fill="#0F172A" letter-spacing="1">${
+      _csSvgTxt(T('WIRE END PREPARATION'))}</text>
+    ${sub?`<text x="550" y="86" text-anchor="middle" font-size="15" fill="#334155">${_csSvgTxt(sub)}</text>`:''}
+
+    ${strands}
+    <rect x="${X_STRIP_R}" y="${CY-JH/2}" width="${X_TIP-X_STRIP_R}" height="${JH}" rx="${JH/2}" fill="#1A1A22"/>
+    <rect x="${X_STRIP_R}" y="${CY-JH/2}" width="34" height="${JH}" fill="#1A1A22"/>
+    <line x1="${X_STRIP_R+30}" y1="${CY-10}" x2="${X_TIP-22}" y2="${CY-10}" stroke="#6B7280" stroke-width="2.4"/>
+
+    <line x1="${X_STRIP_L}" y1="${CY+JH/2+12}" x2="${X_STRIP_L}" y2="${CY+JH/2+96}" stroke="${col}" stroke-width="1.4"/>
+    <line x1="${X_STRIP_R}" y1="${CY+JH/2+12}" x2="${X_STRIP_R}" y2="${CY+JH/2+96}" stroke="${col}" stroke-width="1.4"/>
+    <line x1="${X_STRIP_L}" y1="${CY+JH/2+78}" x2="${X_STRIP_R}" y2="${CY+JH/2+78}" stroke="${col}" stroke-width="1.7"
+      marker-start="url(#csWArL)" marker-end="url(#csWAr)"/>
+    <text x="${X_STRIP_L}" y="${CY+JH/2+62}" font-size="20" font-weight="800" fill="${col}">${
+      mm} mm&#160;&#160;(${inch.toFixed(3)} in)${confirmed?'':' *'}</text>
+
+    <text x="550" y="316" text-anchor="middle" font-size="16" font-weight="800" fill="#0F172A">${
+      _csSvgTxt(T('STRIP INSULATION ONLY — DO NOT CUT OR NICK CONDUCTOR STRANDS'))}</text>
+    <text x="550" y="340" text-anchor="middle" font-size="14" fill="#475569">${_csSvgTxt(termLine)}</text>
+    ${confirmed?'':`<text x="550" y="360" text-anchor="middle" font-size="12.5" font-weight="700" fill="#DC2626">* ${
+      _csSvgTxt(T('TO BE CONFIRMED'))}</text>`}
+  </svg>`;
+}
+
 // ── Rendering: the sheet ──────────────────────────────────────────────────────
 function _csTBC(){ return `<span class="cs-tag cs-tbc">${esc(_csT('TO BE CONFIRMED'))}</span>`; }
 function _csDim(value, confirmed){
@@ -12021,6 +12215,7 @@ function renderCutStripSheet(){
       ${['en','he','ru'].map(L=>`<button class="btn btn-sm ${_csLang===L?'btn-blue':'btn-ghost'}"
           data-cs-lang="${L}" ${_csLang===L?'disabled':''}>${_CS_LANG_NAMES[L]}</button>`).join('')}
     </span>
+    <button class="btn btn-sm btn-ghost" id="btn-cs-mfg" title="${esc(T('Copy the material list, operation steps, inspection checks and tooling into a manufacturing instruction'))}">🛠️ ${esc(T('To Manufacturing'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-edit">✎ ${esc(T('Edit'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-print">🖨 ${esc(T('Print'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-pdf">📄 ${esc(T('Export PDF'))}</button>
@@ -12029,6 +12224,16 @@ function renderCutStripSheet(){
   const layers=spec.cable?.layers||[];
   const ends=spec.ends||[];
 
+  // ── The sheet, laid out as the shop's own form ──────────────────────────
+  // This screen used to print everything the analysis produced — material
+  // lists, operation steps, inspection checks, tooling, wiring tables — and the
+  // person at the bench had to find two numbers in eleven pages. It is now the
+  // works' "Wire & cable cutting and stripping form" and nothing else: who
+  // planned it, what to cut, what to strip, the figures, and a signature block.
+  //
+  // Everything that left this sheet is manufacturing instruction, not cutting
+  // instruction, and lives on the Manufacturing Instructions screen — one click
+  // away, through "Send to Manufacturing Instructions".
   setContent(`<div id="cs-sheet" class="cs-sheet" dir="${rtl?'rtl':'ltr'}">
 
     <div class="cs-banner">${esc(T('Generated by AI from the drawing — verify against the drawing before use.'))}</div>
@@ -12041,118 +12246,119 @@ function renderCutStripSheet(){
         : 'You are editing a translation. The original is left unchanged and your wording is saved for this specification.'))}</span>
     </div>` : ''}
 
-    <div class="cs-tb">
-      <div class="cs-tb-l">
-        <div class="cs-doc-t">${esc(T('Cut & Strip Specification'))}</div>
-        <div class="cs-doc-s cs-ltr" style="font-size:15px">${esc(spec.drawing_name||spec.title||'')}</div>
-        ${spec.project?`<div class="cs-doc-s" style="font-size:13px;opacity:.75">${esc(T('Project'))}: <span class="cs-ltr">${esc(spec.project)}</span></div>`:''}
+    <div class="cs-form-head">
+      <div class="cs-form-co">${companyLogoB64
+        ? `<img src="${companyLogoB64}" alt="">`
+        : `<div class="cs-form-co-n">${esc(companyName||'')}</div>`}</div>
+      <div class="cs-form-t">
+        <div class="cs-form-t1">${esc(T('Wire & cable cutting and stripping form'))}</div>
+        <div class="cs-form-t2 cs-ltr">${esc(spec.drawing_name||spec.title||'')}</div>
       </div>
-      <div class="cs-tb-r"><dl class="cs-kv">
-        <dt>${esc(T('Drawing'))}</dt><dd class="cs-ltr">${esc(spec.drawing_number||'')}</dd>
-        <dt>${esc(T('Drawing name'))}</dt><dd class="cs-ltr">${esc(spec.drawing_name||'—')}</dd>
-        <dt>${esc(T('Project'))}</dt><dd class="cs-ltr">${esc(spec.project||'—')}</dd>
-        <dt>${esc(T('Revision'))}</dt><dd class="cs-ltr">${esc(spec.revision||'—')}</dd>
-        <dt>${esc(T('Spec no.'))}</dt><dd class="cs-ltr">${esc(spec.spec_no||'')}</dd>
-        <dt>${esc(T('Workmanship'))}</dt><dd class="cs-ltr">${esc(spec.standard||'—')}</dd>
-</dl></div>
     </div>
 
-    ${(tbc || (spec.open_items||[]).length) ? `
-    <h2 class="cs-h2"><span class="cs-n">00</span>${esc(T('Before you start — open items'))}</h2>
-    <div class="cs-pad"><div class="cs-box cs-stop">
-      <b>${esc(T('Do not cut production material'))}</b>
+    ${_csTBCCount(spec) ? `<div class="cs-pad"><div class="cs-box cs-stop">
+      <b>${esc(T('Do not cut production material'))} — ${_csTBCCount(spec)} ${esc(T('unverified dimension(s)'))}</b>
       <p>${esc(T('The dimensions below marked TBC were derived, not read from a manufacturer datasheet. Prove them on sample pieces and get engineering sign-off before the first production lot.'))}</p>
       ${(spec.open_items||[]).length?`<ul>${spec.open_items.map((o,i)=>
         `<li>${_csDelBtn('del-open',i)}<b>${_csFText(`open_items.${i}.what`, o.what)}</b> — ${_csFText(`open_items.${i}.why`, o.why, true)}${(o.action||_csEditing)?` <i>→ ${_csFText(`open_items.${i}.action`, o.action)}</i>`:''}</li>`).join('')}</ul>`:''}
     </div></div>` : ''}
 
-    ${(spec.discrepancies||[]).length ? `
-    <div class="cs-pad"><div class="cs-box cs-warn">
-      <b>${esc(T('Discrepancies found in the source drawing'))}</b>
-      <ul>${spec.discrepancies.map((d,i)=>`<li>${_csDelBtn('del-disc',i)}<b>${_csFText(`discrepancies.${i}.what`, d.what)}</b> — ${_csFText(`discrepancies.${i}.detail`, d.detail, true)}</li>`).join('')}</ul>
-    </div></div>` : ''}
+    <h2 class="cs-h2"><span class="cs-n">1</span>${esc(T('Planning'))}</h2>
+    <div class="cs-pad"><table class="cs-tbl cs-form-tbl">
+      <thead><tr>
+        <th style="width:15%">${esc(T('Date'))}</th>
+        <th style="width:27%">${esc(T('Customer'))}</th>
+        <th style="width:13%">${esc(T('Revision'))}</th>
+        <th style="width:25%">${esc(T('Part number'))}</th>
+        <th style="width:20%">${esc(T('Approved by'))}</th>
+      </tr></thead>
+      <!-- Approved by is typed in the approval block at the foot of the form and
+           only shown here. Two inputs writing the same field would mean whichever
+           the collector reached last silently won. -->
+      <tbody><tr>
+        <td class="cs-ctr cs-ltr">${_csFRaw('form_date', spec.form_date || _csToday())}</td>
+        <td class="cs-ctr">${_csFRaw('customer', spec.customer || spec.project || '')}</td>
+        <td class="cs-ctr cs-ltr">${_csFRaw('revision', spec.revision)}</td>
+        <td class="cs-ctr cs-ltr"><b>${_csFRaw('drawing_number', spec.drawing_number)}</b></td>
+        <td class="cs-ctr">${esc(spec.approved_by||'')}</td>
+      </tr></tbody></table>
+      <p class="cs-note cs-ltr">${esc(T('Spec no.'))}: ${esc(spec.spec_no||'—')}
+        ${spec.source_file?` · ${esc(T('Drawing'))}: ${esc(spec.source_file)}`:''}
+        ${spec.standard?` · ${esc(T('Workmanship'))}: ${esc(spec.standard)}`:''}</p>
+    </div>
 
-    ${(spec.materials||[]).length ? `
-    ${(()=>{
-      // One page an operator can work from without reading the rest. Everything
-      // here is repeated in full further down — this is a summary, never the
-      // only place a number appears, so nothing is lost by skipping it.
-      const ov=_csOverall(spec), calls=_csCallouts(spec);
-      const labels=(spec.markers||[]).filter(m=>m.label);
-      const strips=[];
-      _csSegments(spec).forEach(seg=>(seg.ends||[]).forEach(e=>{
-        (e.strip||[]).filter(x=>!x.derived && _csNum(x.value_mm)!=null).forEach(x=>
-          strips.push({seg:seg.id, ref:e.ref, code:x.code, mm:x.value_mm, ok:x.confirmed===true}));
-      }));
-      return `
-    <h2 class="cs-h2"><span class="cs-n">00</span>${esc(T('Work sheet — read this first'))}</h2>
+    <h2 class="cs-h2"><span class="cs-n">2</span>${esc(T('Harness layout'))}</h2>
     <div class="cs-pad">
-      <div class="cs-box cs-info" style="border-color:#0F172A;background:#F8FAFC;color:#0F172A">
-        <b>${esc(T('Everything below is repeated in full later in this document. This page is the short version.'))}</b>
+      <div class="cs-box cs-info" style="border-color:#2563EB;background:#EFF6FF;color:#1E3A8A">
+        <b>${esc(T('This harness has'))} ${_csSegments(spec).length} ${esc(T('cable run(s)'))} ${esc(T('and'))} ${_csConnectors(spec).length} ${esc(T('connector(s)'))}${
+          _csBreakouts(spec).length?` + ${_csBreakouts(spec).length} ${esc(T('Breakout'))}`:''}.</b>
+        <p>${_csSegments(spec).map(s=>`<span class="cs-ltr">${esc(s.id)}: ${esc(_csSegLabel(s))}</span>`).join(' &nbsp;·&nbsp; ')}</p>
       </div>
-
-      <h3 class="cs-h3">1 · ${esc(T('Cut'))}</h3>
-      <table class="cs-tbl"><thead><tr><th style="width:26%">${esc(T('Cable run'))}</th>
-        <th style="width:18%">${esc(T('Cut length'))}</th><th style="width:56%">${esc(T('How it adds up'))}</th></tr></thead>
-        <tbody>${calls.map(c=>`<tr><td class="cs-ltr">${esc(c.seg.id||'')} · ${esc(c.label)}</td>
-          <td class="cs-ctr cs-ltr cs-nowrap"><b style="font-size:15px;color:#7C2D12">${esc(_csMM(c.cut.total))}</b></td>
-          <td class="cs-ltr" style="font:12px/1.4 monospace">${esc(_csCutFormula(c.seg, spec))}</td></tr>`).join('')}
-        </tbody></table>
-      ${ov.cut!=null&&ov.added ? `<p style="font-size:12.5px;color:#7C2D12"><b>${
-        esc(T('Longest piece to cut'))}: <span class="cs-ltr">${esc(_csMM(ov.cut))}</span></b>
-        <span style="color:#64748B">(${esc(T('the drawing’s'))} <span class="cs-ltr">${esc(_csMM(ov.value))}</span> ${
-        esc(T('is a finished length — it does not include the connector allowances'))})</span></p>` : ''}
-
-      ${strips.length ? `<h3 class="cs-h3">2 · ${esc(T('Strip'))}</h3>
-      <table class="cs-tbl"><thead><tr><th style="width:47%">${esc(T('End'))}</th>
-        <th style="width:21%">${esc(T('Code'))}</th><th style="width:32%">${esc(T('Value'))}</th></tr></thead>
-        <tbody>${strips.map(x=>`<tr><td class="cs-ltr">${esc(x.seg)} · ${esc(x.ref)}</td>
-          <td class="cs-ctr cs-ltr"><b>${esc(x.code)}</b></td>
-          <td class="cs-ctr cs-ltr"><b>${esc(_csMM(x.mm))}</b>${x.ok?'':` <span class="cs-tag cs-tbc">${esc(T('TBC'))}</span>`}</td></tr>`).join('')}
-        </tbody></table>` : ''}
-
-      ${labels.length ? `<h3 class="cs-h3">3 · ${esc(T('Label table'))}</h3>
-      <table class="cs-tbl"><thead><tr><th style="width:9%">${esc(T('Label'))}</th>
-        <th style="width:21%">${esc(T('Part number'))}</th>
-        <th style="width:25%">${esc(T('Text'))}</th><th style="width:45%">${esc(T('Where it goes'))}</th></tr></thead>
-        <tbody>${labels.map((m,i)=>{ const gi=(spec.markers||[]).indexOf(m); return `<tr>
-          <td class="cs-ctr cs-ltr"><b>${esc(m.label)}</b></td>
-          <td>${_csFRaw(`markers.${gi}.part_number`, m.part_number)}</td>
-          <td class="cs-ltr" style="font-size:12.5px">${esc((m.text_lines||[]).join(' / '))}</td>
-          <td>${_csEditing
-            ? `${_csFNum(`markers.${gi}.distance_mm`, m.distance_mm, ' mm')} ${_csFRaw(`markers.${gi}.from_end`, m.from_end)}
-               ${_csFChk(`markers.${gi}.confirmed`, m.confirmed===true, T('Confirmed'))}
-               ${_csFText(`markers.${gi}.position`, m.position)}`
-            : (_csNum(m.distance_mm)!=null
-              ? `${_csDim(m.distance_mm, m.confirmed)} <span class="cs-ltr" style="font-size:11px">${esc(T('from'))} ${esc(m.from_end||'')}</span>`
-              : `<span style="color:#B45309;font-weight:700">${esc(_csP(m.position||''))}</span>`)}</td></tr>`;}).join('')}
-        </tbody></table>` : ''}
-
-
-      ${_csNumberConflicts(spec).length ? `<div class="cs-box cs-stop" style="margin-top:10px">
-        <b>${esc(T('A dimension in the written instructions is not one of this sheet’s numbers'))}</b>
-        <ul>${_csNumberConflicts(spec).map(c=>`<li><span class="cs-ltr"><b>${c.value} mm</b></span>
-          — ${esc(c.where)}: <span style="font-size:12px">${esc(_csP(c.text))}</span></li>`).join('')}</ul>
-        <p>${esc(T('The tables and the figures are computed from the same fields, so they always agree. Text is written separately and can drift. Correct the text, or add the missing dimension where it belongs.'))}</p>
+      ${_csAssignedRefs(spec).length ? `
+      <div class="cs-box cs-warn">
+        <b>${esc(T('These names are not printed on the drawing'))}</b>
+        <p>${esc(T('The drawing gives no designator for them, so this sheet assigned one. Match them by position, not by looking for the label.'))}</p>
+        <ul>${_csAssignedRefs(spec).map(a=>`<li><span class="cs-ltr"><b>${esc(a.ref)}</b></span>${
+          a.desc?` — ${esc(_csP(a.desc))}`:''}${a.seen?` <span style="color:#64748B">(${esc(T('seen on the drawing as'))}: ${esc(a.seen)})</span>`:''}</li>`).join('')}</ul>
       </div>` : ''}
-      ${_csTBCCount(spec) ? `<div class="cs-box cs-stop" style="margin-top:10px">
-        <b>${esc(T('This sheet still has'))} ${_csTBCCount(spec)} ${esc(T('unverified dimension(s)'))}.</b>
-        <p>${esc(T('Do not cut production material until they are confirmed.'))}</p></div>` : ''}
-    </div>`;})()}
+      ${(()=>{ const ov=_csOverall(spec); if(ov.value==null) return '';
+        return `<div class="cs-box cs-info" style="border-color:#0F172A;background:#F8FAFC;color:#0F172A">
+          <b>${esc(T('Overall length of the whole harness'))}: <span class="cs-ltr">${esc(_csMM(ov.value))}</span></b>
+          ${ov.span?`<span class="cs-ltr" style="font-size:12px;color:#64748B"> (${esc(ov.span)})</span>`:''}
+          ${ov.mismatch?`<p style="color:#B45309;font-weight:700">${esc(T('The drawing states'))}
+            <span class="cs-ltr">${ov.mismatch.stated} mm</span>, ${esc(T('but the longest route through this harness is'))}
+            <span class="cs-ltr">${ov.mismatch.longest} mm</span> — ${esc(T('confirm before cutting.'))}</p>`:''}
+        </div>`; })()}
+      ${spec.source_image ? _csSourceFigure(spec) : `<figure class="cs-fig">${_csHarnessSVG(spec)}</figure>`}
+      ${_csRouteMismatches(spec).length ? `
+      <div class="cs-box cs-stop" style="margin-top:12px">
+        <b>${esc(T('A dimension on the drawing does not match the runs below'))}</b>
+        <ul>${_csRouteMismatches(spec).map(m=>`<li><span class="cs-ltr"><b>${esc(m.from)} → ${esc(m.to)}</b>:
+          ${esc(T('drawing says'))} <b>${m.drawn} mm</b>, ${esc(T('the runs add up to'))} <b>${m.got} mm</b></span>
+          ${m.what?` — ${esc(T(m.what))}`:''}</li>`).join('')}</ul>
+        <p>${esc(T('The drawing is the authority. Fix the run lengths before cutting — a run split at the wrong point cuts wire short, and short wire is scrap.'))}</p>
+      </div>` : ''}
+    </div>
 
-    <h2 class="cs-h2"><span class="cs-n">01</span>${esc(T('Material list'))}</h2>
-    <div class="cs-pad"><table class="cs-tbl">
-      <thead><tr><th style="width:5%">#</th><th style="width:22%">${esc(T('Part number'))}</th>
-        <th style="width:13%">${esc(T('Manufacturer'))}</th><th style="width:41%">${esc(T('Description'))}</th>
-        <th style="width:11%">${esc(T('Qty'))}</th><th style="width:8%">${esc(T('Ref'))}</th></tr></thead>
-      <tbody>${spec.materials.map(m=>`<tr>
-        <td>${esc(m.item??'')}</td><td class="cs-ltr">${esc(m.part_number||'')}</td>
-        <td class="cs-ltr">${esc(m.manufacturer||'')}</td><td>${_csP(m.description||'')}</td>
-        <td class="cs-ctr cs-ltr">${esc(m.qty??'')}</td><td class="cs-ctr cs-ltr">${esc(m.ref||'')}</td></tr>`).join('')}
-      </tbody></table></div>` : ''}
+    <h2 class="cs-h2"><span class="cs-n">3</span>${esc(T('Execution — cut & strip'))}</h2>
+    <div class="cs-pad">
+      <table class="cs-tbl cs-form-tbl">
+        <thead><tr>
+          <th style="width:16%">${esc(T('Part number'))}</th>
+          <th style="width:28%">${esc(T('Description'))}</th>
+          <th style="width:12%">${esc(T('Length [mm]'))}</th>
+          <th style="width:14%">${esc(T('Strip [mm]'))}</th>
+          <th style="width:8%">${esc(T('Qty'))}</th>
+          <th style="width:11%">${esc(T('Date'))}</th>
+          <th style="width:11%">${esc(T('Operator'))}</th>
+        </tr></thead>
+        <tbody>${_csFormRows(spec).map(r=>`<tr>
+          <td class="cs-ltr">${esc(r.pn||'')}</td>
+          <td><span class="cs-ltr">${esc(r.id)}</span> — ${esc(_csP(r.desc||''))}
+            ${r.formula?`<div class="cs-formula cs-ltr">${esc(r.formula)}</div>`:''}</td>
+          <td class="cs-ctr cs-ltr"><b style="font-size:15px;color:#7C2D12">${esc(r.cut==null?'—':String(r.cut))}</b></td>
+          <td class="cs-ctr cs-ltr"><b>${esc(r.strip||'—')}</b>${r.tbc?` <span class="cs-tag cs-tbc">${esc(T('TBC'))}</span>`:''}</td>
+          <td class="cs-ctr cs-ltr">${esc(String(r.qty??1))}</td>
+          <td></td><td></td>
+        </tr>`).join('')}</tbody>
+      </table>
+      <p class="cs-note">${esc(T('Length is the length to CUT — it already includes the connector allowances and the trim. Strip is jacket / conductor.'))}</p>
+
+      ${(()=>{ const strips=_csStripRows(spec); return strips.length ? `
+      <h3 class="cs-h3">${esc(T('Strip detail'))}</h3>
+      <table class="cs-tbl"><thead><tr><th style="width:34%">${esc(T('End'))}</th>
+        <th style="width:14%">${esc(T('Code'))}</th><th style="width:20%">${esc(T('Value'))}</th>
+        <th style="width:32%">${esc(T('Description'))}</th></tr></thead>
+        <tbody>${strips.map(x=>`<tr>
+          <td class="cs-ltr">${esc(x.seg)} · ${esc(x.ref)}</td>
+          <td class="cs-ctr cs-ltr"><b>${esc(x.code)}</b></td>
+          <td class="cs-ctr cs-ltr"><b>${esc(_csMM(x.mm))}</b>${x.ok?'':` <span class="cs-tag cs-tbc">${esc(T('TBC'))}</span>`}</td>
+          <td style="font-size:12px">${esc(_csP(x.label||''))}</td></tr>`).join('')}
+        </tbody></table>` : ''; })()}
+    </div>
 
     ${_csConnectors(spec).length ? `
-    <h2 class="cs-h2"><span class="cs-n">02</span>${esc(T('Connectors'))}</h2>
+    <h2 class="cs-h2"><span class="cs-n">4</span>${esc(T('Connectors'))}</h2>
     <div class="cs-pad"><table class="cs-tbl">
       <thead><tr><th style="width:7%">${esc(T('Ref'))}</th><th style="width:9%">${esc(T('Kind'))}</th>
         <th style="width:16%">${esc(T('Part number'))}</th>
@@ -12171,227 +12377,41 @@ function renderCutStripSheet(){
           ${c._inferred?`<span class="cs-tag cs-tbc">${esc(T('not described on the sheet'))}</span>`:''}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
 
-    <h2 class="cs-h2"><span class="cs-n">03</span>${esc(T('Harness layout'))}</h2>
+    <h2 class="cs-h2"><span class="cs-n">5</span>${esc(T('Schematic — cut & strip'))}</h2>
     <div class="cs-pad">
-      <div class="cs-box cs-info" style="border-color:#2563EB;background:#EFF6FF;color:#1E3A8A">
-        <b>${esc(T('This harness has'))} ${_csSegments(spec).length} ${esc(T('cable run(s)'))} ${esc(T('and'))} ${_csConnectors(spec).length} ${esc(T('connector(s)'))}${
-          _csBreakouts(spec).length?` + ${_csBreakouts(spec).length} ${esc(T('Breakout'))}`:''}.</b>
-        <p>${_csSegments(spec).map(s=>`<span class="cs-ltr">${esc(s.id)}: ${esc(_csSegLabel(s))}</span>`).join(' &nbsp;·&nbsp; ')}</p>
-      </div>
-      ${_csAssignedRefs(spec).length ? `
-      <div class="cs-box cs-warn">
-        <b>${esc(T('These names are not printed on the drawing'))}</b>
-        <p>${esc(T('The drawing gives no designator for them, so this sheet assigned one. Match them by position, not by looking for the label.'))}</p>
-        <ul>${_csAssignedRefs(spec).map(a=>`<li><span class="cs-ltr"><b>${esc(a.ref)}</b></span>${
-          a.desc?` — ${esc(_csP(a.desc))}`:''}${a.seen?` <span style="color:#64748B">(${esc(T('seen on the drawing as'))}: ${esc(a.seen)})</span>`:''}</li>`).join('')}</ul>
-      </div>` : ''}
-      ${_csCountMismatches(spec).length ? `
-      <div class="cs-box cs-stop">
-        <b>${esc(T('The analysis counted more on the drawing than it wrote down'))}</b>
-        <ul>${_csCountMismatches(spec).map(m=>`<li>${esc(T(m.what))}: ${esc(T('counted'))}
-          <b>${m.said}</b>, ${esc(T('listed'))} <b>${m.got}</b> —
-          <b style="color:#B91C1C">${esc(T('missing'))} ${Math.abs(m.missing)}</b></li>`).join('')}</ul>
-        <p>${esc(T('Check the drawing for what is missing and add it before this sheet is used.'))}</p>
-      </div>` : ''}
-      ${(()=>{ const ov=_csOverall(spec); if(ov.value==null) return '';
-        return `<div class="cs-box cs-info" style="border-color:#0F172A;background:#F8FAFC;color:#0F172A">
-          <b>${esc(T('Overall length of the whole harness'))}: <span class="cs-ltr">${esc(_csMM(ov.value))}</span></b>
-          ${ov.span?`<span class="cs-ltr" style="font-size:12px;color:#64748B"> (${esc(ov.span)})</span>`:''}
-          ${ov.mismatch?`<p style="color:#B45309;font-weight:700">${esc(T('The drawing states'))}
-            <span class="cs-ltr">${ov.mismatch.stated} mm</span>, ${esc(T('but the longest route through this harness is'))}
-            <span class="cs-ltr">${ov.mismatch.longest} mm</span> — ${esc(T('confirm before cutting.'))}</p>`:''}
-        </div>`; })()}
-      ${spec.source_image
-        // The drawing already shows the harness correctly. Redrawing it only
-        // creates a second picture to disagree with the first, so when the real
-        // one is available it IS the figure, and we add the numbers it lacks.
-        ? _csSourceFigure(spec)
-        : `${spec.source_image_skipped ? `
-      <div class="cs-box cs-info" style="border-color:#B45309;background:#FFFBEB;color:#7C2D12">
-        <b>${esc(T('The original drawing is not attached'))}</b>
-        <p>${esc(_csP(spec.source_image_skipped))} — ${esc(T('the figure below is this sheet\'s own reading of the drawing.'))}</p>
-      </div>` : ''}
-      <figure class="cs-fig">${_csHarnessSVG(spec)}</figure>`}
-      ${spec.bundle && (spec.bundle.method||spec.bundle.length_mm!=null||spec.bundle.note) ? `
-      <div class="cs-box cs-info">
-        <b>${esc(T('These runs are laced into one bundle'))}${spec.bundle.at?` — ${esc(T('into'))} ${esc(spec.bundle.at)}`:''}</b>
-        <p>${[_csP(spec.bundle.method||''), spec.bundle.part_number||'',
-              _csNum(spec.bundle.length_mm)!=null?_csMM(spec.bundle.length_mm):''].filter(Boolean).map(esc).join(' · ')}</p>
-        ${spec.bundle.note?`<p>${esc(_csP(spec.bundle.note))}</p>`:''}
-        <p style="color:#475569">${esc(T('Bundling changes how the harness is assembled — it never changes how long a wire is cut.'))}</p>
-      </div>` : ''}
-      ${(spec.route_dimensions||[]).length ? `
-      <h3 class="cs-h3">${esc(T('Lengths as dimensioned on the drawing'))}</h3>
-      <table class="cs-tbl"><thead><tr><th style="width:29%">${esc(T('Span'))}</th>
-        <th style="width:19%">${esc(T('Value'))}</th><th style="width:52%">${esc(T('Note'))}</th></tr></thead>
-        <tbody>${spec.route_dimensions.map((d,i)=>`<tr>
-          <td class="cs-ltr"><b>${esc(d.from||'')} → ${esc(d.to||'')}</b></td>
-          <td class="cs-ctr">${_csFNum(`route_dimensions.${i}.mm`, d.mm, ' mm')}</td>
-          <td style="font-size:12.5px">${_csFText(`route_dimensions.${i}.what`, d.what)}</td></tr>`).join('')}
-        </tbody></table>` : ''}
-      ${_csRouteMismatches(spec).length ? `
-      <div class="cs-box cs-stop" style="margin-top:12px">
-        <b>${esc(T('A dimension on the drawing does not match the runs below'))}</b>
-        <ul>${_csRouteMismatches(spec).map(m=>`<li><span class="cs-ltr"><b>${esc(m.from)} → ${esc(m.to)}</b>:
-          ${esc(T('drawing says'))} <b>${m.drawn} mm</b>, ${esc(T('the runs add up to'))} <b>${m.got} mm</b></span>
-          ${m.what?` — ${esc(T(m.what))}`:''}</li>`).join('')}</ul>
-        <p>${esc(T('The drawing is the authority. Fix the run lengths before cutting — a run split at the wrong point cuts wire short, and short wire is scrap.'))}</p>
-      </div>` : ''}
-      ${_csCableSuspects(spec).length ? `
-      <div class="cs-box cs-stop">
-        <b>${esc(T('A run names a connector as its cable'))}</b>
-        <ul>${_csCableSuspects(spec).map(x=>`<li><span class="cs-ltr"><b>${esc(x.seg)}</b>:
-          ${esc(x.pn)} ${esc(T('is the part number of connector'))} <b>${esc(x.ref)}</b></span></li>`).join('')}</ul>
-        <p>${esc(T('Those runs are left out of the stores list below — you cannot draw a length of connector off a reel. Put the cable part number on the run before ordering.'))}</p>
-      </div>` : ''}
-      ${_csCableTotals(spec).length>1||(_csCableTotals(spec)[0]&&_csCableTotals(spec)[0].runs>1) ? `
-      <h3 class="cs-h3">${esc(T('Cable to draw from stores'))}</h3>
-      <table class="cs-tbl"><thead><tr><th style="width:53%">${esc(T('Part number'))}</th>
-        <th style="width:18%">${esc(T('Runs'))}</th><th style="width:29%">${esc(T('Total length'))}</th></tr></thead>
-        <tbody>${_csCableTotals(spec).map(t=>`<tr><td class="cs-ltr">${esc(t.pn)}</td>
-          <td class="cs-ctr">${t.runs}</td><td class="cs-ctr cs-ltr"><b>${esc(_csMM(t.mm))}</b></td></tr>`).join('')}
-        </tbody></table>` : ''}
+      ${_csSegments(spec).map(seg=>{
+        const ends=_csSegEnds(seg, spec);
+        const figs=ends.map(e=>{
+          const jacket=_csStripSVG(seg,e,spec);
+          const wire=_csWireEndSVG(seg,e,spec);
+          return (jacket?`<figure class="cs-fig">${jacket}</figure>`:'')
+               + (wire?`<figure class="cs-fig">${wire}</figure>`:'');
+        }).join('');
+        return figs ? `<h3 class="cs-h3"><span class="cs-ltr">${esc(seg.id)} — ${esc(_csSegLabel(seg))}</span>
+          ${esc(T('cut'))}: <span class="cs-ltr">${esc(_csMM(_csCutLength(seg,spec).total))}</span></h3>${figs}` : '';
+      }).join('')}
     </div>
 
-    ${_csSegments(spec).map((seg,si)=>{
-      const cut=_csCutLength(seg, spec);
-      const ends=_csSegEnds(seg, spec);
-      // No commentary about models or rules: the operator needs the number and
-      // what it is for. Where the numbers came from is the third column of each
-      // row, in plain terms.
-      return `
-    <h2 class="cs-h2"><span class="cs-n">${String(4+si).padStart(2,'0')}</span>${esc(T('Cable run'))}
-      <span class="cs-ltr">${esc(seg.id)} — ${esc(_csSegLabel(seg))}</span></h2>
+    <h2 class="cs-h2"><span class="cs-n">6</span>${esc(T('Notes'))}</h2>
     <div class="cs-pad">
-      ${seg.cable_part_number||seg.cable_description ? `<p class="cs-note">
-        <b class="cs-ltr">${esc(seg.cable_part_number||'')}</b> ${_csP(seg.cable_description||'')}</p>` : ''}
+      ${_csEditing
+        ? `<textarea class="cs-in" data-cs-path="form_notes" data-cs-type="text" rows="3"
+             style="width:100%">${esc(spec.form_notes||'')}</textarea>`
+        : `<div class="cs-notes-box">${spec.form_notes?esc(spec.form_notes):'&nbsp;'}</div>`}
+    </div>
 
-      <h3 class="cs-h3">${esc(T('Cut length calculation'))}</h3>
-      ${!cut.hasBreakdown ? `
-        <div class="cs-box cs-warn"><b>${esc(T('CUT THIS LENGTH'))}: <span class="cs-ltr" style="font-size:19px">${esc(_csMM(cut.total))}</span></b>
-          <p>${esc(T('This specification predates the cut-length breakdown — the length below has no calculation behind it.'))}</p></div>` : `
-      ${cut.added!==0 ? `<div class="cs-box cs-stop"><b>${esc(T('Do NOT cut to the drawing length. Cable is consumed inside each connector and by squaring the end — cut the length below.'))}</b></div>` : ''}
-      <table class="cs-tbl"><tbody>
-        <tr><td style="width:300px">${esc(T('Finished length (from the drawing)'))}</td>
-            <td class="cs-ctr" style="width:190px">${_csFNum(`segments.${si}.finished_length_mm`, cut.finished, ' mm')}</td>
-            <td>${esc(T('The length marked on the drawing. It is not the length you cut.'))}</td></tr>
-        ${cut.allowances.map((a,ai)=>`<tr>
-          <td>${esc(T('Allowance'))} — <b class="cs-ltr">${esc(a.ref||'')}</b></td>
-          <td class="cs-ctr">${_csEditing
-              ? `${_csFNum(`segments.${si}.allowances.${ai}.mm`, a.mm, ' mm')} ${_csFChk(`segments.${si}.allowances.${ai}.confirmed`, a.confirmed, T('Confirmed'))}`
-              : _csDim(a.mm, a.confirmed)}</td>
-          <td style="font-size:12.5px">${_csFText(`segments.${si}.allowances.${ai}.reason`, a.reason, true)}</td></tr>`).join('')}
-        ${(cut.trim || _csEditing) ? `<tr>
-          <td>${esc(T('Allowance'))} — ${esc(T('trim'))}</td>
-          <td class="cs-ctr">${_csEditing
-              ? `${_csFNum(`segments.${si}.trim_allowance_mm`, cut.trim, ' mm')} ${_csFChk(`segments.${si}.trim_allowance_confirmed`, seg.trim_allowance_confirmed===true, T('Confirmed'))}`
-              : _csDim(cut.trim, seg.trim_allowance_confirmed)}</td>
-          <td style="font-size:12.5px">${esc(T('Squaring the cut and re-doing a bad strip'))}</td></tr>` : ''}
-        ${(cut.endCosts||[]).map(e=>`<tr><td>${esc(T('End'))} <b class="cs-ltr">${esc(e.ref)}</b>
-          — ${esc(T('jacket strip'))} <span class="cs-ltr">${esc(e.code)}</span> + ${esc(T('handling margin'))}</td>
-          <td class="cs-ctr cs-ltr">${esc(_csMM(e.mm))}</td>
-          <td class="cs-ltr" style="font-size:12.5px">${e.strip} + ${e.margin}</td></tr>`).join('')}
-        <tr class="cs-cut-row"><td><b>${esc(T('CUT THIS LENGTH'))}</b></td>
-          <td class="cs-ctr"><b class="cs-ltr" style="font-size:19px">${esc(_csMM(cut.total))}</b>
-            ${_csNum(seg.cut_length_tolerance_mm)!=null?`<span class="cs-ltr" style="font-size:12px"> ±${_csNum(seg.cut_length_tolerance_mm)}</span>`:''}</td>
-          <td class="cs-ltr" style="font-size:13px;white-space:normal;overflow-wrap:anywhere">${esc(_csCutFormula(seg, spec))}</td></tr>
-      </tbody></table>`}
-
-      ${(seg.layers||[]).length ? `
-      <h3 class="cs-h3">${esc(T('Cable cross-section'))}</h3>
-      <table class="cs-tbl">
-        <thead><tr><th style="width:24%">${esc(T('Layer'))}</th><th style="width:17%">${esc(T('Nominal Ø'))}</th>
-          <th style="width:15%">${esc(T('Material'))}</th><th style="width:44%">${esc(T('Note'))}</th></tr></thead>
-        <tbody>${seg.layers.map((l,li)=>`<tr>
-          <td>${_csFText(`segments.${si}.layers.${li}.name`, l.name)}</td>
-          <td class="cs-ctr">${_csFNum(`segments.${si}.layers.${li}.od_mm`, l.od_mm, ' mm')}</td>
-          <td>${_csFRaw(`segments.${si}.layers.${li}.material`, l.material)}</td>
-          <td>${_csFText(`segments.${si}.layers.${li}.note`, l.note, true)}</td></tr>`).join('')}
-        </tbody></table>` : ''}
-
-      <h3 class="cs-h3">${esc(T('Strip detail'))}</h3>
-      ${ends.map(e=>{ const svg=_csStripSVG(seg,e,spec); return svg?`<figure class="cs-fig">${svg}</figure>`:''; }).join('')}
-      <table class="cs-tbl">
-        <thead><tr><th style="width:15%">${esc(T('End'))}</th>
-          <th style="width:38%">${esc(T('Description'))}</th><th style="width:20%">${esc(T('Value'))}</th>
-          <th style="width:27%">${esc(T('Basis'))}</th></tr></thead>
-        <tbody>${(seg.ends||[]).flatMap((e,ei)=>(e.strip||[]).map((st,i)=>`<tr>
-          <td class="cs-ctr cs-ltr cs-nowrap"><b>${i===0?esc(e.ref||''):''}</b></td>
-          <td>${st.code?`<span class="cs-code">${esc(st.code)}</span> `:''}${
-            _csFText(`segments.${si}.ends.${ei}.strip.${i}.label`, st.label)}${st.derived?' <i style="opacity:.6">(derived)</i>':''}</td>
-          <td class="cs-ctr">${(_csEditing && !st.derived)
-            ? `${_csFNum(`segments.${si}.ends.${ei}.strip.${i}.value_mm`, st.value_mm, ' mm')} ${_csFChk(`segments.${si}.ends.${ei}.strip.${i}.confirmed`, st.confirmed===true, T('Confirmed'))}`
-            : _csDim(st.value_mm, st.confirmed)}</td>
-          <td style="font-size:12px">${_csFText(`segments.${si}.ends.${ei}.strip.${i}.basis`, st.basis, true)}</td></tr>`)).join('')}
-        ${(_csNum(seg.conductor_strip_mm)!=null || _csEditing) ? `<tr>
-          <td class="cs-ctr cs-nowrap">${esc(T('each conductor'))}</td>
-          <td><span class="cs-code">W</span> ${esc(T('Insulation removed from each individual conductor for its contact'))}</td>
-          <td class="cs-ctr">${_csEditing
-            ? `${_csFNum(`segments.${si}.conductor_strip_mm`, seg.conductor_strip_mm, ' mm')} ${_csFChk(`segments.${si}.conductor_strip_confirmed`, seg.conductor_strip_confirmed===true, T('Confirmed'))}`
-            : _csDim(seg.conductor_strip_mm, seg.conductor_strip_confirmed)}</td>
-          <td style="font-size:12px">${esc(T('From the contact datasheet — a much smaller number than the jacket strip.'))}</td></tr>` : ''}
-        </tbody></table>
-      <p class="cs-note"${_csRTL()?' dir="rtl"':''}>${esc(T('The letter in front of each line is the code used on the strip figure above.'))}</p>
-      ${ends.filter(e=>e._breakout).map(e=>`<p class="cs-note">
-        <b class="cs-ltr">${esc(e.ref)}</b> — ${esc(T('junction — nothing is terminated here'))}</p>`).join('')}
-      ${ends.filter(e=>e._missing).map(e=>`<p class="cs-note" style="color:#B91C1C">
-        <b>${esc(e.ref)}</b> — ${esc(T('this end is on the drawing but the analysis produced no strip dimensions for it. Fill them in before use.'))}</p>`).join('')}
-      ${seg.shield_treatment ? `<div class="cs-box cs-warn" style="margin-top:12px">
-        <b>${esc(T('Shield / drain'))}</b><p>${_csFText(`segments.${si}.shield_treatment`, seg.shield_treatment, true)}</p></div>` : ''}
-
-      ${(seg.conductors||[]).length ? `
-      <h3 class="cs-h3">${esc(T('Wiring table'))} — <span class="cs-ltr">${esc(_csSegLabel(seg))}</span></h3>
-      <table class="cs-tbl">
-        <thead><tr><th style="width:6%">#</th>
-          <th style="width:13%" class="cs-ctr"><span class="cs-ltr">${esc(seg.from||'')}</span> ${esc(T('pin'))}</th>
-          <th style="width:13%" class="cs-ctr"><span class="cs-ltr">${esc(seg.to||'')}</span> ${esc(T('pin'))}</th>
-          <th style="width:22%">${esc(T('Signal'))}</th><th style="width:13%">${esc(T('Colour'))}</th>
-          <th style="width:10%">${esc(T('AWG'))}</th><th style="width:23%">${esc(T('Note'))}</th></tr></thead>
-        <tbody>${seg.conductors.map((w,wi)=>`<tr>
-          <td class="cs-ctr">${wi+1}</td>
-          <td class="cs-ctr">${_csFRaw(`segments.${si}.conductors.${wi}.from_pin`, w.from_pin)}</td>
-          <td class="cs-ctr">${_csFRaw(`segments.${si}.conductors.${wi}.to_pin`, w.to_pin)}</td>
-          <td class="cs-ltr">${_csFRaw(`segments.${si}.conductors.${wi}.name`, w.name)}</td>
-          <td class="cs-ltr">${_csFRaw(`segments.${si}.conductors.${wi}.color`, w.color)}</td>
-          <td class="cs-ctr cs-ltr">${_csFRaw(`segments.${si}.conductors.${wi}.awg`, w.awg)}</td>
-          <td style="font-size:12px">${_csFText(`segments.${si}.conductors.${wi}.note`, w.note)}</td></tr>`).join('')}
-        </tbody></table>` : ''}
-    </div>`;}).join('')}
-
-    <h2 class="cs-h2"><span class="cs-n">${String(4+_csSegments(spec).length).padStart(2,'0')}</span>${esc(T('Operation sequence'))}</h2>
-    <div class="cs-pad">${(spec.steps||[]).map((s,i)=>`
-      <div class="cs-step">
-        <div class="cs-step-n">${esc(s.n??(i+1))}</div>
-        <div>
-          <h4>${_csDelBtn('del-step',i)}${_csFText(`steps.${i}.title`, s.title)}${(s.dimension_ref||_csEditing)?` <span class="cs-tag cs-dim cs-ltr">${_csFRaw(`steps.${i}.dimension_ref`, s.dimension_ref)}</span>`:''}</h4>
-          <div>${_csFText(`steps.${i}.body`, s.body, true)}</div>
-          ${(s.critical||_csEditing)?`<div class="cs-crit"><b>${esc(T('CRITICAL'))}:</b> ${_csFText(`steps.${i}.critical`, s.critical, true)}</div>`:''}
-        </div>
-      </div>`).join('')}
-      ${_csEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:12px" data-cs-act="add-step">＋ ${esc(T('Add step'))}</button>`:''}</div>
-
-    ${(spec.inspection||[]).length ? `
-    <h2 class="cs-h2"><span class="cs-n">${String(5+_csSegments(spec).length).padStart(2,'0')}</span>${esc(T('Inspection'))}${spec.standard?` — <span class="cs-ltr">${esc(spec.standard)}</span>`:''}</h2>
-    <div class="cs-pad"><ul class="cs-chk">${spec.inspection.map((c,i)=>
-      `<li><span class="cs-b"></span><span>${_csDelBtn('del-chk',i)}${_csFText(`inspection.${i}`, c, true)}</span></li>`).join('')}</ul>
-      ${_csEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:12px" data-cs-act="add-chk">＋ ${esc(T('Add check'))}</button>`:''}</div>` : ''}
-
-    ${(spec.tools||[]).length ? `
-    <h2 class="cs-h2"><span class="cs-n">${String(6+_csSegments(spec).length).padStart(2,'0')}</span>${esc(T('Tools & consumables'))}</h2>
-    <div class="cs-pad"><table class="cs-tbl">
-      <thead><tr><th style="width:29%">${esc(T('Tool'))}</th><th style="width:20%">${esc(T('Setting'))}</th>
-        <th style="width:51%">${esc(T('Note'))}</th></tr></thead>
-      <tbody>${spec.tools.map((t,i)=>`<tr><td>${_csDelBtn('del-tool',i)}${_csFText(`tools.${i}.tool`, t.tool)}</td>
-        <td class="cs-ctr">${_csEditing?_csFRaw(`tools.${i}.setting`, t.setting):esc(t.setting||'—')}</td>
-        <td>${_csFText(`tools.${i}.note`, t.note, true)}</td></tr>`).join('')}
-      </tbody></table></div>` : ''}
-
-
-
-    <div class="cs-pad">
-      <div class="cs-sig">
-        <div>${esc(T('Prepared by'))}</div><div>${esc(T('Checked by — Engineering'))}</div><div>${esc(T('Approved for production'))}</div>
-      </div>
+    <h2 class="cs-h2"><span class="cs-n">7</span>${esc(T('Approval'))}</h2>
+    <div class="cs-pad"><table class="cs-tbl cs-form-tbl">
+      <thead><tr><th style="width:28%">${esc(T('Name'))}</th><th style="width:26%">${esc(T('Signature'))}</th>
+        <th style="width:18%">${esc(T('Date'))}</th><th style="width:28%">${esc(T('Notes'))}</th></tr></thead>
+      <tbody>
+        <tr><td class="cs-ctr">${_csFRaw('prepared_by', spec.prepared_by)}
+              <div class="cs-role">${esc(T('Prepared by'))}</div></td>
+            <td class="cs-sig-cell"></td><td class="cs-ctr cs-ltr">${_csFRaw('prepared_date', spec.prepared_date)}</td><td></td></tr>
+        <tr><td class="cs-ctr">${_csFRaw('approved_by', spec.approved_by)}
+              <div class="cs-role">${esc(T('Approved for production'))}</div></td>
+            <td class="cs-sig-cell"></td><td class="cs-ctr cs-ltr">${_csFRaw('approved_date', spec.approved_date)}</td><td></td></tr>
+      </tbody></table>
       <div class="cs-foot">
         <span class="cs-ltr">${esc(spec.spec_no||'')} · ${esc(spec.drawing_number||'')} ${esc(spec.revision?('Rev '+spec.revision):'')}${spec.source_file?' · '+esc(spec.source_file):''}</span>
         <span class="cs-ltr">${spec.edited_by?`✎ ${esc(spec.edited_by)} ${esc(String(spec.edited_at||'').slice(0,10))} · `:''}v${APP_VER}</span>
@@ -12407,6 +12427,7 @@ function renderCutStripSheet(){
   document.getElementById('btn-cs-print')?.addEventListener('click',()=>window.print());
   document.getElementById('btn-cs-pdf')?.addEventListener('click',_csExportPDF);
   document.getElementById('btn-cs-edit')?.addEventListener('click',_csEnterEdit);
+  document.getElementById('btn-cs-mfg')?.addEventListener('click',_mfgFromCurrentSpec);
   document.getElementById('btn-cs-save')?.addEventListener('click',_csSaveSpec);
   document.getElementById('btn-cs-cancel')?.addEventListener('click',()=>{
     if(confirm('Discard unsaved changes to this specification?')) _csCancelEdit();
@@ -12469,6 +12490,386 @@ function renderCutStripSheet(){
     _csSetLang(lang);   // remembered for next time — see _csLang above
     renderCutStripSheet();
   }));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MANUFACTURING INSTRUCTIONS — how the assembly is built
+// ══════════════════════════════════════════════════════════════════════════════
+// The Cut & Strip screen answers one question: what do I cut, and where do I
+// strip it. Everything else the drawing analysis produces — the material list,
+// the order of operations, the inspection checks, the tooling — is how the
+// thing is BUILT, which is a different document read by a different person at
+// a different bench. It used to be printed on the same eleven pages, and the
+// two numbers that mattered were lost in it.
+//
+// So it lives here, as documents of its own. A document can be written from
+// scratch, or seeded from a cut & strip specification with one click ("Send to
+// Manufacturing Instructions"), after which the two are independent: editing
+// the instruction never rewrites the cutting form, and re-analysing a drawing
+// never overwrites instructions somebody has since corrected by hand.
+//
+// Storage note: these share the cut_strip_specs collection, marked kind:'mfg'
+// and with an id prefixed mfg_. That is deliberate — it is the one collection
+// whose security rule already grants exactly the access these need, so the
+// screen works without a rules deployment. Every query on either side filters
+// on `kind`.
+const MFG_PREFIX='mfg_';
+let mfgDocs=[], mfgCurrent=null, _mfgEditing=false, _mfgBackup=null, _mfgListQuery='';
+function _mfgIsDoc(d){ return !!d && d.kind==='mfg'; }
+function _mfgBlank(){
+  return {kind:'mfg', title:'', doc_no:'', revision:'', customer:'', drawing_number:'',
+          project:'', form_date:_csToday(), materials:[], steps:[], inspection:[], tools:[],
+          notes:'', prepared_by:'', approved_by:''};
+}
+// Seeded from a cut & strip spec. Copies, never references: an instruction
+// document that changed under the operator because an engineer re-ran the
+// analysis is worse than no document.
+function _mfgFromSpec(spec){
+  const d=_mfgBlank();
+  d.title=spec.drawing_name||spec.title||spec.drawing_number||'';
+  d.doc_no='MI-'+String(spec.drawing_number||'').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'')+'-01';
+  d.revision=spec.revision||'';
+  d.customer=spec.customer||spec.project||'';
+  d.drawing_number=spec.drawing_number||'';
+  d.project=spec.project||'';
+  d.materials=(spec.materials||[]).map(m=>({item:m.item??'', part_number:m.part_number||'',
+    manufacturer:m.manufacturer||'', description:m.description||'', qty:m.qty??'', ref:m.ref||''}));
+  d.steps=(spec.steps||[]).map((s,i)=>({n:s.n??(i+1), title:s.title||'', body:s.body||'', critical:s.critical||''}));
+  d.inspection=(spec.inspection||[]).map(c=>String(c||''));
+  d.tools=(spec.tools||[]).map(t=>({tool:t.tool||'', setting:t.setting||'', note:t.note||''}));
+  d.source_spec=spec._id||'';
+  d.standard=spec.standard||'';
+  return d;
+}
+function _mfgDocId(d){
+  const stem=String(d.doc_no||d.drawing_number||d.title||'doc')
+    .replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,60) || 'doc';
+  return MFG_PREFIX+stem.toUpperCase();
+}
+async function loadMfgDocs(force){
+  if(mfgDocs.length && !force) return mfgDocs;
+  if(!companyId) return (mfgDocs=[]);
+  const snap=await getDocs(query(collection(db,'companies',companyId,'cut_strip_specs'),orderBy('updatedAt','desc')));
+  mfgDocs=snap.docs.map(d=>({_id:d.id, ...d.data()})).filter(_mfgIsDoc);
+  return mfgDocs;
+}
+
+// ── List ────────────────────────────────────────────────────────────────────
+async function renderManufacturing(){
+  mfgCurrent=null; _mfgEditing=false; _mfgBackup=null;
+  setActions(`<button class="btn btn-blue btn-sm" id="btn-mfg-new">＋ New instruction</button>
+    <button class="btn btn-ghost btn-sm" id="btn-mfg-from-cs">↧ From a Cut &amp; Strip spec</button>`);
+  setContent(`<div style="text-align:center;padding:60px"><div class="ring" style="margin:0 auto"></div></div>`);
+  document.getElementById('btn-mfg-new')?.addEventListener('click',_mfgNew);
+  document.getElementById('btn-mfg-from-cs')?.addEventListener('click',_mfgImportModal);
+
+  let list=[];
+  try{ list=await loadMfgDocs(true); }
+  catch(e){ setContent(`<div class="card" style="color:var(--danger)">Could not load: ${esc(e.message)}</div>`); return; }
+
+  if(!list.length){
+    setContent(`<div class="card" style="max-width:640px;margin:30px auto;text-align:center;padding:40px 30px">
+      <div style="font-size:44px;margin-bottom:10px">🛠️</div>
+      <h3 style="margin-bottom:6px">No manufacturing instructions yet</h3>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:20px">
+        A manufacturing instruction holds the material list, the order of operations, the inspection
+        checks and the tooling for one assembly. Write one from scratch, or take the starting content
+        from a cut &amp; strip specification and edit it.</p>
+      <button class="btn btn-blue" id="btn-mfg-new2">＋ New instruction</button>
+      <button class="btn btn-ghost" id="btn-mfg-from-cs2" style="margin-inline-start:8px">↧ From a Cut &amp; Strip spec</button>
+    </div>`);
+    document.getElementById('btn-mfg-new2')?.addEventListener('click',_mfgNew);
+    document.getElementById('btn-mfg-from-cs2')?.addEventListener('click',_mfgImportModal);
+    return;
+  }
+
+  const q=_mfgListQuery.trim().toLowerCase();
+  const words=q?q.split(/\s+/):[];
+  const rows=list.filter(d=>{
+    if(!words.length) return true;
+    const hay=[d.doc_no,d.title,d.drawing_number,d.customer,d.project].join(' ').toLowerCase();
+    return words.every(w=>hay.includes(w));
+  });
+  setContent(`
+    <div class="toolbar" style="margin-bottom:10px;gap:8px">
+      <input class="search-box" id="mfg-search" placeholder="Search instructions…" value="${esc(_mfgListQuery)}" style="max-width:320px">
+      <span class="count-badge">${rows.length} of ${list.length}</span>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th style="width:16%">Doc no.</th><th>Title</th><th style="width:13%">Drawing #</th>
+        <th style="width:14%">Customer</th><th style="width:7%">Rev</th>
+        <th style="width:7%">Steps</th><th style="width:12%">Updated</th><th style="width:70px"></th></tr></thead>
+      <tbody>${rows.length?rows.map(d=>`<tr class="mfg-row" data-id="${esc(d._id)}" style="cursor:pointer">
+        <td class="cs-ltr" style="font-weight:700">${esc(d.doc_no||'')}</td>
+        <td>${esc(d.title||'')}</td>
+        <td class="cs-ltr">${esc(d.drawing_number||'')}</td>
+        <td>${esc(d.customer||'')}</td>
+        <td class="cs-ltr" style="text-align:center">${esc(d.revision||'')}</td>
+        <td style="text-align:center">${(d.steps||[]).length}</td>
+        <td style="font-size:11px;color:var(--muted)">${fmtDateTime(d.updatedAt)}</td>
+        <td style="text-align:right"><button class="btn btn-ghost btn-sm mfg-del" data-id="${esc(d._id)}"
+          data-name="${esc(d.doc_no||d.title||d._id)}" title="Delete">🗑</button></td>
+      </tr>`).join('') : `<tr class="empty-row"><td colspan="8">Nothing matches that search</td></tr>`}
+      </tbody></table></div>`);
+  document.getElementById('mfg-search')?.addEventListener('input',debounce(e=>{
+    _mfgListQuery=e.target.value; renderManufacturing();
+  },250));
+  document.querySelectorAll('.mfg-row').forEach(tr=>tr.addEventListener('click',e=>{
+    if(e.target.closest('.mfg-del')) return;
+    mfgCurrent=mfgDocs.find(d=>d._id===tr.dataset.id)||null;
+    if(mfgCurrent) renderMfgDoc();
+  }));
+  document.querySelectorAll('.mfg-del').forEach(b=>b.addEventListener('click',async e=>{
+    e.stopPropagation();
+    if(!confirm(`Delete manufacturing instruction "${b.dataset.name}"? This cannot be undone.`)) return;
+    try{
+      await deleteDoc(doc(db,'companies',companyId,'cut_strip_specs',b.dataset.id));
+      logAudit('mfg_deleted',{id:b.dataset.id},true);
+      toast('Deleted','success');
+      mfgDocs=[]; renderManufacturing();
+    }catch(err){ toast('Error: '+err.message,'error'); }
+  }));
+}
+function _mfgNew(){
+  mfgCurrent=_mfgBlank();
+  mfgCurrent._id=null;
+  _mfgEditing=true; _mfgBackup=null;
+  renderMfgDoc();
+}
+// Seeding from a specification is a copy, so the picker lists every spec and
+// says plainly what will be taken across.
+async function _mfgImportModal(){
+  showModal(`<div class="modal" style="width:min(94vw,680px)">
+    <div class="modal-head"><h3>↧ Start from a Cut &amp; Strip specification</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" id="mfg-imp-body" style="max-height:58vh">
+      <div style="text-align:center;padding:30px"><div class="ring" style="margin:0 auto"></div></div>
+    </div>
+  </div>`);
+  const body=document.getElementById('mfg-imp-body');
+  let specs=[];
+  try{ specs=await loadCutStripSpecs(true); }
+  catch(e){ body.innerHTML=`<p style="color:red">${esc(e.message)}</p>`; return; }
+  if(!specs.length){ body.innerHTML=`<p style="color:var(--muted);font-size:13px">There are no cut &amp; strip specifications yet.</p>`; return; }
+  body.innerHTML=`<p style="font-size:12px;color:var(--muted);margin-bottom:10px">
+      The material list, operation steps, inspection checks and tooling are copied into a new
+      instruction document. The specification itself is left untouched.</p>
+    <div class="table-wrap"><table><thead><tr><th>Drawing #</th><th>Name</th>
+      <th style="width:60px">Steps</th><th style="width:60px">Tools</th><th style="width:90px"></th></tr></thead>
+      <tbody>${specs.map(s=>`<tr>
+        <td class="cs-ltr">${esc(s.drawing_number||s._id)}</td>
+        <td>${esc(s.drawing_name||s.title||'')}</td>
+        <td style="text-align:center">${(s.steps||[]).length}</td>
+        <td style="text-align:center">${(s.tools||[]).length}</td>
+        <td><button class="btn btn-blue btn-sm mfg-imp" data-id="${esc(s._id)}">Use</button></td>
+      </tr>`).join('')}</tbody></table></div>`;
+  body.querySelectorAll('.mfg-imp').forEach(b=>b.addEventListener('click',()=>{
+    const spec=specs.find(s=>s._id===b.dataset.id);
+    if(!spec) return;
+    mfgCurrent=_mfgFromSpec(spec);
+    mfgCurrent._id=null;
+    _mfgEditing=true; _mfgBackup=null;
+    closeModal();
+    renderMfgDoc();
+    toast('Content copied — review it and save','success');
+  }));
+}
+
+// ── The document ────────────────────────────────────────────────────────────
+function _mfgF(path, value, opts){
+  const o=opts||{};
+  if(!_mfgEditing) return esc(value==null?'':String(value));
+  if(o.area) return `<textarea class="cs-in" data-mfg-path="${esc(path)}" rows="${o.rows||2}" style="width:100%">${esc(value||'')}</textarea>`;
+  return `<input class="cs-in" data-mfg-path="${esc(path)}" value="${esc(value==null?'':String(value))}"${
+    o.ph?` placeholder="${esc(o.ph)}"`:''}>`;
+}
+function _mfgRowDel(kind,i){
+  return _mfgEditing ? `<button class="cs-del" data-mfg-act="${kind}" data-mfg-idx="${i}" title="Delete">✕</button>` : '';
+}
+function renderMfgDoc(){
+  const d=mfgCurrent;
+  if(!d){ renderManufacturing(); return; }
+  setActions(_mfgEditing ? `
+    <button class="btn btn-sm btn-blue" id="btn-mfg-save">💾 Save</button>
+    <button class="btn btn-sm btn-ghost" id="btn-mfg-cancel">Cancel</button>` : `
+    <button class="btn btn-sm btn-ghost" id="btn-mfg-edit">✎ Edit</button>
+    <button class="btn btn-sm btn-ghost" id="btn-mfg-print">🖨 Print</button>
+    <button class="btn btn-sm btn-ghost" id="btn-mfg-back">← Back</button>`);
+
+  setContent(`<div id="cs-sheet" class="cs-sheet" dir="ltr">
+    ${_mfgEditing?`<div class="cs-edit-bar"><b>✎ Editing</b>
+      <span>This document is independent of the cut &amp; strip specification it came from — saving here changes nothing there.</span></div>`:''}
+
+    <div class="cs-form-head">
+      <div class="cs-form-co">${companyLogoB64?`<img src="${companyLogoB64}" alt="">`:`<div class="cs-form-co-n">${esc(companyName||'')}</div>`}</div>
+      <div class="cs-form-t">
+        <div class="cs-form-t1">Manufacturing instructions</div>
+        <div class="cs-form-t2 cs-ltr">${_mfgF('title', d.title, {ph:'Assembly name'})}</div>
+      </div>
+    </div>
+
+    <h2 class="cs-h2"><span class="cs-n">1</span>Document</h2>
+    <div class="cs-pad"><table class="cs-tbl cs-form-tbl">
+      <thead><tr><th style="width:18%">Doc no.</th><th style="width:16%">Date</th><th style="width:22%">Customer</th>
+        <th style="width:20%">Drawing #</th><th style="width:10%">Rev</th><th style="width:14%">Prepared by</th></tr></thead>
+      <tbody><tr>
+        <td class="cs-ctr cs-ltr">${_mfgF('doc_no', d.doc_no, {ph:'MI-…'})}</td>
+        <td class="cs-ctr cs-ltr">${_mfgF('form_date', d.form_date)}</td>
+        <td class="cs-ctr">${_mfgF('customer', d.customer)}</td>
+        <td class="cs-ctr cs-ltr">${_mfgF('drawing_number', d.drawing_number)}</td>
+        <td class="cs-ctr cs-ltr">${_mfgF('revision', d.revision)}</td>
+        <td class="cs-ctr">${_mfgF('prepared_by', d.prepared_by)}</td>
+      </tr></tbody></table>
+      ${d.standard?`<p class="cs-note cs-ltr">Workmanship: ${esc(d.standard)}</p>`:''}
+    </div>
+
+    <h2 class="cs-h2"><span class="cs-n">2</span>Material list</h2>
+    <div class="cs-pad"><table class="cs-tbl">
+      <thead><tr><th style="width:5%">#</th><th style="width:22%">Part number</th><th style="width:13%">Manufacturer</th>
+        <th style="width:39%">Description</th><th style="width:11%">Qty</th><th style="width:10%">Ref</th></tr></thead>
+      <tbody>${(d.materials||[]).map((m,i)=>`<tr>
+        <td class="cs-ctr">${_mfgRowDel('del-mat',i)}${_mfgF(`materials.${i}.item`, m.item)}</td>
+        <td class="cs-ltr">${_mfgF(`materials.${i}.part_number`, m.part_number)}</td>
+        <td class="cs-ltr">${_mfgF(`materials.${i}.manufacturer`, m.manufacturer)}</td>
+        <td>${_mfgF(`materials.${i}.description`, m.description)}</td>
+        <td class="cs-ctr">${_mfgF(`materials.${i}.qty`, m.qty)}</td>
+        <td class="cs-ctr cs-ltr">${_mfgF(`materials.${i}.ref`, m.ref)}</td></tr>`).join('')
+        || `<tr class="empty-row"><td colspan="6">—</td></tr>`}
+      </tbody></table>
+      ${_mfgEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:10px" data-mfg-act="add-mat">＋ Add material</button>`:''}
+    </div>
+
+    <h2 class="cs-h2"><span class="cs-n">3</span>Operation sequence</h2>
+    <div class="cs-pad">${(d.steps||[]).map((s,i)=>`
+      <div class="cs-step">
+        <div class="cs-step-n">${esc(String(s.n??(i+1)))}</div>
+        <div>
+          <h4>${_mfgRowDel('del-step',i)}${_mfgF(`steps.${i}.title`, s.title, {ph:'Step title'})}</h4>
+          <div>${_mfgF(`steps.${i}.body`, s.body, {area:true, rows:3})}</div>
+          ${(s.critical||_mfgEditing)?`<div class="cs-crit"><b>CRITICAL:</b> ${_mfgF(`steps.${i}.critical`, s.critical, {area:true})}</div>`:''}
+        </div>
+      </div>`).join('') || `<p class="cs-note">No steps yet.</p>`}
+      ${_mfgEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:12px" data-mfg-act="add-step">＋ Add step</button>`:''}
+    </div>
+
+    <h2 class="cs-h2"><span class="cs-n">4</span>Inspection</h2>
+    <div class="cs-pad"><ul class="cs-chk">${(d.inspection||[]).map((c,i)=>
+      `<li><span class="cs-b"></span><span>${_mfgRowDel('del-chk',i)}${_mfgF(`inspection.${i}`, c, {area:true})}</span></li>`).join('')
+      || `<p class="cs-note">No checks yet.</p>`}</ul>
+      ${_mfgEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:12px" data-mfg-act="add-chk">＋ Add check</button>`:''}
+    </div>
+
+    <h2 class="cs-h2"><span class="cs-n">5</span>Tools &amp; consumables</h2>
+    <div class="cs-pad"><table class="cs-tbl">
+      <thead><tr><th style="width:30%">Tool</th><th style="width:20%">Setting</th><th style="width:50%">Note</th></tr></thead>
+      <tbody>${(d.tools||[]).map((t,i)=>`<tr>
+        <td>${_mfgRowDel('del-tool',i)}${_mfgF(`tools.${i}.tool`, t.tool)}</td>
+        <td class="cs-ctr">${_mfgF(`tools.${i}.setting`, t.setting)}</td>
+        <td>${_mfgF(`tools.${i}.note`, t.note)}</td></tr>`).join('')
+        || `<tr class="empty-row"><td colspan="3">—</td></tr>`}
+      </tbody></table>
+      ${_mfgEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:10px" data-mfg-act="add-tool">＋ Add tool</button>`:''}
+    </div>
+
+    <h2 class="cs-h2"><span class="cs-n">6</span>Notes</h2>
+    <div class="cs-pad">${_mfgEditing
+      ? _mfgF('notes', d.notes, {area:true, rows:3})
+      : `<div class="cs-notes-box">${d.notes?esc(d.notes):'&nbsp;'}</div>`}</div>
+
+    <h2 class="cs-h2"><span class="cs-n">7</span>Approval</h2>
+    <div class="cs-pad"><table class="cs-tbl cs-form-tbl">
+      <thead><tr><th style="width:28%">Name</th><th style="width:26%">Signature</th>
+        <th style="width:18%">Date</th><th style="width:28%">Notes</th></tr></thead>
+      <tbody>
+        <tr><td class="cs-ctr">${_mfgF('prepared_by', d.prepared_by)}<div class="cs-role">Prepared by</div></td>
+          <td class="cs-sig-cell"></td><td class="cs-ctr cs-ltr">${_mfgF('prepared_date', d.prepared_date)}</td><td></td></tr>
+        <tr><td class="cs-ctr">${_mfgF('approved_by', d.approved_by)}<div class="cs-role">Approved for production</div></td>
+          <td class="cs-sig-cell"></td><td class="cs-ctr cs-ltr">${_mfgF('approved_date', d.approved_date)}</td><td></td></tr>
+      </tbody></table>
+      <div class="cs-foot">
+        <span class="cs-ltr">${esc(d.doc_no||'')} ${esc(d.revision?('Rev '+d.revision):'')}${d.drawing_number?' · '+esc(d.drawing_number):''}</span>
+        <span class="cs-ltr">${d.edited_by?`✎ ${esc(d.edited_by)} ${esc(String(d.edited_at||'').slice(0,10))} · `:''}v${APP_VER}</span>
+      </div>
+    </div>
+  </div>`);
+
+  document.getElementById('btn-mfg-back')?.addEventListener('click',()=>renderManufacturing());
+  document.getElementById('btn-mfg-print')?.addEventListener('click',()=>window.print());
+  document.getElementById('btn-mfg-edit')?.addEventListener('click',()=>{
+    _mfgBackup=JSON.parse(JSON.stringify(mfgCurrent)); _mfgEditing=true; renderMfgDoc();
+  });
+  document.getElementById('btn-mfg-cancel')?.addEventListener('click',()=>{
+    if(!confirm('Discard unsaved changes?')) return;
+    if(_mfgBackup) mfgCurrent=_mfgBackup;
+    else { _mfgEditing=false; _mfgBackup=null; renderManufacturing(); return; }
+    _mfgBackup=null; _mfgEditing=false; renderMfgDoc();
+  });
+  document.getElementById('btn-mfg-save')?.addEventListener('click',_mfgSave);
+
+  // Structural edits collect what is typed first, so adding a row never throws
+  // away the edits already made in the other fields.
+  document.querySelectorAll('#cs-sheet [data-mfg-act]').forEach(b=>b.addEventListener('click',()=>{
+    _mfgCollect();
+    const i=parseInt(b.dataset.mfgIdx,10);
+    const d2=mfgCurrent;
+    switch(b.dataset.mfgAct){
+      case 'add-mat':  (d2.materials=d2.materials||[]).push({item:(d2.materials.length+1),part_number:'',manufacturer:'',description:'',qty:'',ref:''}); break;
+      case 'del-mat':  d2.materials.splice(i,1); break;
+      case 'add-step': (d2.steps=d2.steps||[]).push({n:(d2.steps.length+1),title:'',body:'',critical:''}); break;
+      case 'del-step': d2.steps.splice(i,1); d2.steps.forEach((s,k)=>s.n=k+1); break;
+      case 'add-chk':  (d2.inspection=d2.inspection||[]).push(''); break;
+      case 'del-chk':  d2.inspection.splice(i,1); break;
+      case 'add-tool': (d2.tools=d2.tools||[]).push({tool:'',setting:'',note:''}); break;
+      case 'del-tool': d2.tools.splice(i,1); break;
+    }
+    renderMfgDoc();
+  }));
+}
+// One generic pass over the form. Every control carries the field it writes to,
+// so there is no per-field reader to forget to update when a field is added.
+function _mfgCollect(){
+  if(!_mfgEditing || !mfgCurrent) return;
+  document.querySelectorAll('#cs-sheet [data-mfg-path]').forEach(el=>{
+    _csSetPath(mfgCurrent, el.dataset.mfgPath, el.value);
+  });
+}
+async function _mfgSave(){
+  const btn=document.getElementById('btn-mfg-save');
+  if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
+  try{
+    _mfgCollect();
+    const d=mfgCurrent;
+    if(!String(d.title||'').trim() && !String(d.doc_no||'').trim())
+      throw new Error('Give the document a title or a document number first');
+    const id=d._id || _mfgDocId(d);
+    const {_id, ...body}=d;
+    await setDoc(doc(db,'companies',companyId,'cut_strip_specs',id),
+      {...body, kind:'mfg', edited_by:currentUserEmail||'', edited_at:new Date().toISOString(),
+       updatedAt:serverTimestamp()}, {merge:false});
+    mfgCurrent._id=id;
+    logAudit('mfg_saved',{id, steps:(d.steps||[]).length},true);
+    mfgDocs=[]; _mfgEditing=false; _mfgBackup=null;
+    toast('Manufacturing instruction saved','success');
+    renderMfgDoc();
+  }catch(e){
+    logAudit('mfg_saved',{error:e.message},false);
+    toast('Save failed: '+e.message,'error');
+    if(btn){ btn.disabled=false; btn.textContent='💾 Save'; }
+  }
+}
+// Called from the Cut & Strip sheet. Opens the new document in edit mode rather
+// than saving it silently: the person who pressed the button is the one who
+// should decide what the instruction actually says.
+function _mfgFromCurrentSpec(){
+  if(!csCurrent) return;
+  mfgCurrent=_mfgFromSpec(csCurrent);
+  mfgCurrent._id=null;
+  _mfgEditing=true; _mfgBackup=null;
+  currentView='manufacturing';
+  document.getElementById('page-title').textContent='🛠️ Manufacturing Instructions';
+  const btnHome=document.getElementById('btn-home');
+  if(btnHome) btnHome.style.display='inline-flex';
+  renderMfgDoc();
+  toast('Copied from the specification — review it and save','success');
 }
 
 // ── PDF export ────────────────────────────────────────────────────────────────
