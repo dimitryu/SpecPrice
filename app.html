@@ -763,7 +763,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.42.0';
+const APP_VER   = '1.43.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -9684,16 +9684,21 @@ function _csCutLength(seg, spec){
     (seg.ends||[]).forEach(e=>{
       const js=_csJacketStrip(e);
       if(!js) return;
-      // Over the connectors, the connector body is inside the dimension but is
-      // not cable — it comes off. A body length nobody has supplied is counted
-      // as zero and reported, never guessed: an invented 30 mm is 30 mm of
-      // scrap wearing a confident face.
-      let conn=0;
       if(basis===_CS_BASIS_OVER){
+        // The dimension already spans the whole assembled harness, connector
+        // face to connector face. The cable inside each connector is therefore
+        // INSIDE the figure, not extra — so nothing is added for this end, and
+        // the connector body, which is not cable at all, comes off. A body
+        // length nobody supplied is counted as zero and reported, never
+        // guessed: an invented 30 mm is 30 mm of scrap wearing a confident face.
         const c=_csEndConnLen(e, spec);
+        let conn=0;
         if(c==null) missingConn++; else conn=c;
+        ends.push({ref:e.ref||'', mm:_csR(-conn), strip:js.mm, margin:0, conn,
+                   code:js.code, confirmed:js.confirmed});
+        return;
       }
-      ends.push({ref:e.ref||'', mm:_csR(js.mm+margin-conn), strip:js.mm, margin, conn,
+      ends.push({ref:e.ref||'', mm:_csR(js.mm+margin), strip:js.mm, margin, conn:0,
                  code:js.code, confirmed:js.confirmed});
     });
     // An end whose cost this convention already derives must not ALSO carry an
@@ -9705,9 +9710,15 @@ function _csCutLength(seg, spec){
     const costed=new Set(ends.map(e=>String(e.ref||'').toUpperCase()).filter(Boolean));
     const extra=allowances.filter(a=>!costed.has(String(a.ref||'').toUpperCase()));
     const superseded=allowances.filter(a=>costed.has(String(a.ref||'').toUpperCase()));
-    const added=_csR(ends.reduce((s,e)=>s+e.mm,0) + extra.reduce((s,a)=>s+a.mm,0) + trim);
+    let added=_csR(ends.reduce((s,e)=>s+e.mm,0) + extra.reduce((s,a)=>s+a.mm,0) + trim);
+    // A harness dimensioned over its connectors cannot come out longer than the
+    // dimension — that figure is the finished article. If allowances would push
+    // it past, the piece is held at the drawing's length and the sheet says so,
+    // rather than quietly issuing a cable that will not fit where it is going.
+    let capped=false;
+    if(basis===_CS_BASIS_OVER && added>0){ capped=true; added=0; }
     return {finished, allowances:extra, superseded, endCosts:ends, trim, added, basis,
-            datum, missingConn,
+            datum, missingConn, capped,
             total:_csR(finished+added), hasBreakdown:true,
             allConfirmed: ends.every(e=>e.confirmed) && extra.every(a=>a.confirmed)
                           && (!trim || seg.trim_allowance_confirmed===true)
@@ -9791,15 +9802,22 @@ function _csWireBuild(seg, spec){
   const all=(spec?.materials||[]).map(m=>({m, mm:_csMatLenMm(m)})).filter(x=>x.mm!=null && x.mm>0);
   if(!all.length) return null;
 
-  // Lines that are stock for this run: the part number the run names, or — when
-  // it names none the BOM carries — the wire lines.
-  const named=all.filter(x=>segPn && String(x.m.part_number||'').trim().toUpperCase()===segPn);
-  const chosen=(named.length?named:all.filter(x=>_csIsWireMaterial(x.m)))
-    .sort((a,b)=>b.mm-a.mm);
+  // EVERY wire line is stock for this harness, not just the one the run happens
+  // to name. A BOM with 12 m of black and 12 m of red builds a bundle of both;
+  // picking one of them would quietly halve the job. The run's own part number
+  // is included even when it does not read as wire, so a named reel is never
+  // missed.
+  const wires=all.filter(x=>_csIsWireMaterial(x.m));
+  const named=all.filter(x=>segPn && String(x.m.part_number||'').trim().toUpperCase()===segPn
+                            && !wires.includes(x));
+  const chosen=wires.concat(named).sort((a,b)=>b.mm-a.mm);
   if(!chosen.length) return null;
 
   const lines=chosen.map(x=>{
-    const qty=_csMatQty(x.m);
+    // A quantity multiplies the line only when the length is a field of its
+    // own. When the length WAS the quantity ("3" with unit "m"), multiplying by
+    // it again counts the same reel three times.
+    const qty=_csNum(x.m.length_mm)>0 ? _csMatQty(x.m) : 1;
     const totalMm=_csR(x.mm*qty);
     const pieces=Math.floor(totalMm/perWire);
     return {pn:String(x.m.part_number||''), description:String(x.m.description||''),
@@ -9808,13 +9826,23 @@ function _csWireBuild(seg, spec){
   if(!lines.length) return null;
 
   const pieces=lines.reduce((a,l)=>a+l.pieces,0);
+  // Two reels of two DIFFERENT wires are four black and four red, not eight of
+  // something unnamed. The bench cuts by part number, so the summary counts by
+  // part number too.
+  const byPn=[];
+  lines.forEach(l=>{
+    const key=String(l.pn||'').toUpperCase();
+    const e=byPn.find(x=>String(x.pn||'').toUpperCase()===key);
+    if(e){ e.pieces+=l.pieces; e.totalMm=_csR(e.totalMm+l.totalMm); }
+    else byPn.push({pn:l.pn, description:l.description, pieces:l.pieces, totalMm:l.totalMm});
+  });
   // One run's worth is the cable itself, not stock for several. Two or more is
   // what makes this a bundle you build rather than a cable you cut.
   if(pieces<2) return null;
 
   const conductors=(seg?.conductors||[]).length;
   return {
-    lines, pieces, perWireMm:perWire, conductors,
+    lines, byPn, pieces, perWireMm:perWire, conductors,
     stockMm: _csR(lines.reduce((a,l)=>a+l.totalMm,0)),
     usedMm:  _csR(pieces*perWire),
     leftoverMm: _csR(lines.reduce((a,l)=>a+l.leftoverMm,0)),
@@ -9834,7 +9862,9 @@ function _csCutFormula(seg, spec){
     // Each end is spelled out as strip + margin, so the operator can see both
     // numbers and check them against the strip table rather than trusting a total.
     .concat((r.endCosts||[]).map(e=>
-      `+ ${e.strip} + ${e.margin}${e.conn?` − ${e.conn}`:''} (${e.ref||e.code})`))
+      r.basis===_CS_BASIS_OVER
+        ? (e.conn ? `− ${e.conn} (${e.ref||e.code})` : '')
+        : `+ ${e.strip} + ${e.margin} (${e.ref||e.code})`).filter(Boolean))
     .concat(r.allowances.map(a=>`${a.mm<0?'−':'+'} ${Math.abs(a.mm)}${a.ref?` (${a.ref})`:''}`))
     .concat(r.trim ? [`+ ${r.trim} (${_csT('trim')})`] : []);
   return `${parts.join(' ')} = ${r.total} mm`;
@@ -10102,12 +10132,19 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "The Length column is what you CUT. It is worked out from the drawing’s dimension and from what that dimension measures — stated per run below. Strip is jacket / conductor.":"עמודת האורך היא מה שחותכים. היא מחושבת מהמידה שבסרטוט ומהאופן שבו המידה נלקחת — מצוין לכל מקטע למטה. החשיפה היא מעטפת / מוליך.",
+    "The harness is made of":"הצמה מורכבת מ",
+    "each":"כל אחד",
+    "total":"סה\"כ",
+    "wires":"גידים",
+    "The dimension is the finished harness, connectors included — so nothing is added for the ends, each connector body comes OFF, and the piece is never cut longer than the drawn length.":"המידה היא הצמה המוגמרת כולל המחברים — לכן לא מתווסף דבר עבור הקצוות, אורך גוף כל מחבר יורד, והחתיכה לעולם לא נחתכת ארוכה מהמידה שבסרטוט.",
+    "connector(s) — nothing was subtracted for them, so the piece is cut to the full drawn length.":"מחברים — לא הופחת עבורם דבר, ולכן החתיכה נחתכת לאורך המלא שבסרטוט.",
+    "Allowances were held back to keep the piece within the drawn length.":"התוספות נעצרו כדי שהחתיכה לא תעבור את המידה שבסרטוט.",
     "Datasheet":"דף נתונים",
     "Cut the stock below into pieces, then lay the pieces together into the harness.":"לחתוך את החומר שלמטה לחתיכות, ואז להרכיב מהן את הצמה.",
     "On the BOM":"ב-BOM",
     "Cut into":"לחתוך ל-",
     "Left over":"נשאר",
-    "The harness is":"הצמה מורכבת מ-",
     "the wiring table lists":"בטבלת החיווט רשומים",
     "conductors":"מוליכים",
     "The BOM gives":"מה-BOM יוצאות",
@@ -10160,9 +10197,7 @@ const _CS_LABELS={
     "over the connectors, face to face":"כולל המחברים, מפאה לפאה",
     "the drawing does not say":"הסרטוט לא מציין",
     "assumed — the drawing does not say":"הנחה — הסרטוט לא מציין",
-    "Measured over the connectors, so each connector body comes OFF the cut length.":"נמדד כולל המחברים, ולכן אורך גוף כל מחבר יורד מאורך החיתוך.",
     "No body length is on file for":"אין אורך גוף רשום עבור",
-    "connector(s) — nothing was subtracted for them. Fill it in before cutting.":"מחברים — לא הופחת עבורם דבר. יש למלא לפני החיתוך.",
     "The drawing does not say where the length is measured from":"הסרטוט לא מציין מהיכן נמדד האורך",
     "The shop default was used — to the jacket end at each end, with the connector allowance added. If this drawing dimensions over the connectors instead, the cable is SHORTER than the figure above: set it in Edit before anyone cuts.":"נלקחה ברירת המחדל של המפעל — עד קצה המעטפת בכל צד, עם תוספת המחבר. אם בסרטוט הזה המידה נלקחת כולל המחברים, הכבל קצר מהמספר שלמעלה: יש לשנות בעריכה לפני שחותכים.",
     "This is not a ready-made cable — it is built from individual wires":"זה לא כבל מוכן — הוא נבנה מחוטים בודדים",
@@ -10205,7 +10240,6 @@ const _CS_LABELS={
     "Strip detail":"פירוט חשיפה",
     "Value":"ערך",
     "cut":"חיתוך",
-    "Length is the length to CUT — it already includes the connector allowances and the trim. Strip is jacket / conductor.":"האורך הוא האורך לחיתוך — הוא כבר כולל את תוספות המחברים ואת הקיצוץ. החשיפה היא מעטפת / מוליך.",
     // The wire-end figure. Kept short — it is drawn inside the picture.
     "WIRE END PREPARATION":"הכנת קצה חוט",
     "STRIP INSULATION ONLY — DO NOT CUT OR NICK CONDUCTOR STRANDS":"חשיפת בידוד בלבד — אין לחתוך או לפגוע בגידי המוליך",
@@ -10391,11 +10425,14 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    "The harness is made of":"Жгут состоит из",
+    "each":"каждый",
+    "total":"всего",
+    "wires":"проводов",
     "Datasheet":"Техдокументация",
     "On the BOM":"По BOM",
     "Cut into":"Разрезать на",
     "Left over":"Остаток",
-    "The harness is":"Жгут состоит из",
     "conductors":"проводников",
     "Contact":"Контакт",
     "Manufacturing instructions":"Инструкции по изготовлению",
@@ -11291,8 +11328,12 @@ RULES — these matter more than completeness:
    READ THE DIMENSION LINE BEFORE YOU DECIDE THE BASIS. This is the single most expensive field on the
    sheet, so decide it from what the drawing actually shows, not from habit:
      - arrows landing on the OUTER FACES of the two connectors, or on the extreme ends of the assembled
-       harness → "over_connectors". Also give each connector's "body_length_mm", because the cable is
-       shorter than the dimension by exactly those lengths and the app subtracts them.
+       harness → "over_connectors". This is the common case on a finished-harness drawing: one long
+       dimension across the whole picture, from the back of one connector to the back of the other,
+       with the connectors drawn inside it. Also give each connector's "body_length_mm", because the
+       cable is shorter than the dimension by exactly those lengths and the app subtracts them. Under
+       this basis the app adds NOTHING for the ends and never issues a piece longer than the dimension
+       — the figure is the finished article, so do not put end allowances in "allowances" either.
      - arrows landing where the JACKET ENDS / at the back of each backshell → "to_jacket_end".
      - a note such as "cable length", "wire length", "cut length", or a dimension on a bare cable with
        no connectors drawn → "cable_only".
@@ -12653,7 +12694,7 @@ function renderCutStripSheet(){
           <td></td><td></td>
         </tr>`).join('')}</tbody>
       </table>
-      <p class="cs-note">${esc(T('Length is the length to CUT — it already includes the connector allowances and the trim. Strip is jacket / conductor.'))}</p>
+      <p class="cs-note">${esc(T('The Length column is what you CUT. It is worked out from the drawing\u2019s dimension and from what that dimension measures — stated per run below. Strip is jacket / conductor.'))}</p>
 
       ${_csSegments(spec).map((seg,si)=>{
         const cut=_csCutLength(seg, spec);
@@ -12672,9 +12713,10 @@ function renderCutStripSheet(){
           ${d.stated ? '' : `<span class="cs-tag cs-tbc">${esc(T('assumed — the drawing does not say'))}</span>`}
         </div>
         ${d.basis===_CS_BASIS_OVER ? `<p class="cs-note">${
-          esc(T('Measured over the connectors, so each connector body comes OFF the cut length.'))}${
+          esc(T('The dimension is the finished harness, connectors included — so nothing is added for the ends, each connector body comes OFF, and the piece is never cut longer than the drawn length.'))}${
           cut.missingConn?` <b style="color:#B91C1C">${esc(T('No body length is on file for'))} ${cut.missingConn} ${
-          esc(T('connector(s) — nothing was subtracted for them. Fill it in before cutting.'))}</b>`:''}</p>` : ''}
+          esc(T('connector(s) — nothing was subtracted for them, so the piece is cut to the full drawn length.'))}</b>`:''}${
+          cut.capped?` <b>${esc(T('Allowances were held back to keep the piece within the drawn length.'))}</b>`:''}</p>` : ''}
         ${!d.stated ? `<div class="cs-box cs-warn">
           <b>${esc(T('The drawing does not say where the length is measured from'))}</b>
           <p>${esc(T('The shop default was used — to the jacket end at each end, with the connector allowance added. If this drawing dimensions over the connectors instead, the cable is SHORTER than the figure above: set it in Edit before anyone cuts.'))}</p>
@@ -12694,9 +12736,11 @@ function renderCutStripSheet(){
               <td class="cs-ctr cs-ltr" style="white-space:nowrap"><span style="font-size:16px;font-weight:800">${l.pieces}</span> × <span style="font-size:16px;font-weight:800;color:#7C2D12">${_csMM(build.perWireMm)}</span></td>
               <td class="cs-ctr cs-ltr">${l.leftoverMm?_csMM(l.leftoverMm):'—'}</td>
             </tr>`).join('')}</tbody></table>
-          <p style="font-size:14px"><b>${esc(T('The harness is'))} ${build.pieces} ${
-            esc(T('wires of'))} <span class="cs-ltr">${esc(_csMM(build.perWireMm))}</span></b>
-            ${build.conductors?` — ${esc(T('the wiring table lists'))} ${build.conductors} ${esc(T('conductors'))}`:''}.</p>
+          <p style="font-size:14px"><b>${esc(T('The harness is made of'))}:</b>
+            ${build.byPn.map(b=>`<span class="cs-ltr" style="font-weight:800;white-space:nowrap">${b.pieces} × ${esc(b.pn||'—')}</span>`).join(' &nbsp;+&nbsp; ')}
+            — ${esc(T('each'))} <span class="cs-ltr" style="font-weight:800">${esc(_csMM(build.perWireMm))}</span>
+            (${esc(T('total'))} ${build.pieces} ${esc(T('wires'))})
+            ${build.conductors?` · ${esc(T('the wiring table lists'))} ${build.conductors} ${esc(T('conductors'))}`:''}</p>
           ${build.conductorMismatch?`<p style="color:#B91C1C;font-weight:700">${
             esc(T('The BOM gives'))} ${build.pieces} ${esc(T('pieces but the wiring table lists'))} ${build.conductorMismatch} —
             ${esc(T('one of the two is wrong. Resolve it before cutting.'))}</p>`:''}

@@ -1501,15 +1501,29 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   const j=mk('to_jacket_end');
   t('datum: to the jacket end adds both ends', cut(j.segments[0], j).total, 4023);   // 4000 + (10+1.5)*2
 
-  // Over the connectors: the connector bodies are INSIDE the dimension, so the
-  // cable is shorter by exactly those lengths.
+  // Over the connectors the dimension is the FINISHED harness: the cable inside
+  // each connector is already inside the figure, so nothing is added for an
+  // end, and the connector bodies — which are not cable — come off.
   const o=mk('over_connectors');
   const ro=cut(o.segments[0], o);
-  t('datum: over the connectors subtracts the bodies', ro.total, 3973);             // 4023 − 30 − 20
-  t('datum: ...and each end says what came off', ro.endCosts.map(e=>e.conn), [30,20]);
+  t('datum: over the connectors subtracts the bodies', ro.total, 3950);   // 4000 − 30 − 20
+  t('datum: ...and adds nothing for the strips', ro.endCosts.every(e=>e.margin===0), true);
+  t('datum: ...each end says what came off', ro.endCosts.map(e=>e.conn), [30,20]);
   ok('datum: the formula shows the subtraction', /− 30 \(P1\)/.test(formula(o.segments[0], o)));
+  ok('datum: the cut can never exceed the drawn length', ro.total <= 4000);
   ok('datum: over the connectors is SHORTER than to the jacket end',
      ro.total < cut(j.segments[0], j).total);
+
+  // The case from the shop's own drawing: 3000 over the connectors, nobody has
+  // filled in a body length yet. The piece must come out at 3000, never more.
+  const shop={cut_model:MODEL, connectors:[{ref:'P1'},{ref:'P2'}],
+    segments:[{id:'S1', finished_length_mm:3000, length_basis:'over_connectors',
+      trim_allowance_mm:10,
+      ends:[{ref:'P1', strip:[{code:'A', value_mm:50, confirmed:true}]},
+            {ref:'P2', strip:[{code:'A', value_mm:50, confirmed:true}]}]}]};
+  const rs=cut(shop.segments[0], shop);
+  t('datum: a 3000 harness is cut at 3000, not longer', rs.total, 3000);
+  t('datum: ...and the sheet says the allowances were held back', rs.capped, true);
 
   // A body length nobody supplied is reported, never invented.
   const missing=mk('over_connectors');
@@ -1602,6 +1616,30 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   const b3=build(s3.segments[0], s3);
   t('wires: four pieces against three conductors is flagged', b3.conductorMismatch, 3);
   t('wires: ...and the piece count is still what the BOM gives', b3.pieces, 4);
+
+  // The drawing that prompted this: 12 m of black AND 12 m of red, a 3 m
+  // harness. Four of each — not eight of something unnamed, and not four
+  // because only one line was looked at.
+  const shop={cut_model:MODEL,
+    materials:[
+      {item:7, part_number:'55A0111-22-0', description:'Wire 22 AWG Black', qty:'12', unit:'m'},
+      {item:8, part_number:'55A0111-22-2', description:'Wire 22 AWG Red',   qty:'12', unit:'m'},
+      {item:10, part_number:'DR-25-1/4-0-SP', description:'Heat Shrink Tubing', qty:'3', unit:'m'},
+      {item:1, part_number:'TV06RW1135PF472A', description:'13 Pos Circ Conn Plug', qty:'1', unit:'pc'}],
+    connectors:[{ref:'P1'},{ref:'P2'}],
+    segments:[{id:'S1', finished_length_mm:3000, length_basis:'over_connectors',
+      ends:[{ref:'P1', strip:[{code:'A', value_mm:50, confirmed:true}]},
+            {ref:'P2', strip:[{code:'A', value_mm:50, confirmed:true}]}]}]};
+  const bs=build(shop.segments[0], shop);
+  ok('wires: the shop drawing is recognised as a built harness', !!bs);
+  t('wires: each piece is the 3 m the drawing gives', bs.perWireMm, 3000);
+  t('wires: both wire reels are used, not just one', bs.lines.length, 2);
+  t('wires: four pieces from each', bs.lines.map(l=>l.pieces), [4,4]);
+  t('wires: counted by part number', bs.byPn.map(b=>[b.pn,b.pieces]),
+    [['55A0111-22-0',4],['55A0111-22-2',4]]);
+  t('wires: eight wires in the bundle', bs.pieces, 8);
+  t('wires: the heat-shrink is not wire', bs.lines.some(l=>/DR-25/.test(l.pn)), false);
+  t('wires: a metre quantity is not multiplied by itself', bs.lines[0].totalMm, 12000);
 
   const s4=spec(12000,3); s4.materials=[];
   t('wires: no BOM length, no instruction', build(s4.segments[0], s4), null);
