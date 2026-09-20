@@ -1421,27 +1421,25 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
     /C = 8 mm/.test(wire(der.segments[0], der.segments[0].ends[0], der)), false);
 }
 
-// ──────────────────────────── 32b. where to read up on a connector
+// ──────────────────────────── 32b. the connector's datasheet
 {
-  const chips=G('_csLinkChips'), links=G('_csPartLinks'), safe=G('_csSafeUrl'),
-        search=G('_csSearchLinks');
+  const link=G('_csDatasheetLink'), safe=G('_csSafeUrl');
 
-  t('links: no part number, no links', links('', '', ''), []);
-  t('links: a part number always gets the searches', search('TV06RW1135SF472A').length, 3);
-  ok('links: ...url-encoded', search('M22759/16-22').every(l=>/%2F/.test(l.url)));
-  t('links: a real product page comes first',
-    links('X','https://www.mouser.com/p/1','Mouser')[0].name, 'Mouser');
-  t('links: ...and is not a search', links('X','https://www.mouser.com/p/1','Mouser')[0].search, false);
+  // A link only ever exists when a real datasheet URL was returned for that
+  // part. No pattern-built URLs, no search pages standing in for a datasheet.
+  t('datasheet: nothing on file, nothing printed', link('', ''), '');
+  t('datasheet: ...and an empty value is not a link', link(null, 'Mouser'), '');
+  ok('datasheet: a real url is printed as a link',
+     /href="https:\/\/www\.mouser\.com\/ds\/1\.pdf"/.test(link('https://www.mouser.com/ds/1.pdf','Mouser')));
+  ok('datasheet: it opens in its own tab, with no window handle back',
+     /rel="noopener noreferrer"/.test(link('https://x.test/a.pdf','')));
 
   // A stored url is data. Data that arrives as a script is not a link.
-  t('links: javascript: is not a url', safe('javascript:alert(1)'), '');
-  t('links: data: is not a url', safe('data:text/html,<script>'), '');
-  t('links: a plain http url is', safe('http://x.test/a'), 'http://x.test/a');
-  t('links: whitespace-smuggled markup is not', safe('https://x.test/a" onclick="x'), '');
-  t('links: a refused url is simply left out',
-    links('X','javascript:alert(1)','Mouser').filter(l=>!l.search).length, 0);
-  ok('links: the chips escape what they print',
-     !/<img/.test(chips('<img src=x>', '', '')));
+  t('datasheet: javascript: is not a url', safe('javascript:alert(1)'), '');
+  t('datasheet: data: is not a url', safe('data:text/html,<script>'), '');
+  t('datasheet: a plain http url is', safe('http://x.test/a'), 'http://x.test/a');
+  t('datasheet: quote-smuggled markup is not', safe('https://x.test/a" onclick="x'), '');
+  t('datasheet: ...and is dropped rather than printed', link('https://x.test/a" onclick="x',''), '');
 }
 
 // ──────────────────────────── 33. manufacturing instructions
@@ -1558,36 +1556,52 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
     cut_model:MODEL,
     materials:[{item:1, part_number:'M22759/16-22-9', description:'WIRE 22AWG', length_mm:matLen}],
     connectors:[{ref:'P1'},{ref:'P2'}],
-    segments:[{id:'S1', finished_length_mm:4000, length_basis:'cable_only',
+    segments:[{id:'S1', finished_length_mm:3000, length_basis:'cable_only',
       cable_part_number:'M22759/16-22-9',
       conductors:Array.from({length:conductors},(_,i)=>({name:'W'+i})),
       ends:[{ref:'P1', strip:[]},{ref:'P2', strip:[]}]}]});
 
-  // 12 m of wire against a 4 m run is three wires, not a 12 m cable.
-  const s1=spec(12000,3);
+  // 12 m of wire against a 3 m run is FOUR pieces, and the harness is those
+  // four pieces — the instruction the bench needs, not "you need 12 m".
+  const s1=spec(12000,4);
   const b=build(s1.segments[0], s1);
   ok('wires: it is spotted', !!b);
-  t('wires: one piece per conductor', b.count, 3);
-  t('wires: ...each the run length', b.perWireMm, 4000);
-  t('wires: the total the store must issue', b.requiredMm, 12000);
-  t('wires: nothing is short', b.shortMm, 0);
-  t('wires: the count came from the wiring table', b.countFrom, 'conductors');
+  t('wires: the reel is divided by the run length', b.pieces, 4);
+  t('wires: ...each piece the run length', b.perWireMm, 3000);
+  t('wires: one BOM line, one row', b.lines.length, 1);
+  t('wires: ...showing its own division', [b.lines[0].totalMm, b.lines[0].pieces], [12000, 4]);
+  t('wires: nothing is wasted here', b.leftoverMm, 0);
+  t('wires: the wiring table agrees, so nothing is flagged', b.conductorMismatch, 0);
+
+  // Two 12 m lines make eight pieces — the case that used to come out as four.
+  const s2=spec(12000,8);
+  s2.materials.push({item:2, part_number:'M22759/16-22-9', description:'WIRE 22AWG', length_mm:12000});
+  const b2=build(s2.segments[0], s2);
+  t('wires: two reels, two rows', b2.lines.length, 2);
+  t('wires: ...and eight pieces between them', b2.pieces, 8);
+  t('wires: the stock is the sum of the lines', b2.stockMm, 24000);
+
+  // A quantity on the line multiplies it.
+  const s2b=spec(12000,8);
+  s2b.materials[0].qty=2;
+  t('wires: a quantity of two is two reels', build(s2b.segments[0], s2b).pieces, 8);
+
+  // A reel that does not divide evenly leaves an offcut, and says how much.
+  const s2c=spec(10000,3);
+  const b2c=build(s2c.segments[0], s2c);
+  t('wires: three pieces out of ten metres', b2c.pieces, 3);
+  t('wires: ...with a metre left over', b2c.leftoverMm, 1000);
 
   // One run's worth of cable is an ordinary cable, not stock for several.
-  t('wires: a ready-made cable is left alone', build(spec(4000,3).segments[0], spec(4000,3)), null);
-  t('wires: ...and so is a little extra for waste', build(spec(4300,3).segments[0], spec(4300,3)), null);
+  t('wires: a ready-made cable is left alone', build(spec(3000,1).segments[0], spec(3000,1)), null);
+  t('wires: ...and so is a little extra for waste', build(spec(3300,1).segments[0], spec(3300,1)), null);
 
-  // Without a wiring table the ratio decides.
-  const s2=spec(16000,0);
-  const b2=build(s2.segments[0], s2);
-  t('wires: the ratio answers when the drawing has no wiring table', b2.count, 4);
-  t('wires: ...and says so', b2.countFrom, 'ratio');
-
-  // The BOM being short of what the conductor count needs is worth shouting about.
-  const s3=spec(10000,3);
+  // The reels and the wiring table disagreeing is not the operator's problem
+  // to discover with the reel already cut.
+  const s3=spec(12000,3);
   const b3=build(s3.segments[0], s3);
-  t('wires: a BOM that cannot cover the wires is flagged', b3.shortMm, 2000);
-  t('wires: ...and the disagreement is named', b3.ratioMismatch, 3 === Math.round(10000/4000) ? 0 : Math.round(10000/4000));
+  t('wires: four pieces against three conductors is flagged', b3.conductorMismatch, 3);
+  t('wires: ...and the piece count is still what the BOM gives', b3.pieces, 4);
 
   const s4=spec(12000,3); s4.materials=[];
   t('wires: no BOM length, no instruction', build(s4.segments[0], s4), null);

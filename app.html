@@ -763,7 +763,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.41.0';
+const APP_VER   = '1.42.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -4802,6 +4802,9 @@ async function lookupPartPrices(partNumber, qty=0, desc=''){
   // exist and where?", and dropping it was reporting real parts as missing.
   const norm=v=>v ? {
     price:+v.price||0, stock:v.stock||'0', url:v.url||'', mpn:v.mpn||'',
+    // The vendor's link to the manufacturer's datasheet. Absent on an older
+    // deployment of the price function, which simply means no datasheet link.
+    datasheet:v.datasheet||'',
     manufacturer:v.manufacturer||'',
     breakQty:v.breakQty||0, exact:v.exactMatch!==false, status:v.status||'',
     // How many products shared this part number, and how well the winner's
@@ -9769,44 +9772,59 @@ function _csIsWireMaterial(m){
   const d=String(m.description||'')+' '+String(m.part_number||'');
   return _CS_WIRE_RE.test(d) && !_CS_CABLE_RE.test(d);
 }
-// Returns null when this run is an ordinary ready-made cable — which is most of
-// them — and the build instruction when it is not.
+// How many pieces come off each BOM line, and what the bundle then contains.
+//
+// The instruction the bench needs is not "you need 12 m of wire". It is: this
+// 12 m reel gives you FOUR pieces of 3 m, and the harness is those pieces laid
+// together. Two 12 m lines on the BOM make eight. So every wire line is counted
+// separately, its own division is shown, and the totals are the sum — which is
+// also the only way the arithmetic stays checkable when the lines differ.
+function _csMatQty(m){
+  const n=_csNum(m && m.qty);
+  return (n!=null && n>0 && n<1000) ? n : 1;   // a qty that IS a length is handled by _csMatLenMm
+}
 function _csWireBuild(seg, spec){
   const perWire=_csNum(_csCutLength(seg, spec).total);
   if(perWire==null || perWire<=0) return null;
-  const mats=(spec?.materials||[]).map(m=>({m, mm:_csMatLenMm(m)})).filter(x=>x.mm!=null && x.mm>0);
-  if(!mats.length) return null;
 
   const segPn=String(seg?.cable_part_number||'').trim().toUpperCase();
-  // Prefer the line this run names; otherwise the longest wire line on the BOM.
-  const named=mats.find(x=>String(x.m.part_number||'').trim().toUpperCase()===segPn && segPn);
-  const wires=mats.filter(x=>_csIsWireMaterial(x.m));
-  const pick=named || wires.sort((a,b)=>b.mm-a.mm)[0];
-  if(!pick) return null;
+  const all=(spec?.materials||[]).map(m=>({m, mm:_csMatLenMm(m)})).filter(x=>x.mm!=null && x.mm>0);
+  if(!all.length) return null;
 
-  // One run's worth (plus a little) is the cable itself, not stock for several.
-  if(pick.mm < perWire*1.5) return null;
+  // Lines that are stock for this run: the part number the run names, or — when
+  // it names none the BOM carries — the wire lines.
+  const named=all.filter(x=>segPn && String(x.m.part_number||'').trim().toUpperCase()===segPn);
+  const chosen=(named.length?named:all.filter(x=>_csIsWireMaterial(x.m)))
+    .sort((a,b)=>b.mm-a.mm);
+  if(!chosen.length) return null;
+
+  const lines=chosen.map(x=>{
+    const qty=_csMatQty(x.m);
+    const totalMm=_csR(x.mm*qty);
+    const pieces=Math.floor(totalMm/perWire);
+    return {pn:String(x.m.part_number||''), description:String(x.m.description||''),
+            reelMm:x.mm, qty, totalMm, pieces, leftoverMm:_csR(totalMm-pieces*perWire)};
+  }).filter(l=>l.pieces>0);
+  if(!lines.length) return null;
+
+  const pieces=lines.reduce((a,l)=>a+l.pieces,0);
+  // One run's worth is the cable itself, not stock for several. Two or more is
+  // what makes this a bundle you build rather than a cable you cut.
+  if(pieces<2) return null;
 
   const conductors=(seg?.conductors||[]).length;
-  const byRatio=Math.round(pick.mm/perWire);
-  const count=conductors>0 ? conductors : byRatio;
-  if(!(count>1)) return null;
-
-  const required=_csR(count*perWire);
   return {
-    pn: String(pick.m.part_number||''),
-    description: String(pick.m.description||''),
-    stockMm: pick.mm,
-    perWireMm: perWire,
-    count,
-    countFrom: conductors>0 ? 'conductors' : 'ratio',
-    requiredMm: required,
-    shortMm: required>pick.mm ? _csR(required-pick.mm) : 0,
-    spareMm: pick.mm>required ? _csR(pick.mm-required) : 0,
-    // The ratio and the wiring table disagreeing is worth saying out loud: one
-    // of the two is wrong, and the operator should not be the one to discover
-    // which, with the reel already cut.
-    ratioMismatch: conductors>0 && byRatio!==conductors ? byRatio : 0,
+    lines, pieces, perWireMm:perWire, conductors,
+    stockMm: _csR(lines.reduce((a,l)=>a+l.totalMm,0)),
+    usedMm:  _csR(pieces*perWire),
+    leftoverMm: _csR(lines.reduce((a,l)=>a+l.leftoverMm,0)),
+    // The wiring table and the reels disagreeing is worth saying out loud: one
+    // of the two is wrong, and the operator should not be the one to find out
+    // with the reel already cut.
+    conductorMismatch: conductors>0 && conductors!==pieces ? conductors : 0,
+    // The single-line case reads better as "cut the 12 m into 4", which is what
+    // the shop actually says.
+    single: lines.length===1,
   };
 }
 function _csCutFormula(seg, spec){
@@ -10084,14 +10102,19 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
-    "Datasheet / supplier":"דף נתונים / ספק",
-    "Find links":"חפש קישורים",
-    "Ask the distributor APIs for each connector’s product page":"לבקש מה-API של הספקים את דף המוצר של כל מחבר",
-    "Search":"חיפוש ב-",
+    "Datasheet":"דף נתונים",
+    "Cut the stock below into pieces, then lay the pieces together into the harness.":"לחתוך את החומר שלמטה לחתיכות, ואז להרכיב מהן את הצמה.",
+    "On the BOM":"ב-BOM",
+    "Cut into":"לחתוך ל-",
+    "Left over":"נשאר",
+    "The harness is":"הצמה מורכבת מ-",
+    "the wiring table lists":"בטבלת החיווט רשומים",
+    "conductors":"מוליכים",
+    "The BOM gives":"מה-BOM יוצאות",
+    "pieces but the wiring table lists":"חתיכות אבל בטבלת החיווט רשומים",
+    "The signature column is for a pen — type initials here only if your process accepts a typed name.":"עמודת החתימה מיועדת לחתימה בעט — להקליד שם כאן רק אם התהליך שלכם מאשר שם מוקלד.",
+    "Looking up connector datasheets…":"מחפש דפי נתונים למחברים…",
     "Contact":"מגע",
-    "No connector part numbers on this sheet":"אין מק\"טי מחברים בדף הזה",
-    "product page(s) found":"דפי מוצר נמצאו",
-    "No product page was found — the search links still work":"לא נמצא דף מוצר — קישורי החיפוש עדיין עובדים",
     "Manufacturing instructions":"הוראות יצור",
     "Document":"מסמך",
     "Doc no.":"מס' מסמך",
@@ -10182,8 +10205,6 @@ const _CS_LABELS={
     "Strip detail":"פירוט חשיפה",
     "Value":"ערך",
     "cut":"חיתוך",
-    "To Manufacturing":"להוראות יצור",
-    "Copy the material list, operation steps, inspection checks and tooling into a manufacturing instruction":"להעתיק את רשימת החומרים, שלבי העבודה, הבדיקות והכלים למסמך הוראות יצור",
     "Length is the length to CUT — it already includes the connector allowances and the trim. Strip is jacket / conductor.":"האורך הוא האורך לחיתוך — הוא כבר כולל את תוספות המחברים ואת הקיצוץ. החשיפה היא מעטפת / מוליך.",
     // The wire-end figure. Kept short — it is drawn inside the picture.
     "WIRE END PREPARATION":"הכנת קצה חוט",
@@ -10370,11 +10391,13 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
-    "Datasheet / supplier":"Техдокументация / поставщик",
-    "Find links":"Найти ссылки",
-    "Search":"Поиск ",
+    "Datasheet":"Техдокументация",
+    "On the BOM":"По BOM",
+    "Cut into":"Разрезать на",
+    "Left over":"Остаток",
+    "The harness is":"Жгут состоит из",
+    "conductors":"проводников",
     "Contact":"Контакт",
-    "product page(s) found":"страниц товара найдено",
     "Manufacturing instructions":"Инструкции по изготовлению",
     "Document":"Документ",
     "Doc no.":"№ документа",
@@ -12200,6 +12223,16 @@ async function handleCSFile(file){
     spec.source_file=file.name;
     spec.spec_no='CS-'+_csDocId(spec.drawing_number)+'-01';
 
+    // The datasheets are fetched here, while the operator is already waiting on
+    // the analysis, rather than behind a button nobody remembers to press. It
+    // is best-effort: anything the distributors do not know about simply has no
+    // link, and a failure never costs the analysis.
+    setM('Looking up connector datasheets…',86);
+    try{
+      const n=await _csAttachDatasheets(spec,(d,t)=>setM(`Looking up connector datasheets… ${d}/${t}`, 86+Math.round(d/t*3)));
+      if(n) logAudit('cut_strip_datasheets',{drawing:spec.drawing_number, found:n},true);
+    }catch(e){ console.warn('[CutStrip] datasheets', e.message); }
+
     setM('Saving…',90);
     const id=_csDocId(spec.drawing_number);
     await setDoc(doc(db,'companies',companyId,'cut_strip_specs',id),
@@ -12285,96 +12318,52 @@ function _csFormRows(spec){
 }
 
 
-// ── Where to read up on a connector ──────────────────────────────────────────
+// ── The connector's datasheet ────────────────────────────────────────────────
 // A part number on a form is a dead end: the person holding it still has to go
-// and find the datasheet that says how deep the contact seats and how far back
-// to strip. So every connector on the form carries links.
+// and find the sheet that says how deep the contact seats and how far back to
+// strip. So the analysis looks the datasheet up while it is already working,
+// and the form carries the link.
 //
-// Two kinds, and the difference matters. A SEARCH link is built from the part
-// number and always works, because the distributor does the finding. A PRODUCT
-// link is the real page, and it is only ever stored after the distributor's own
-// API returned it for that exact part — never guessed from a pattern, because a
-// fabricated URL that 404s costs more time than no link at all.
-// Plain data, not builders: the search prefix and the part number, joined and
-// encoded in one place.
-const _CS_SEARCH_SITES=[
-  {name:'Mouser',   base:'https://www.mouser.com/c/?q='},
-  {name:'DigiKey',  base:'https://www.digikey.com/en/products/result?keywords='},
-  {name:'Octopart', base:'https://octopart.com/search?q='},
-];
-// Only http(s) is ever put in an href — a stored value is data, and data that
-// arrives as javascript: is an attack, not a link.
+// Only a REAL datasheet URL, returned by the distributor's own API for that
+// exact part, is ever stored. Nothing is built from a URL pattern and nothing
+// is asked of the AI: a fabricated link that 404s costs more time at the bench
+// than no link at all. A part with no datasheet on file simply has no link.
 function _csSafeUrl(u){
   const s=String(u||'').trim();
   return /^https?:\/\/[^\s"'<>]+$/i.test(s) ? s : '';
 }
-function _csSearchLinks(pn){
-  const p=String(pn||'').trim();
-  if(!p) return [];
-  return _CS_SEARCH_SITES.map(s=>({name:s.name, url:s.base+encodeURIComponent(p), search:true}));
+function _csDatasheetLink(url, vendor){
+  const u=_csSafeUrl(url);
+  if(!u) return '';
+  return `<a class="cs-link" href="${esc(u)}" target="_blank" rel="noopener noreferrer"
+     title="${esc(_csT('Datasheet'))}${vendor?` — ${esc(vendor)}`:''}">\uD83D\uDCC4 ${esc(_csT('Datasheet'))}</a>`;
 }
-// What the form prints for one part number: the real page first when we have
-// one, then the searches.
-function _csPartLinks(pn, stored, vendor){
-  const p=String(pn||'').trim();
-  if(!p) return [];
-  const real=_csSafeUrl(stored);
-  return (real ? [{name:String(vendor||'Product page'), url:real, search:false}] : [])
-    .concat(_csSearchLinks(p));
-}
-function _csLinkChips(pn, stored, vendor){
-  const links=_csPartLinks(pn, stored, vendor);
-  if(!links.length) return '';
-  return `<div class="cs-links">${links.map(l=>
-    `<a class="cs-link${l.search?' cs-link-s':''}" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer"
-        title="${esc(l.search?`${_csT('Search')} ${l.name} — ${pn}`:`${l.name} — ${pn}`)}">${
-        l.search?'🔎':'🔗'} ${esc(l.name)}</a>`).join('')}</div>`;
-}
-// Asks the distributor APIs for the real product page of every connector and
-// contact on the sheet, and saves what comes back. Parts nobody stocks simply
-// keep their search links — that is a legitimate answer for a MIL connector,
-// not a failure worth an error.
-async function _csFetchConnectorLinks(){
-  const spec=csCurrent;
-  if(!spec) return;
-  const btn=document.getElementById('btn-cs-links');
-  const conns=_csConnectors(spec);
+// Best-effort, and deliberately silent: a drawing analysis must not fail, or
+// even slow down noticeably, because a distributor API was having a bad minute.
+async function _csAttachDatasheets(spec, onProgress){
+  const conns=Array.isArray(spec?.connectors) ? spec.connectors : [];
   const jobs=[];
   conns.forEach((c,i)=>{
-    if(String(c.part_number||'').trim()) jobs.push({i, field:'product_url', pn:c.part_number, desc:c.description||''});
-    if(String(c.contact_pn||'').trim()) jobs.push({i, field:'contact_url', pn:c.contact_pn, desc:'contact'});
+    if(String(c.part_number||'').trim()) jobs.push({i, field:'datasheet_url', pn:c.part_number, desc:c.description||''});
+    if(String(c.contact_pn||'').trim()) jobs.push({i, field:'contact_datasheet_url', pn:c.contact_pn, desc:'contact'});
   });
-  if(!jobs.length){ toast(_csT('No connector part numbers on this sheet'),'error'); return; }
-  if(btn){ btn.disabled=true; btn.textContent='…'; }
-  let found=0;
+  if(!jobs.length) return 0;
+  let found=0, done=0;
   for(const j of jobs){
     try{
       const r=await lookupPartPrices(j.pn, 1, j.desc);
-      const hit=(r.listed||[]).find(v=>_csSafeUrl(v.url));
+      const hit=(r.listed||[]).find(v=>_csSafeUrl(v.datasheet));
       if(hit){
-        const target=spec.connectors[j.i];
-        if(target){
-          target[j.field]=hit.url;
-          target[j.field+'_vendor']=hit.name||'';
-          if(!target.manufacturer && hit.manufacturer) target.manufacturer=hit.manufacturer;
-          found++;
-        }
+        conns[j.i][j.field]=hit.datasheet;
+        conns[j.i][j.field+'_vendor']=hit.name||'';
+        if(!conns[j.i].manufacturer && hit.manufacturer) conns[j.i].manufacturer=hit.manufacturer;
+        found++;
       }
-    }catch(e){ console.warn('[CutStrip] link lookup', j.pn, e.message); }
+    }catch(e){ console.warn('[CutStrip] datasheet lookup', j.pn, e.message); }
+    done++;
+    if(onProgress) onProgress(done, jobs.length);
   }
-  if(found){
-    try{
-      const {_id, ...body}=spec;
-      await setDoc(doc(db,'companies',companyId,'cut_strip_specs',_id),
-        {...body, updatedAt:serverTimestamp()}, {merge:false});
-      csSpecs=[];
-    }catch(e){ toast('Save failed: '+e.message,'error'); }
-  }
-  logAudit('cut_strip_links',{drawing:spec.drawing_number, asked:jobs.length, found},true);
-  toast(found ? `${found} ${_csT('product page(s) found')}` : _csT('No product page was found — the search links still work'),
-        found?'success':'info');
-  if(btn){ btn.disabled=false; }
-  renderCutStripSheet();
+  return found;
 }
 
 // ── Rendering: the sheet ──────────────────────────────────────────────────────
@@ -12547,8 +12536,6 @@ function renderCutStripSheet(){
       ${['en','he','ru'].map(L=>`<button class="btn btn-sm ${_csLang===L?'btn-blue':'btn-ghost'}"
           data-cs-lang="${L}" ${_csLang===L?'disabled':''}>${_CS_LANG_NAMES[L]}</button>`).join('')}
     </span>
-    <button class="btn btn-sm btn-ghost" id="btn-cs-links" title="${esc(T('Ask the distributor APIs for each connector\u2019s product page'))}">🔗 ${esc(T('Find links'))}</button>
-    <button class="btn btn-sm btn-ghost" id="btn-cs-mfg" title="${esc(T('Copy the material list, operation steps, inspection checks and tooling into a manufacturing instruction'))}">🛠️ ${esc(T('To Manufacturing'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-edit">✎ ${esc(T('Edit'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-print">🖨 ${esc(T('Print'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-pdf">📄 ${esc(T('Export PDF'))}</button>
@@ -12587,13 +12574,6 @@ function renderCutStripSheet(){
       </div>
     </div>
 
-    ${_csTBCCount(spec) ? `<div class="cs-pad"><div class="cs-box cs-stop">
-      <b>${esc(T('Do not cut production material'))} — ${_csTBCCount(spec)} ${esc(T('unverified dimension(s)'))}</b>
-      <p>${esc(T('The dimensions below marked TBC were derived, not read from a manufacturer datasheet. Prove them on sample pieces and get engineering sign-off before the first production lot.'))}</p>
-      ${(spec.open_items||[]).length?`<ul>${spec.open_items.map((o,i)=>
-        `<li>${_csDelBtn('del-open',i)}<b>${_csFText(`open_items.${i}.what`, o.what)}</b> — ${_csFText(`open_items.${i}.why`, o.why, true)}${(o.action||_csEditing)?` <i>→ ${_csFText(`open_items.${i}.action`, o.action)}</i>`:''}</li>`).join('')}</ul>`:''}
-    </div></div>` : ''}
-
     <h2 class="cs-h2"><span class="cs-n">1</span>${esc(T('Planning'))}</h2>
     <div class="cs-pad"><table class="cs-tbl cs-form-tbl">
       <thead><tr>
@@ -12603,15 +12583,15 @@ function renderCutStripSheet(){
         <th style="width:25%">${esc(T('Part number'))}</th>
         <th style="width:20%">${esc(T('Approved by'))}</th>
       </tr></thead>
-      <!-- Approved by is typed in the approval block at the foot of the form and
-           only shown here. Two inputs writing the same field would mean whichever
-           the collector reached last silently won. -->
+      <!-- Its own field, not a second input on approved_by: two controls writing
+           one field means whichever the collector reached last silently wins,
+           and the other person's typing disappears. -->
       <tbody><tr>
         <td class="cs-ctr cs-ltr">${_csFRaw('form_date', spec.form_date || _csToday())}</td>
         <td class="cs-ctr">${_csFRaw('customer', spec.customer || spec.project || '')}</td>
         <td class="cs-ctr cs-ltr">${_csFRaw('revision', spec.revision)}</td>
         <td class="cs-ctr cs-ltr"><b>${_csFRaw('drawing_number', spec.drawing_number)}</b></td>
-        <td class="cs-ctr">${esc(spec.approved_by||'')}</td>
+        <td class="cs-ctr">${_csFRaw('planning_approval', spec.planning_approval)}</td>
       </tr></tbody></table>
       <p class="cs-note cs-ltr">${esc(T('Spec no.'))}: ${esc(spec.spec_no||'—')}
         ${spec.source_file?` · ${esc(T('Drawing'))}: ${esc(spec.source_file)}`:''}
@@ -12702,24 +12682,23 @@ function renderCutStripSheet(){
 
         ${build ? `<div class="cs-box cs-stop">
           <b>${esc(T('This is not a ready-made cable — it is built from individual wires'))}</b>
-          <p>${esc(T('The BOM carries more wire than one run needs, so the run is made up from separate wires.'))}</p>
+          <p>${esc(T('Cut the stock below into pieces, then lay the pieces together into the harness.'))}</p>
           <table class="cs-tbl cs-form-tbl" style="margin-top:8px">
-            <thead><tr><th style="width:26%">${esc(T('Part number'))}</th>
-              <th style="width:14%">${esc(T('Cut pieces'))}</th><th style="width:16%">${esc(T('Each [mm]'))}</th>
-              <th style="width:16%">${esc(T('Total needed'))}</th><th style="width:28%">${esc(T('BOM allows'))}</th></tr></thead>
-            <tbody><tr>
-              <td class="cs-ltr">${esc(build.pn||'—')}</td>
-              <td class="cs-ctr cs-ltr"><b style="font-size:16px">${build.count}</b></td>
-              <td class="cs-ctr cs-ltr"><b style="font-size:16px;color:#7C2D12">${build.perWireMm}</b></td>
-              <td class="cs-ctr cs-ltr">${build.requiredMm}</td>
-              <td class="cs-ctr cs-ltr">${build.stockMm}${build.spareMm?` <span style="color:#64748B">(+${build.spareMm})</span>`:''}</td>
-            </tr></tbody></table>
-          <p>${esc(T('Cut'))} <b>${build.count}</b> ${esc(T('wires of'))} <b class="cs-ltr">${build.perWireMm} mm</b>
-             ${esc(build.countFrom==='conductors'?T('— one per conductor in the wiring table'):T('— worked out from the BOM length'))}.</p>
-          ${build.shortMm?`<p style="color:#B91C1C;font-weight:700">${esc(T('The BOM is short by'))}
-            <span class="cs-ltr">${build.shortMm} mm</span> — ${esc(T('check the quantity before drawing material.'))}</p>`:''}
-          ${build.ratioMismatch?`<p style="color:#B45309;font-weight:700">${esc(T('The BOM length divides into'))}
-            ${build.ratioMismatch} ${esc(T('pieces, but the wiring table lists'))} ${build.count} —
+            <thead><tr><th style="width:30%">${esc(T('Part number'))}</th>
+              <th style="width:20%">${esc(T('On the BOM'))}</th>
+              <th style="width:26%">${esc(T('Cut into'))}</th>
+              <th style="width:24%">${esc(T('Left over'))}</th></tr></thead>
+            <tbody>${build.lines.map(l=>`<tr>
+              <td class="cs-ltr">${esc(l.pn||'—')}</td>
+              <td class="cs-ctr cs-ltr">${_csMM(l.totalMm)}${l.qty>1?` <span style="color:#64748B">(${l.qty} × ${_csMM(l.reelMm)})</span>`:''}</td>
+              <td class="cs-ctr cs-ltr" style="white-space:nowrap"><span style="font-size:16px;font-weight:800">${l.pieces}</span> × <span style="font-size:16px;font-weight:800;color:#7C2D12">${_csMM(build.perWireMm)}</span></td>
+              <td class="cs-ctr cs-ltr">${l.leftoverMm?_csMM(l.leftoverMm):'—'}</td>
+            </tr>`).join('')}</tbody></table>
+          <p style="font-size:14px"><b>${esc(T('The harness is'))} ${build.pieces} ${
+            esc(T('wires of'))} <span class="cs-ltr">${esc(_csMM(build.perWireMm))}</span></b>
+            ${build.conductors?` — ${esc(T('the wiring table lists'))} ${build.conductors} ${esc(T('conductors'))}`:''}.</p>
+          ${build.conductorMismatch?`<p style="color:#B91C1C;font-weight:700">${
+            esc(T('The BOM gives'))} ${build.pieces} ${esc(T('pieces but the wiring table lists'))} ${build.conductorMismatch} —
             ${esc(T('one of the two is wrong. Resolve it before cutting.'))}</p>`:''}
         </div>` : ''}`;}).join('')}
 
@@ -12743,8 +12722,8 @@ function renderCutStripSheet(){
         <th style="width:14%">${esc(T('Part number'))}</th>
         <th style="width:10%">${esc(T('Manufacturer'))}</th><th style="width:5%">${esc(T('Positions'))}</th>
         <th style="width:8%">${esc(T('Termination'))}</th><th style="width:13%">${esc(T('Contact P/N'))}</th>
-        <th style="width:19%">${esc(T('Description'))}</th>
-        <th style="width:19%">${esc(T('Datasheet / supplier'))}</th></tr></thead>
+        <th style="width:26%">${esc(T('Description'))}</th>
+        <th style="width:12%">${esc(T('Datasheet'))}</th></tr></thead>
       <tbody>${_csConnectors(spec).map((c,i)=>`<tr>
         <td class="cs-ctr cs-ltr"><b>${esc(c.ref||'')}</b></td>
         <td class="cs-ctr" style="font-size:12px">${esc(T(c.kind==='open_wires'?'Open wires':(c.kind||'connector')))}</td>
@@ -12755,9 +12734,9 @@ function renderCutStripSheet(){
         <td>${_csFRaw(`connectors.${i}.contact_pn`, c.contact_pn)}</td>
         <td>${_csFText(`connectors.${i}.description`, c.description)}
           ${c._inferred?`<span class="cs-tag cs-tbc">${esc(T('not described on the sheet'))}</span>`:''}</td>
-        <td>${_csLinkChips(c.part_number, c.product_url, c.product_url_vendor)}
-          ${String(c.contact_pn||'').trim()?`<div class="cs-links-sub">${esc(T('Contact'))}:</div>
-            ${_csLinkChips(c.contact_pn, c.contact_url, c.contact_url_vendor)}`:''}</td></tr>`).join('')}
+        <td>${_csDatasheetLink(c.datasheet_url, c.datasheet_url_vendor)}
+          ${_csSafeUrl(c.contact_datasheet_url)?`<div class="cs-links-sub">${esc(T('Contact'))}:</div>
+            ${_csDatasheetLink(c.contact_datasheet_url, c.contact_datasheet_url_vendor)}`:''}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
 
     <h2 class="cs-h2"><span class="cs-n">5</span>${esc(T('Schematic — cut & strip'))}</h2>
@@ -12788,11 +12767,16 @@ function renderCutStripSheet(){
       <tbody>
         <tr><td class="cs-ctr">${_csFRaw('prepared_by', spec.prepared_by)}
               <div class="cs-role">${esc(T('Prepared by'))}</div></td>
-            <td class="cs-sig-cell"></td><td class="cs-ctr cs-ltr">${_csFRaw('prepared_date', spec.prepared_date)}</td><td></td></tr>
+            <td class="cs-sig-cell">${_csFRaw('prepared_sign', spec.prepared_sign)}</td>
+            <td class="cs-ctr cs-ltr">${_csFRaw('prepared_date', spec.prepared_date)}</td>
+            <td>${_csFRaw('prepared_note', spec.prepared_note)}</td></tr>
         <tr><td class="cs-ctr">${_csFRaw('approved_by', spec.approved_by)}
               <div class="cs-role">${esc(T('Approved for production'))}</div></td>
-            <td class="cs-sig-cell"></td><td class="cs-ctr cs-ltr">${_csFRaw('approved_date', spec.approved_date)}</td><td></td></tr>
+            <td class="cs-sig-cell">${_csFRaw('approved_sign', spec.approved_sign)}</td>
+            <td class="cs-ctr cs-ltr">${_csFRaw('approved_date', spec.approved_date)}</td>
+            <td>${_csFRaw('approved_note', spec.approved_note)}</td></tr>
       </tbody></table>
+      <p class="cs-note">${esc(T('The signature column is for a pen — type initials here only if your process accepts a typed name.'))}</p>
       <div class="cs-foot">
         <span class="cs-ltr">${esc(spec.spec_no||'')} · ${esc(spec.drawing_number||'')} ${esc(spec.revision?('Rev '+spec.revision):'')}${spec.source_file?' · '+esc(spec.source_file):''}</span>
         <span class="cs-ltr">${spec.edited_by?`✎ ${esc(spec.edited_by)} ${esc(String(spec.edited_at||'').slice(0,10))} · `:''}v${APP_VER}</span>
@@ -12808,8 +12792,7 @@ function renderCutStripSheet(){
   document.getElementById('btn-cs-print')?.addEventListener('click',()=>window.print());
   document.getElementById('btn-cs-pdf')?.addEventListener('click',_csExportPDF);
   document.getElementById('btn-cs-edit')?.addEventListener('click',_csEnterEdit);
-  document.getElementById('btn-cs-mfg')?.addEventListener('click',_mfgFromCurrentSpec);
-  document.getElementById('btn-cs-links')?.addEventListener('click',_csFetchConnectorLinks);
+
   document.getElementById('btn-cs-save')?.addEventListener('click',_csSaveSpec);
   document.getElementById('btn-cs-cancel')?.addEventListener('click',()=>{
     if(confirm('Discard unsaved changes to this specification?')) _csCancelEdit();
@@ -13246,21 +13229,6 @@ async function _mfgSave(){
     toast('Save failed: '+e.message,'error');
     if(btn){ btn.disabled=false; btn.textContent='💾 Save'; }
   }
-}
-// Called from the Cut & Strip sheet. Opens the new document in edit mode rather
-// than saving it silently: the person who pressed the button is the one who
-// should decide what the instruction actually says.
-function _mfgFromCurrentSpec(){
-  if(!csCurrent) return;
-  mfgCurrent=_mfgFromSpec(csCurrent);
-  mfgCurrent._id=null;
-  _mfgEditing=true; _mfgBackup=null;
-  currentView='manufacturing';
-  document.getElementById('page-title').textContent='🛠️ Manufacturing Instructions';
-  const btnHome=document.getElementById('btn-home');
-  if(btnHome) btnHome.style.display='inline-flex';
-  renderMfgDoc();
-  toast('Copied from the specification — review it and save','success');
 }
 
 // ── PDF export ────────────────────────────────────────────────────────────────
