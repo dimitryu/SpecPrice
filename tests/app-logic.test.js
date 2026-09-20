@@ -1347,7 +1347,7 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
 // ──────────────────────────── 32. the cutting form's own rows
 {
   const rows=G('_csFormRows'), stripRows=G('_csStripRows'), summary=G('_csStripSummary'),
-        wire=G('_csWireEndSVG'), today=G('_csToday'), cut=G('_csCutLength');
+        wire=G('_csStripSVG'), today=G('_csToday'), cut=G('_csCutLength');
 
   const spec={
     drawing_number:'CBL-1', revision:'2', customer:'Politex',
@@ -1388,31 +1388,60 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('form: ...and no strip detail either', stripRows({}).length, 0);
   ok('form: the date is dd.mm.yyyy', /^\d{2}\.\d{2}\.\d{4}$/.test(today()));
 
-  // ── the wire-end figure ─────────────────────────────────────────────────
+  // ── the figure: ONE drawing per end, carrying every dimension ───────────
   const svg=wire(spec.segments[0], spec.segments[0].ends[0], spec);
-  ok('wire figure: it is an SVG', /^<svg /.test(svg.trim()));
-  ok('wire figure: titled as the shop titles it', /WIRE END PREPARATION/.test(svg));
-  ok('wire figure: states the strip in mm', />45 mm/.test(svg) || /45 mm/.test(svg));
-  ok('wire figure: ...and in inches, because the contact datasheet is',
-     /1\.772 in/.test(svg));
-  ok('wire figure: names the wire and the contact',
+  ok('figure: it is an SVG', /^<svg /.test(svg.trim()));
+  ok('figure: titled as the shop titles it', /WIRE END PREPARATION/.test(svg));
+  ok('figure: the jacket strip is on it', /A = 170 mm/.test(svg));
+  ok('figure: and the conductor strip, on the same drawing', /W = 45 mm/.test(svg));
+  t('figure: millimetres only — no inches anywhere', /\bin\)/.test(svg), false);
+  ok('figure: names the wire and the contact',
      /STJ14X3-622-4/.test(svg) && /55A0111-22-0/.test(svg));
-  ok('wire figure: a crimp contact is never tinned', /DO NOT TIN/.test(svg));
-  ok('wire figure: and the strands are never nicked', /NICK CONDUCTOR STRANDS/.test(svg));
-  t('wire figure: a confirmed dimension carries no asterisk', /\* /.test(svg), false);
+  ok('figure: a crimp contact is never tinned', /DO NOT TIN/.test(svg));
+  ok('figure: and the strands are never nicked', /NICK CONDUCTOR STRANDS/.test(svg));
+  ok('figure: it states what this end costs the cut length', /adds to the cut length/.test(svg));
+  t('figure: a confirmed dimension carries no asterisk', /\* /.test(svg), false);
 
   const tbcSvg=wire(unconf.segments[0], unconf.segments[0].ends[0], unconf);
-  ok('wire figure: nothing to draw is nothing drawn',
-     wire({}, {}, {})==='' );
-  ok('wire figure: an unconfirmed conductor strip is still drawn', tbcSvg.length>0);
+  t('figure: nothing to draw is nothing drawn', wire({}, {}, {}), '');
+  ok('figure: an unconfirmed dimension is still drawn', tbcSvg.length>0);
+  ok('figure: ...and marked', /TO BE CONFIRMED/.test(tbcSvg));
 
-  // No conductor strip at all: the figure falls back to the smallest real cut,
-  // which on a single-conductor wire IS the wire preparation.
-  const oneWire={segments:[{id:'S1', ends:[{ref:'P1', strip:[
-    {code:'A', label:'Insulation', value_mm:3.18, confirmed:true}]}]}], connectors:[]};
+  // A plain single-insulation wire: one cut, one dimension, the drawing the
+  // bench already knows.
+  const oneWire={segments:[{id:'S1', layers:[{name:'Insulation'},{name:'Conductor'}],
+    ends:[{ref:'P1', strip:[{code:'A', label:'Insulation', value_mm:3.18, confirmed:true}]}]}], connectors:[]};
   const f2=wire(oneWire.segments[0], oneWire.segments[0].ends[0], oneWire);
-  ok('wire figure: falls back to the strip when there is no conductor dimension', /3\.18 mm/.test(f2));
-  ok('wire figure: ...with the inch value the datasheet quotes', /0\.125 in/.test(f2));
+  ok('figure: a single-insulation wire draws its one dimension', /A = 3.18 mm/.test(f2));
+  t('figure: ...and nothing else', (f2.match(/ mm</g)||[]).length, 1);
+  // Derived dimensions are consequences of the others and would double up.
+  const der={segments:[{id:'S1', ends:[{ref:'P1', strip:[
+    {code:'A', value_mm:20, confirmed:true},{code:'C', value_mm:8, derived:true, confirmed:true}]}]}], connectors:[]};
+  t('figure: a derived dimension is not drawn',
+    /C = 8 mm/.test(wire(der.segments[0], der.segments[0].ends[0], der)), false);
+}
+
+// ──────────────────────────── 32b. where to read up on a connector
+{
+  const chips=G('_csLinkChips'), links=G('_csPartLinks'), safe=G('_csSafeUrl'),
+        search=G('_csSearchLinks');
+
+  t('links: no part number, no links', links('', '', ''), []);
+  t('links: a part number always gets the searches', search('TV06RW1135SF472A').length, 3);
+  ok('links: ...url-encoded', search('M22759/16-22').every(l=>/%2F/.test(l.url)));
+  t('links: a real product page comes first',
+    links('X','https://www.mouser.com/p/1','Mouser')[0].name, 'Mouser');
+  t('links: ...and is not a search', links('X','https://www.mouser.com/p/1','Mouser')[0].search, false);
+
+  // A stored url is data. Data that arrives as a script is not a link.
+  t('links: javascript: is not a url', safe('javascript:alert(1)'), '');
+  t('links: data: is not a url', safe('data:text/html,<script>'), '');
+  t('links: a plain http url is', safe('http://x.test/a'), 'http://x.test/a');
+  t('links: whitespace-smuggled markup is not', safe('https://x.test/a" onclick="x'), '');
+  t('links: a refused url is simply left out',
+    links('X','javascript:alert(1)','Mouser').filter(l=>!l.search).length, 0);
+  ok('links: the chips escape what they print',
+     !/<img/.test(chips('<img src=x>', '', '')));
 }
 
 // ──────────────────────────── 33. manufacturing instructions
@@ -1455,6 +1484,113 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('mfg: a cut & strip spec is not an instruction', isDoc(spec), false);
   t('mfg: an instruction is', isDoc(d), true);
   t('mfg: and neither is nothing', isDoc(null), false);
+}
+
+// ──────────────────────────── 34. what the drawing's length measures
+{
+  const cut=G('_csCutLength'), datum=G('_csDatum'), connLen=G('_csEndConnLen'),
+        formula=G('_csCutFormula'), MODEL=G('_CS_CUT_MODEL');
+
+  const mk=basis=>({
+    cut_model:MODEL,
+    connectors:[{ref:'P1', part_number:'A', body_length_mm:30},
+                {ref:'P2', part_number:'B', body_length_mm:20}],
+    segments:[{id:'S1', finished_length_mm:4000, length_basis:basis,
+      ends:[{ref:'P1', strip:[{code:'A', value_mm:10, confirmed:true}]},
+            {ref:'P2', strip:[{code:'A', value_mm:10, confirmed:true}]}]}]});
+
+  // To the jacket end: the cable inside each connector is EXTRA.
+  const j=mk('to_jacket_end');
+  t('datum: to the jacket end adds both ends', cut(j.segments[0], j).total, 4023);   // 4000 + (10+1.5)*2
+
+  // Over the connectors: the connector bodies are INSIDE the dimension, so the
+  // cable is shorter by exactly those lengths.
+  const o=mk('over_connectors');
+  const ro=cut(o.segments[0], o);
+  t('datum: over the connectors subtracts the bodies', ro.total, 3973);             // 4023 − 30 − 20
+  t('datum: ...and each end says what came off', ro.endCosts.map(e=>e.conn), [30,20]);
+  ok('datum: the formula shows the subtraction', /− 30 \(P1\)/.test(formula(o.segments[0], o)));
+  ok('datum: over the connectors is SHORTER than to the jacket end',
+     ro.total < cut(j.segments[0], j).total);
+
+  // A body length nobody supplied is reported, never invented.
+  const missing=mk('over_connectors');
+  delete missing.connectors[0].body_length_mm;
+  const rm=cut(missing.segments[0], missing);
+  t('datum: a missing body length is counted, not guessed', rm.missingConn, 1);
+  t('datum: ...nothing is subtracted for it', rm.endCosts[0].conn, 0);
+  t('datum: ...and the run cannot read as fully confirmed', rm.allConfirmed, false);
+  t('datum: an end override beats the connector record',
+    connLen({ref:'P1', connector_length_mm:5}, missing), 5);
+  t('datum: an unknown body length reads as unknown, not zero',
+    connLen({ref:'P1'}, missing), null);
+
+  // Silence means the shop default, and the sheet has to say it was assumed.
+  const u=mk('unclear');
+  t('datum: silence falls back to the shop default', datum(u.segments[0], u).basis, 'to_jacket_end');
+  t('datum: ...and is marked as not stated', datum(u.segments[0], u).stated, false);
+  t('datum: a stated basis is stated', datum(o.segments[0], o).stated, true);
+  t('datum: an absent field is the same as unclear',
+    datum({}, {}).stated, false);
+  t('datum: the assumed run still cuts to the default', cut(u.segments[0], u).total, 4023);
+
+  // cable_only: the dimension IS the piece of cable.
+  const c=mk('cable_only');
+  t('datum: the bare cable adds nothing for the ends', cut(c.segments[0], c).total, 4000);
+}
+
+// ──────────────────────────── 35. a cable you build out of wires
+{
+  const build=G('_csWireBuild'), len=G('_csMatLenMm'), isWire=G('_csIsWireMaterial'),
+        MODEL=G('_CS_CUT_MODEL');
+
+  t('wires: a length in its own field', len({length_mm:4000}), 4000);
+  t('wires: metres become millimetres', len({qty:'12 m'}), 12000);
+  t('wires: inches too', len({description:'wire 10 in'}), 254);
+  t('wires: a thousands separator does not break it', len({qty:'12,000 mm'}), 12000);
+  t('wires: a plain count is not a length', len({qty:'3'}), null);
+  t('wires: nothing is nothing', len(null), null);
+  t('wires: wire reads as wire', isWire({description:'WIRE, M22759/16-22-9'}), true);
+  t('wires: a kind field settles it', isWire({kind:'wire', description:'x'}), true);
+  t('wires: a cable is not loose wire', isWire({description:'CABLE 3C SHIELDED'}), false);
+
+  const spec=(matLen, conductors)=>({
+    cut_model:MODEL,
+    materials:[{item:1, part_number:'M22759/16-22-9', description:'WIRE 22AWG', length_mm:matLen}],
+    connectors:[{ref:'P1'},{ref:'P2'}],
+    segments:[{id:'S1', finished_length_mm:4000, length_basis:'cable_only',
+      cable_part_number:'M22759/16-22-9',
+      conductors:Array.from({length:conductors},(_,i)=>({name:'W'+i})),
+      ends:[{ref:'P1', strip:[]},{ref:'P2', strip:[]}]}]});
+
+  // 12 m of wire against a 4 m run is three wires, not a 12 m cable.
+  const s1=spec(12000,3);
+  const b=build(s1.segments[0], s1);
+  ok('wires: it is spotted', !!b);
+  t('wires: one piece per conductor', b.count, 3);
+  t('wires: ...each the run length', b.perWireMm, 4000);
+  t('wires: the total the store must issue', b.requiredMm, 12000);
+  t('wires: nothing is short', b.shortMm, 0);
+  t('wires: the count came from the wiring table', b.countFrom, 'conductors');
+
+  // One run's worth of cable is an ordinary cable, not stock for several.
+  t('wires: a ready-made cable is left alone', build(spec(4000,3).segments[0], spec(4000,3)), null);
+  t('wires: ...and so is a little extra for waste', build(spec(4300,3).segments[0], spec(4300,3)), null);
+
+  // Without a wiring table the ratio decides.
+  const s2=spec(16000,0);
+  const b2=build(s2.segments[0], s2);
+  t('wires: the ratio answers when the drawing has no wiring table', b2.count, 4);
+  t('wires: ...and says so', b2.countFrom, 'ratio');
+
+  // The BOM being short of what the conductor count needs is worth shouting about.
+  const s3=spec(10000,3);
+  const b3=build(s3.segments[0], s3);
+  t('wires: a BOM that cannot cover the wires is flagged', b3.shortMm, 2000);
+  t('wires: ...and the disagreement is named', b3.ratioMismatch, 3 === Math.round(10000/4000) ? 0 : Math.round(10000/4000));
+
+  const s4=spec(12000,3); s4.materials=[];
+  t('wires: no BOM length, no instruction', build(s4.segments[0], s4), null);
 }
 
 // ─────────────────────────────────────────── report

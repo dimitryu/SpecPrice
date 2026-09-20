@@ -175,6 +175,17 @@
     .cs-tbl.cs-form-tbl td { border:1px solid #0F172A; }
     .cs-tbl.cs-form-tbl tr:nth-child(even) td { background:#fff; }
     .cs-formula { font:11.5px/1.45 monospace; color:#7C2D12; margin-top:3px; }
+    .cs-links { display:flex; flex-wrap:wrap; gap:4px; }
+    .cs-link { display:inline-flex; align-items:center; gap:2px; font-size:10px; font-weight:700;
+               color:#1D4ED8; text-decoration:none; border:1px solid #BFDBFE; background:#EFF6FF;
+               border-radius:9px; padding:0 5px; line-height:16px; white-space:nowrap; }
+    .cs-link:hover { background:#DBEAFE; }
+    .cs-link-s { color:#475569; border-color:#E2E8F0; background:#F8FAFC; font-weight:600; }
+    .cs-links-sub { font-size:10px; color:#94A3B8; margin:4px 0 2px; }
+    @media print { .cs-link { border:none; background:none; padding:0; color:#1E293B; } }
+    .cs-datum { display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-top:12px;
+                padding:8px 11px; background:#F8FAFC; border:1px solid #E4E5E7; border-radius:6px;
+                font-size:13px; }
     .cs-notes-box { border:1px solid #0F172A; min-height:58px; padding:9px 11px;
                     font-size:13px; white-space:pre-wrap; }
     .cs-sig-cell { height:44px; }
@@ -752,7 +763,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.39.0';
+const APP_VER   = '1.41.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -9598,6 +9609,51 @@ function _csJacketStrip(end){
   return first ? {mm:_csNum(first.value_mm), code:first.code||'', confirmed:first.confirmed===true} : null;
 }
 
+// ── What the drawing's length actually measures ──────────────────────────────
+// A cable drawn "4000" is not one number, it is three different cuts depending
+// on where the dimension is taken from:
+//
+//   to_jacket_end    from where the jacket ends at one end to where it ends at
+//                    the other. The cable inside each connector is extra, so it
+//                    is ADDED. This is the shop's default.
+//   cable_only       the dimension IS the piece of cable. Nothing is added for
+//                    the ends at all.
+//   over_connectors  the dimension spans the assembled harness, connector face
+//                    to connector face. The connector bodies are part of that
+//                    length, so the cable is SHORTER — their length comes OFF.
+//
+// Getting this wrong is not a rounding error: on a 4 m harness with two
+// backshells it is tens of millimetres in the wrong direction, which is scrap.
+// So the basis is named on the sheet, it drives the arithmetic, and when the
+// drawing did not say, the sheet says that too instead of quietly assuming.
+const _CS_BASIS_CABLE   = 'cable_only';
+const _CS_BASIS_OVER    = 'over_connectors';
+const _CS_BASIS_LABEL={
+  to_jacket_end:'to the jacket end at each end',
+  cable_only:'the bare cable, connectors excluded',
+  over_connectors:'over the connectors, face to face',
+  unclear:'the drawing does not say',
+};
+// How far a connector extends beyond the point where the cable enters it. Only
+// needed under over_connectors, and only then is its absence a problem.
+function _csEndConnLen(end, spec){
+  const own=_csNum(end?.connector_length_mm);
+  if(own!=null) return own;
+  const c=(_csConnectors(spec)||[]).find(x=>String(x.ref||'').toUpperCase()===String(end?.ref||'').toUpperCase());
+  const v=_csNum(c?.body_length_mm);
+  return v!=null ? v : null;
+}
+function _csDatum(seg, spec){
+  const declared=String(seg?.length_basis||'').trim();
+  const known=[_CS_BASIS_JACKET,_CS_BASIS_CABLE,_CS_BASIS_OVER].includes(declared);
+  return {
+    basis: known ? declared : _CS_BASIS_JACKET,
+    stated: known,                                  // the drawing told us
+    label: _CS_BASIS_LABEL[known?declared:'unclear'],
+    confirmed: seg?.length_basis_confirmed===true,
+  };
+}
+
 function _csCutLength(seg, spec){
   const finished=_csNum(seg?.finished_length_mm);
   const allowances=(Array.isArray(seg?.allowances)?seg.allowances:[])
@@ -9609,21 +9665,32 @@ function _csCutLength(seg, spec){
   // Under the jacket-end convention the per-end cost is derived here rather than
   // taken from the analysis. Specs saved under the old basis keep their stored
   // allowances so their numbers do not move under anyone's feet.
-  const declared=String(seg?.length_basis||'');
+  // What the dimension measures decides the arithmetic (see _csDatum above).
+  // An unstamped spec — saved before this convention existed — keeps its own
+  // stored allowances untouched, because numbers on a shop-floor sheet must not
+  // move under someone who has already read them.
   const stamped = String(spec?.cut_model||'')===_CS_CUT_MODEL;
-  // A stamped spec always costs by the convention, whatever length_basis says.
-  // An unstamped one was saved before the convention existed, so its arithmetic
-  // is left exactly as it was — numbers on a shop-floor sheet must not move
-  // under someone who already read them.
-  const basis = stamped ? _CS_BASIS_JACKET
+  const datum=_csDatum(seg, spec);
+  const declared=String(seg?.length_basis||'');
+  const basis = stamped || datum.stated ? datum.basis
               : ((declared==='' || declared==='unclear') ? _CS_BASIS_JACKET : declared);
-  if(basis===_CS_BASIS_JACKET && finished!=null){
+  if((basis===_CS_BASIS_JACKET || basis===_CS_BASIS_OVER) && finished!=null){
     const margin=_csEndMargin(seg, spec);
     const ends=[];
+    let missingConn=0;
     (seg.ends||[]).forEach(e=>{
       const js=_csJacketStrip(e);
       if(!js) return;
-      ends.push({ref:e.ref||'', mm:_csR(js.mm+margin), strip:js.mm, margin,
+      // Over the connectors, the connector body is inside the dimension but is
+      // not cable — it comes off. A body length nobody has supplied is counted
+      // as zero and reported, never guessed: an invented 30 mm is 30 mm of
+      // scrap wearing a confident face.
+      let conn=0;
+      if(basis===_CS_BASIS_OVER){
+        const c=_csEndConnLen(e, spec);
+        if(c==null) missingConn++; else conn=c;
+      }
+      ends.push({ref:e.ref||'', mm:_csR(js.mm+margin-conn), strip:js.mm, margin, conn,
                  code:js.code, confirmed:js.confirmed});
     });
     // An end whose cost this convention already derives must not ALSO carry an
@@ -9637,19 +9704,23 @@ function _csCutLength(seg, spec){
     const superseded=allowances.filter(a=>costed.has(String(a.ref||'').toUpperCase()));
     const added=_csR(ends.reduce((s,e)=>s+e.mm,0) + extra.reduce((s,a)=>s+a.mm,0) + trim);
     return {finished, allowances:extra, superseded, endCosts:ends, trim, added, basis,
+            datum, missingConn,
             total:_csR(finished+added), hasBreakdown:true,
             allConfirmed: ends.every(e=>e.confirmed) && extra.every(a=>a.confirmed)
-                          && (!trim || seg.trim_allowance_confirmed===true)};
+                          && (!trim || seg.trim_allowance_confirmed===true)
+                          && !missingConn};
   }
 
   if(finished==null){
     return {finished:null, allowances:[], superseded:[], endCosts:[], trim:0, basis,
+            datum, missingConn:0,
             total:_csNum(seg?.cut_length_mm), hasBreakdown:false,
             allConfirmed:false, added:0};
   }
   const added=_csR(allowances.reduce((s,a)=>s+a.mm,0)+trim);
   return {
     finished, allowances, superseded:[], endCosts:[], trim, added, basis,
+    datum, missingConn:0,
     total:_csR(finished+added),
     hasBreakdown:true,
     allConfirmed: allowances.every(a=>a.confirmed) && (!trim || seg.trim_allowance_confirmed===true),
@@ -9663,13 +9734,89 @@ function _csSyncCutLength(spec){
 }
 // Human-readable arithmetic, e.g. "150 + 25 (P1) + 4 (WSRV1) + 5 (trim) = 184 mm".
 // Deliberately spelled out: a worker who can see the sum can spot a wrong term.
+// ── Ready-made cable, or wires you make it from? ─────────────────────────────
+// A BOM line for 12 000 mm of wire against a 4 000 mm run is not a 12 m cable.
+// It is three wires of four metres: the assembly is BUILT from loose wire, and
+// the operator has to be told how many pieces to cut and how long each one is,
+// not handed a single length that does not exist on any reel in the building.
+//
+// The tell is the ratio. Anything close to one run length is the cable itself;
+// a whole multiple of it, with a conductor list to match, is stock for the
+// conductors. The conductor count decides it when the drawing gives one,
+// because that is a fact rather than an inference from a rounded number.
+const _CS_WIRE_RE=/\b(wire|hook[- ]?up|lead|conductor)\b/i;
+const _CS_CABLE_RE=/\b(cable|jacket|sheath|multi-?conductor|coax)\b/i;
+// A length written anywhere the BOM puts it: its own field, the quantity column
+// with a unit, or the description.
+function _csMatLenMm(m){
+  if(!m) return null;
+  const direct=_csNum(m.length_mm);
+  if(direct!=null && direct>0) return direct;
+  const texts=[m.qty, m.unit&&`${m.qty} ${m.unit}`, m.description].map(x=>String(x==null?'':x));
+  for(const t of texts){
+    let mm=/([\d.,]+)\s*(mm|מ"מ|מ״מ)\b/i.exec(t);
+    if(mm) return _csNum(String(mm[1]).replace(/,/g,''));
+    let m2=/([\d.,]+)\s*(m|meters?|metres?|מ')\b/i.exec(t);
+    if(m2){ const v=_csNum(String(m2[1]).replace(/,/g,'')); return v==null?null:_csR(v*1000); }
+    let inch=/([\d.,]+)\s*(in|inch|inches|")\b/i.exec(t);
+    if(inch){ const v=_csNum(String(inch[1]).replace(/,/g,'')); return v==null?null:_csR(v*25.4); }
+  }
+  return null;
+}
+function _csIsWireMaterial(m){
+  if(!m) return false;
+  if(String(m.kind||'').toLowerCase()==='wire') return true;
+  const d=String(m.description||'')+' '+String(m.part_number||'');
+  return _CS_WIRE_RE.test(d) && !_CS_CABLE_RE.test(d);
+}
+// Returns null when this run is an ordinary ready-made cable — which is most of
+// them — and the build instruction when it is not.
+function _csWireBuild(seg, spec){
+  const perWire=_csNum(_csCutLength(seg, spec).total);
+  if(perWire==null || perWire<=0) return null;
+  const mats=(spec?.materials||[]).map(m=>({m, mm:_csMatLenMm(m)})).filter(x=>x.mm!=null && x.mm>0);
+  if(!mats.length) return null;
+
+  const segPn=String(seg?.cable_part_number||'').trim().toUpperCase();
+  // Prefer the line this run names; otherwise the longest wire line on the BOM.
+  const named=mats.find(x=>String(x.m.part_number||'').trim().toUpperCase()===segPn && segPn);
+  const wires=mats.filter(x=>_csIsWireMaterial(x.m));
+  const pick=named || wires.sort((a,b)=>b.mm-a.mm)[0];
+  if(!pick) return null;
+
+  // One run's worth (plus a little) is the cable itself, not stock for several.
+  if(pick.mm < perWire*1.5) return null;
+
+  const conductors=(seg?.conductors||[]).length;
+  const byRatio=Math.round(pick.mm/perWire);
+  const count=conductors>0 ? conductors : byRatio;
+  if(!(count>1)) return null;
+
+  const required=_csR(count*perWire);
+  return {
+    pn: String(pick.m.part_number||''),
+    description: String(pick.m.description||''),
+    stockMm: pick.mm,
+    perWireMm: perWire,
+    count,
+    countFrom: conductors>0 ? 'conductors' : 'ratio',
+    requiredMm: required,
+    shortMm: required>pick.mm ? _csR(required-pick.mm) : 0,
+    spareMm: pick.mm>required ? _csR(pick.mm-required) : 0,
+    // The ratio and the wiring table disagreeing is worth saying out loud: one
+    // of the two is wrong, and the operator should not be the one to discover
+    // which, with the reel already cut.
+    ratioMismatch: conductors>0 && byRatio!==conductors ? byRatio : 0,
+  };
+}
 function _csCutFormula(seg, spec){
   const r=_csCutLength(seg, spec);
   if(!r.hasBreakdown) return '';
   const parts=[`${r.finished}`]
     // Each end is spelled out as strip + margin, so the operator can see both
     // numbers and check them against the strip table rather than trusting a total.
-    .concat((r.endCosts||[]).map(e=>`+ ${e.strip} + ${e.margin} (${e.ref||e.code})`))
+    .concat((r.endCosts||[]).map(e=>
+      `+ ${e.strip} + ${e.margin}${e.conn?` − ${e.conn}`:''} (${e.ref||e.code})`))
     .concat(r.allowances.map(a=>`${a.mm<0?'−':'+'} ${Math.abs(a.mm)}${a.ref?` (${a.ref})`:''}`))
     .concat(r.trim ? [`+ ${r.trim} (${_csT('trim')})`] : []);
   return `${parts.join(' ')} = ${r.total} mm`;
@@ -9937,6 +10084,78 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "Datasheet / supplier":"דף נתונים / ספק",
+    "Find links":"חפש קישורים",
+    "Ask the distributor APIs for each connector’s product page":"לבקש מה-API של הספקים את דף המוצר של כל מחבר",
+    "Search":"חיפוש ב-",
+    "Contact":"מגע",
+    "No connector part numbers on this sheet":"אין מק\"טי מחברים בדף הזה",
+    "product page(s) found":"דפי מוצר נמצאו",
+    "No product page was found — the search links still work":"לא נמצא דף מוצר — קישורי החיפוש עדיין עובדים",
+    "Manufacturing instructions":"הוראות יצור",
+    "Document":"מסמך",
+    "Doc no.":"מס' מסמך",
+    "Rev":"מהדורה",
+    "Drawing #":"מס' סרטוט",
+    "Title":"שם",
+    "Steps":"שלבים",
+    "Updated":"עודכן",
+    "Assembly name":"שם המכלול",
+    "Material list":"רשימת חומרים",
+    "Manufacturer":"יצרן",
+    "Ref":"סימון",
+    "Add material":"הוסף חומר",
+    "Operation sequence":"רצף פעולות",
+    "Step title":"כותרת שלב",
+    "CRITICAL":"קריטי",
+    "No steps yet.":"אין עדיין שלבים.",
+    "Add step":"הוסף שלב",
+    "No checks yet.":"אין עדיין בדיקות.",
+    "Add check":"הוסף בדיקה",
+    "Tools & consumables":"כלים וחומרים מתכלים",
+    "Tool":"כלי",
+    "Setting":"כיוון",
+    "Note":"הערה",
+    "Add tool":"הוסף כלי",
+    "New instruction":"הוראה חדשה",
+    "From a Cut & Strip spec":"מתוך מפרט חיתוך וחשיפה",
+    "No manufacturing instructions yet":"אין עדיין הוראות יצור",
+    "A manufacturing instruction holds the material list, the order of operations, the inspection checks and the tooling for one assembly. Write one from scratch, or take the starting content from a cut & strip specification and edit it.":"הוראת יצור מכילה את רשימת החומרים, רצף הפעולות, הבדיקות והכלים של מכלול אחד. אפשר לכתוב מסמך חדש, או לקחת תוכן התחלתי ממפרט חיתוך וחשיפה ולערוך אותו.",
+    "Search instructions…":"חיפוש בהוראות יצור…",
+    "Nothing matches that search":"אין תוצאות לחיפוש",
+    "This document is independent of the cut & strip specification it came from — saving here changes nothing there.":"המסמך הזה עצמאי מהמפרט שממנו הועתק — שמירה כאן לא משנה שם כלום.",
+    "Workmanship":"תקן ביצוע",
+    "Edit":"עריכה",
+    "Editing":"עריכה",
+    "Save":"שמור",
+    "Cancel":"ביטול",
+    "Print":"הדפסה",
+    "Back":"חזרה",
+    "The drawing’s length is measured":"האורך בסרטוט נמדד",
+    "to the jacket end at each end":"עד קצה המעטפת בכל צד",
+    "the bare cable, connectors excluded":"הכבל בלבד, ללא מחברים",
+    "over the connectors, face to face":"כולל המחברים, מפאה לפאה",
+    "the drawing does not say":"הסרטוט לא מציין",
+    "assumed — the drawing does not say":"הנחה — הסרטוט לא מציין",
+    "Measured over the connectors, so each connector body comes OFF the cut length.":"נמדד כולל המחברים, ולכן אורך גוף כל מחבר יורד מאורך החיתוך.",
+    "No body length is on file for":"אין אורך גוף רשום עבור",
+    "connector(s) — nothing was subtracted for them. Fill it in before cutting.":"מחברים — לא הופחת עבורם דבר. יש למלא לפני החיתוך.",
+    "The drawing does not say where the length is measured from":"הסרטוט לא מציין מהיכן נמדד האורך",
+    "The shop default was used — to the jacket end at each end, with the connector allowance added. If this drawing dimensions over the connectors instead, the cable is SHORTER than the figure above: set it in Edit before anyone cuts.":"נלקחה ברירת המחדל של המפעל — עד קצה המעטפת בכל צד, עם תוספת המחבר. אם בסרטוט הזה המידה נלקחת כולל המחברים, הכבל קצר מהמספר שלמעלה: יש לשנות בעריכה לפני שחותכים.",
+    "This is not a ready-made cable — it is built from individual wires":"זה לא כבל מוכן — הוא נבנה מחוטים בודדים",
+    "The BOM carries more wire than one run needs, so the run is made up from separate wires.":"ב-BOM רשום אורך חוט גדול ממה שדרוש למקטע אחד, ולכן המקטע מורכב מחוטים נפרדים.",
+    "Cut pieces":"מספר חתיכות",
+    "Each [mm]":"כל אחת [מ\"מ]",
+    "Total needed":"סה\"כ נדרש",
+    "BOM allows":"ב-BOM קיים",
+    "wires of":"חוטים באורך",
+    "— one per conductor in the wiring table":"— אחד לכל מוליך בטבלת החיווט",
+    "— worked out from the BOM length":"— חושב לפי האורך ב-BOM",
+    "The BOM is short by":"חסר ב-BOM",
+    "check the quantity before drawing material.":"יש לבדוק את הכמות לפני משיכת חומר.",
+    "The BOM length divides into":"האורך ב-BOM מתחלק ל-",
+    "pieces, but the wiring table lists":"חתיכות, אבל בטבלת החיווט רשומים",
+    "one of the two is wrong. Resolve it before cutting.":"אחד מהשניים שגוי. יש לברר לפני החיתוך.",
     // The cutting form, in the words the works' own paper form uses.
     "Wire & cable cutting and stripping form":"טופס חיתוך ופריסות חוטים וכבלים",
     "Planning":"תכנון",
@@ -10151,6 +10370,76 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    "Datasheet / supplier":"Техдокументация / поставщик",
+    "Find links":"Найти ссылки",
+    "Search":"Поиск ",
+    "Contact":"Контакт",
+    "product page(s) found":"страниц товара найдено",
+    "Manufacturing instructions":"Инструкции по изготовлению",
+    "Document":"Документ",
+    "Doc no.":"№ документа",
+    "Rev":"Ред.",
+    "Drawing #":"№ чертежа",
+    "Title":"Название",
+    "Steps":"Шаги",
+    "Updated":"Обновлено",
+    "Assembly name":"Название сборки",
+    "Material list":"Перечень материалов",
+    "Manufacturer":"Производитель",
+    "Add material":"Добавить материал",
+    "Operation sequence":"Последовательность операций",
+    "Step title":"Название шага",
+    "CRITICAL":"КРИТИЧНО",
+    "No steps yet.":"Шагов пока нет.",
+    "Add step":"Добавить шаг",
+    "No checks yet.":"Проверок пока нет.",
+    "Add check":"Добавить проверку",
+    "Tools & consumables":"Инструменты и расходные материалы",
+    "Tool":"Инструмент",
+    "Setting":"Настройка",
+    "Note":"Примечание",
+    "Add tool":"Добавить инструмент",
+    "New instruction":"Новая инструкция",
+    "From a Cut & Strip spec":"Из спецификации резки и зачистки",
+    "No manufacturing instructions yet":"Инструкций по изготовлению пока нет",
+    "Search instructions…":"Поиск инструкций…",
+    "Nothing matches that search":"Ничего не найдено",
+    "Workmanship":"Стандарт исполнения",
+    "Wire & cable cutting and stripping form":"Бланк резки и зачистки проводов и кабелей",
+    "Planning":"Планирование",
+    "Execution — cut & strip":"Выполнение — резка и зачистка",
+    "Schematic — cut & strip":"Схема — резка и зачистка",
+    "Customer":"Заказчик",
+    "Length [mm]":"Длина [мм]",
+    "Strip [mm]":"Зачистка [мм]",
+    "Operator":"Исполнитель",
+    "Approval":"Утверждение",
+    "Approved by":"Утвердил",
+    "Prepared by":"Составил",
+    "Name":"Имя",
+    "Signature":"Подпись",
+    "Notes":"Примечания",
+    "Date":"Дата",
+    "Qty":"Кол-во",
+    "Description":"Описание",
+    "Part number":"Артикул",
+    "Revision":"Ред.",
+    "Harness layout":"Схема жгута",
+    "Connectors":"Разъёмы",
+    "Strip detail":"Детали зачистки",
+    "Value":"Значение",
+    "The drawing’s length is measured":"Длина на чертеже измеряется",
+    "to the jacket end at each end":"до конца оболочки с каждой стороны",
+    "the bare cable, connectors excluded":"только кабель, без разъёмов",
+    "over the connectors, face to face":"с разъёмами, от торца до торца",
+    "the drawing does not say":"чертёж не указывает",
+    "assumed — the drawing does not say":"предположение — чертёж не указывает",
+    "This is not a ready-made cable — it is built from individual wires":"Это не готовый кабель — он собирается из отдельных проводов",
+    "Cut pieces":"Число отрезков",
+    "Each [mm]":"Каждый [мм]",
+    "Total needed":"Всего требуется",
+    "BOM allows":"По BOM имеется",
+    "wires of":"проводов длиной",
     "Search saved specifications…":"Поиск по сохранённым спецификациям…",
     "No saved specification matches that search.":"Нет сохранённых спецификаций по этому запросу.",
     "Sort by this column":"Сортировать по этому столбцу",
@@ -10718,6 +11007,7 @@ Return ONLY a JSON object. No markdown fence, no commentary.
       "positions": <number of contacts, or null>,
       "termination":"crimp|solder|clamp|idc",
       "contact_pn":"the separate contact/socket/pin part number if the connector uses loose contacts, else \\"\\"",
+      "body_length_mm": <how far this connector extends beyond the point where the cable enters it, in mm, or null if unknown — only needed when a run's length_basis is over_connectors>,
       "datasheet_ref":"the assembly spec that governs its cable prep, if named" }
   ],
 
@@ -10727,7 +11017,7 @@ Return ONLY a JSON object. No markdown fence, no commentary.
       "type":"coax|single_wire|multi_conductor|twisted_pair",
 
       "finished_length_mm": <number>,
-      "length_basis":"cable_only|over_connectors|unclear",
+      "length_basis":"to_jacket_end|cable_only|over_connectors|unclear",
       "allowances":[ {"ref":"P1","mm":4.0,"reason":"cable insertion depth into the connector body","confirmed":false} ],
       "trim_allowance_mm": <number>, "trim_allowance_confirmed": <true|false>,
       "cut_length_mm": <number>,
@@ -10757,7 +11047,9 @@ Return ONLY a JSON object. No markdown fence, no commentary.
   "markers":  [ {"part_number":"","label":"A","segment":"S1","from_end":"P1","distance_mm":50,
                  "position":"where the drawing says to put it, in words, when it gives no dimension",
                  "confirmed":false,"text_lines":["DB9 FEMALE","RS422"]} ],
-  "materials":[ {"item":1,"part_number":"","manufacturer":"","description":"","qty":"1","ref":"P1"} ],
+  "materials":[ {"item":1,"part_number":"","manufacturer":"","description":"","qty":"1","ref":"P1",
+                 "kind":"wire|cable|connector|contact|label|sleeve|other",
+                 "length_mm": <the length this BOM line calls for, in mm, when it gives one (convert m and inches) — else null>} ],
   "steps":    [ {"n":1,"segment":"S1","title":"short imperative title",
                  "body":"what to do, in plain language an operator can follow. The FIRST step must be the cut, and must state the cut length together with the sum it came from.",
                  "critical":"the one thing that ruins the part if they get it wrong, or \\"\\"",
@@ -10972,6 +11264,28 @@ RULES — these matter more than completeness:
      - length_basis "over_connectors" means the cable is SHORTER than the dimension: use NEGATIVE mm.
      - Insertion depth comes from the connector's assembly spec. Without it, give a defensible estimate,
        set confirmed:false, and say what it was derived from.
+
+   READ THE DIMENSION LINE BEFORE YOU DECIDE THE BASIS. This is the single most expensive field on the
+   sheet, so decide it from what the drawing actually shows, not from habit:
+     - arrows landing on the OUTER FACES of the two connectors, or on the extreme ends of the assembled
+       harness → "over_connectors". Also give each connector's "body_length_mm", because the cable is
+       shorter than the dimension by exactly those lengths and the app subtracts them.
+     - arrows landing where the JACKET ENDS / at the back of each backshell → "to_jacket_end".
+     - a note such as "cable length", "wire length", "cut length", or a dimension on a bare cable with
+       no connectors drawn → "cable_only".
+     - genuinely ambiguous → "unclear". Say so; do not pick one to look decisive. The sheet prints
+       "assumed" against an unclear basis and asks a human, which is the correct outcome.
+
+19. READY-MADE CABLE, OR WIRES YOU BUILD IT FROM? Compare the wire/cable length on the BOM with the run
+   length. A BOM line for 12 000 mm against a 4 000 mm run is not a 12 m cable: it is three 4 m wires,
+   and the assembly is built from loose wire rather than from a jacketed cable. When that is what the
+   drawing shows:
+     - give the BOM line "kind":"wire" and its "length_mm",
+     - fill "conductors" with one entry per wire, because that list is what says how many pieces to cut,
+     - set the segment "type" to "single_wire" or "multi_conductor" as appropriate and leave
+       "cable_part_number" as the WIRE part number.
+   The app then prints "cut N wires of X mm" on the form. Do not silently average the BOM length into
+   one long run — no such piece exists.
 
 16. MULTI-CONDUCTOR CABLE. Fill in "conductors" from the wiring table: one entry per wire, with its
    signal name, colour, AWG and the pin it lands on at each end. This table IS the work instruction for
@@ -11466,134 +11780,138 @@ function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, showForm
   return g;
 }
 
-// Stepped strip profile for one end of one segment. Driven by the segment's layer
-// list and its strip dimensions: cuts sorted ascending from the tip give the
-// boundary between one layer and the next, so a 3-layer coax draws 3 steps and a
-// 2-layer wire draws 2, with no special-casing.
+// ── One figure per end ───────────────────────────────────────────────────────
+// There used to be two: a pale layer diagram and a black-jacket wire-prep
+// drawing. Two pictures of the same end is one picture too many — the operator
+// has to work out which one governs, and the day they disagree somebody cuts to
+// the wrong one. This is both of them: the shop's black-jacket drawing, showing
+// every layer the strip actually exposes, with every dimension the end needs.
+//
+// The geometry is read straight off the cuts. Sorted from the smallest, they
+// divide the exposed end into bands measured from the cable end:
+//   0 → W   bare conductor strands
+//   W → B   conductor insulation
+//   B → A   whatever the jacket was hiding (shield, braid, inner sheath)
+//   A → …   the jacket itself
+// A single-insulation wire has only A, and comes out as the plain drawing the
+// bench already knows.
+//
+// Millimetres only. The inch conversion was there because contact datasheets
+// are written in inches, but nobody at the bench measures in them, and two
+// numbers on one dimension line is an invitation to read the wrong one.
+const _CS_FIG_STRANDS=7;
 function _csStripSVG(seg, end, spec){
-  const T=_csT, rtlAttr=_csRTL()?' direction="rtl"':'';
-  // A missing layer list must not cost the operator the whole figure. On the
-  // harness that prompted this, the strip dimensions were there — 50 mm at each
-  // end — but "layers" was absent, so every strip figure silently vanished. The
-  // dimensions are the instruction; the layer names are description. Draw a
-  // generic jacket-and-core when they are missing, and say so on the figure.
-  const namedLayers=(seg?.layers||[]).filter(l=>l && (l.name||_csNum(l.od_mm)!=null));
-  const layersAssumed = namedLayers.length < 2;
-  const allLayers = layersAssumed
-    ? [{name:_csT('Outer covering'), od_mm:null}, {name:_csT('Conductor / core'), od_mm:null}]
-    : namedLayers.slice();                          // outermost first
-  const cuts0=(end?.strip||[]).filter(s=>!s.derived && _csNum(s.value_mm)>0);
-  // One cut makes one step, so only as many layers as there are steps can be
-  // drawn. A 4-conductor cable listing jacket + shield + insulation but stripped
-  // with a single jacket dimension used to draw all three on top of each other;
-  // taking the outermost (cuts+1) gives jacket back, shield exposed — which is
-  // what removing the jacket actually reveals.
-  const layers=allLayers.slice(0, Math.max(2, cuts0.length+1));
-  const inner=layers.slice().reverse();              // innermost first
+  const T=_csT;
   const cuts=(end?.strip||[]).filter(s=>!s.derived && _csNum(s.value_mm)>0)
-                            .map(s=>({code:s.code,mm:_csNum(s.value_mm),confirmed:s.confirmed!==false}))
-                            .sort((a,b)=>a.mm-b.mm);
-  if(!inner.length || !cuts.length) return '';
-
-  const X_TIP=910, X_BACK=80;
-  const maxMM=cuts[cuts.length-1].mm;
-  const S=maxMM>0 ? 410/maxMM : 1;
-  const maxOD=Math.max(...layers.map(l=>_csNum(l.od_mm)||1), 1);
-  const H=72, CY=132;
-
-  let g='', prev=0;
-  inner.forEach((layer,i)=>{
-    const to = i<cuts.length ? cuts[i].mm : null;
-    const xR = X_TIP - prev*S;
-    const xL = to==null ? X_BACK : X_TIP - to*S;
-    const od = _csNum(layer.od_mm)||maxOD;
-    const h  = Math.max(10, H*(od/maxOD));
-    const fill = i===0 ? '#FCD34D' : (i===inner.length-1 ? '#CBD5E1' : '#F1F5F9');
-    const stroke = i===0 ? '#92400E' : '#475569';
-    g+=`<rect x="${xL.toFixed(1)}" y="${(CY-h/2).toFixed(1)}" width="${(xR-xL).toFixed(1)}" height="${h.toFixed(1)}" fill="${fill}" stroke="${stroke}" stroke-width="1.6"/>`;
-    const cx=(xL+xR)/2, above=i%2===1;
-    g+=`<text x="${cx.toFixed(1)}" y="${above?(CY-h/2-16):(CY+h/2+20)}" text-anchor="middle" font-size="12" font-weight="700" fill="${i===0?'#92400E':'#1E293B'}"${rtlAttr}>${_csSvgTxt(_csP(layer.name||''))}</text>`;
-    if(_csNum(layer.od_mm)!=null)
-      g+=`<text x="${cx.toFixed(1)}" y="${above?(CY-h/2-3):(CY+h/2+35)}" text-anchor="middle" font-size="10.5" fill="#475569">Ø ${_csNum(layer.od_mm)} mm</text>`;
-    prev = to==null ? prev : to;
-  });
-
-  const faceX=[X_TIP, ...cuts.map(c=>X_TIP-c.mm*S)];
-  faceX.forEach(x=>{ g+=`<line x1="${x.toFixed(1)}" y1="${CY-H/2-4}" x2="${x.toFixed(1)}" y2="${CY+H/2+4}" stroke="#DC2626" stroke-width="3"/>`; });
-
-  let y=CY+H/2+62;
-  cuts.slice().reverse().forEach(c=>{
-    const x=X_TIP-c.mm*S, col=c.confirmed?'#0F172A':'#DC2626';
-    g+=`<line x1="${x.toFixed(1)}" y1="${y}" x2="${X_TIP}" y2="${y}" stroke="${col}" stroke-width="1.3" marker-start="url(#csAr2L)" marker-end="url(#csAr2)"/>
-        <line x1="${x.toFixed(1)}" y1="${CY+H/2+4}" x2="${x.toFixed(1)}" y2="${y+6}" stroke="${col}" stroke-width=".9" stroke-dasharray="3 3"/>
-        <rect x="${((x+X_TIP)/2-60).toFixed(1)}" y="${y-13}" width="120" height="22" fill="#fff"/>
-        <text x="${((x+X_TIP)/2).toFixed(1)}" y="${y+5}" text-anchor="middle" font-size="14" font-weight="800" fill="${col}">${_csSvgTxt(c.code)} = ${c.mm} mm${c.confirmed?'':' *'}</text>`;
-    y+=30;
-  });
-
-  // Individual conductors fanning out of the jacket — the thing a crimped
-  // multi-conductor harness actually needs and a coax sheet never showed.
+    .map(s=>({code:String(s.code||''), mm:_csNum(s.value_mm), confirmed:s.confirmed!==false,
+              label:String(s.label||'')}))
+    .sort((a,b)=>a.mm-b.mm);
   const cs=_csNum(seg?.conductor_strip_mm);
-  if(cs>0 && (seg?.conductors||[]).length){
-    const n=Math.min(seg.conductors.length,8);
-    const x0=X_TIP-cuts[cuts.length-1].mm*S;
-    seg.conductors.slice(0,n).forEach((w,i)=>{
-      const wy=CY-((n-1)/2)*13 + i*13;
-      g+=`<line x1="${x0.toFixed(1)}" y1="${CY}" x2="${(x0+40).toFixed(1)}" y2="${wy.toFixed(1)}" stroke="#94A3B8" stroke-width="2"/>
-          <line x1="${(x0+40).toFixed(1)}" y1="${wy.toFixed(1)}" x2="${X_TIP-cs*S}" y2="${wy.toFixed(1)}" stroke="#94A3B8" stroke-width="3"/>
-          <line x1="${X_TIP-cs*S}" y1="${wy.toFixed(1)}" x2="${X_TIP}" y2="${wy.toFixed(1)}" stroke="#FCD34D" stroke-width="3"/>
-          <text x="${X_TIP+8}" y="${(wy+3.5).toFixed(1)}" font-size="10" font-family="monospace" fill="#475569">${_csSvgTxt(w.color||w.name||'')}</text>`;
-    });
-    // A number floating on its own does not say what it measures. The conductor
-    // strip gets the same treatment as A: its own dimension line, below A's, with
-    // arrows at both ends and extension lines dropped from the two faces it spans.
-    const cx0=X_TIP-cs*S;
-    const cFill=seg.conductor_strip_confirmed?'#0F172A':'#DC2626';
-    const cyLine=y+14;
-    g+=`<line x1="${cx0}" y1="${CY-((n-1)/2)*13-12}" x2="${cx0}" y2="${CY+((n-1)/2)*13+12}" stroke="#DC2626" stroke-width="2"/>
-        <line x1="${cx0.toFixed(1)}" y1="${(CY+((n-1)/2)*13+12).toFixed(1)}" x2="${cx0.toFixed(1)}" y2="${(cyLine+6).toFixed(1)}" stroke="#B45309" stroke-width=".9" stroke-dasharray="3 3"/>
-        <line x1="${X_TIP}" y1="${(CY+((n-1)/2)*13+12).toFixed(1)}" x2="${X_TIP}" y2="${(cyLine+6).toFixed(1)}" stroke="#B45309" stroke-width=".9" stroke-dasharray="3 3"/>
-        <line x1="${cx0.toFixed(1)}" y1="${cyLine}" x2="${X_TIP}" y2="${cyLine}" stroke="#B45309" stroke-width="1.3" marker-start="url(#csAr2L)" marker-end="url(#csAr2)"/>
-        <text x="${(X_TIP-cs*S/2).toFixed(1)}" y="${cyLine+17}" text-anchor="middle" font-size="12" font-weight="800" fill="${cFill}"${rtlAttr}>${
-          _csSvgTxt(T('Each conductor'))}: ${cs} mm${seg.conductor_strip_confirmed?'':' *'}</text>`;
-    y=cyLine+13;
-    y+=17;
-    // Read off the picture, 8 and 2 look like 10. They are not: the conductor is
-    // bared WITHIN the length the jacket already exposes, so it adds nothing to
-    // what has to be cut. Saying so on the figure is the difference between a
-    // number an operator trusts and one they have to reason about.
-    g+=`<text x="${(X_TIP-cs*S/2).toFixed(1)}" y="${y+4}" text-anchor="middle" font-size="10.5" fill="#7C2D12"${rtlAttr}>${
-      _csSvgTxt(T('measured inside A — it adds nothing to the cut length'))}</text>`;
-    y+=22;
-  }
+  if(cs!=null && cs>0)
+    cuts.unshift({code:'W', mm:cs, confirmed:seg?.conductor_strip_confirmed!==false,
+                  label:T('each conductor'), conductor:true});
+  cuts.sort((a,b)=>a.mm-b.mm);
+  if(!cuts.length) return '';
 
-  // The one number this end contributes to the cut length, spelled out exactly as
-  // the cut table spells it. Both read the same fields, so they cannot disagree —
-  // and now the operator can see that without holding two pages side by side.
-  const _ec=(_csCutLength(seg, spec).endCosts||[])
+  const A=cuts[cuts.length-1].mm;                 // the outermost cut sets the scale
+  const X_END=90, X_JACKET=470, X_TIP=1010;
+  const S=A>0 ? (X_JACKET-X_END)/A : 1;
+  const CY=210, JH=64;
+  const at=mm=>X_END+mm*S;
+
+  // Everything the jacket was covering, drawn band by band from the end.
+  // Each cut removes one layer and exposes the next one down, so the band a cut
+  // opens up is named by the layer BELOW the one it took off — the outermost cut
+  // takes the jacket and shows layer 2, the next takes layer 2 and shows layer 3.
+  const layers=(seg?.layers||[]).filter(l=>l && (l.name||_csNum(l.od_mm)!=null));
+  const _isBraid=n=>/shield|braid|drain|מסך|צמה/i.test(String(n||''));
+  let g='';
+  // band between each pair of cuts, outermost first so the jacket is drawn last
+  for(let i=cuts.length-1;i>=1;i--){
+    const xL=at(cuts[i-1].mm), xR=at(cuts[i].mm);
+    const depth=(cuts.length-1)-i;                 // 0 = the band the jacket cut opens
+    const h=JH*(0.80-0.16*depth);
+    const layer=layers[depth+1];
+    const nm=layer ? _csP(layer.name||'') : '';
+    const braid=_isBraid(layer&&layer.name);
+    g+=`<rect x="${xL.toFixed(1)}" y="${(CY-h/2).toFixed(1)}" width="${(xR-xL).toFixed(1)}"
+          height="${h.toFixed(1)}" fill="${braid?'#9AA4B2':'#CBD5E1'}" stroke="#475569" stroke-width="1.2"/>`;
+    if(braid){
+      // a braid reads as a braid, not as a grey box
+      for(let x=xL+8;x<xR-4;x+=11)
+        g+=`<path d="M${x.toFixed(1)},${(CY-h/2).toFixed(1)} l8,${h.toFixed(1)}" stroke="#6B7280" stroke-width="1" fill="none"/>`;
+    }
+    if(nm) g+=`<text x="${((xL+xR)/2).toFixed(1)}" y="${(CY-h/2-9).toFixed(1)}" text-anchor="middle"
+        font-size="12" font-weight="700" fill="#334155">${_csSvgTxt(nm)}</text>`;
+  }
+  // bare strands, from the cable end to the innermost cut
+  const xBare=at(cuts[0].mm);
+  for(let i=0;i<_CS_FIG_STRANDS;i++){
+    const off=(i-(_CS_FIG_STRANDS-1)/2)*8.5;
+    const y0=CY+off*0.72, y1=CY-off*0.5, y2=CY+off*0.62, y3=CY+off*0.3;
+    g+=`<path d="M${X_END},${y0.toFixed(1)} C${X_END+60},${y1.toFixed(1)} ${xBare-70},${y2.toFixed(1)} ${xBare.toFixed(1)},${y3.toFixed(1)}"
+      fill="none" stroke="#C2703A" stroke-width="2.1" stroke-linecap="round"/>`;
+  }
+  // the jacket
+  g+=`<rect x="${X_JACKET}" y="${CY-JH/2}" width="${X_TIP-X_JACKET}" height="${JH}" rx="${JH/2}" fill="#1A1A22"/>
+      <rect x="${X_JACKET}" y="${CY-JH/2}" width="34" height="${JH}" fill="#1A1A22"/>
+      <line x1="${X_JACKET+28}" y1="${CY-10}" x2="${X_TIP-24}" y2="${CY-10}" stroke="#6B7280" stroke-width="2.4"/>`;
+  // every cut face, square to the axis
+  cuts.forEach(c=>{ const x=at(c.mm);
+    g+=`<line x1="${x.toFixed(1)}" y1="${CY-JH/2-8}" x2="${x.toFixed(1)}" y2="${CY+JH/2+8}" stroke="#DC2626" stroke-width="2.6"/>`; });
+
+  // dimensions, largest at the bottom so the lines never cross
+  let y=CY+JH/2+46;
+  cuts.slice().reverse().forEach(c=>{
+    const x=at(c.mm), col=c.confirmed?'#0F172A':'#DC2626';
+    g+=`<line x1="${X_END}" y1="${y}" x2="${x.toFixed(1)}" y2="${y}" stroke="${col}" stroke-width="1.5"
+          marker-start="url(#csFigL)" marker-end="url(#csFigR)"/>
+        <line x1="${x.toFixed(1)}" y1="${CY+JH/2+8}" x2="${x.toFixed(1)}" y2="${(y+7).toFixed(1)}" stroke="${col}" stroke-width=".9" stroke-dasharray="3 3"/>
+        <text x="${X_END}" y="${y-9}" font-size="17" font-weight="800" fill="${col}">${
+          _csSvgTxt(c.code?`${c.code} = `:'')}${c.mm} mm${c.confirmed?'':' *'}</text>
+        <text x="${(x+14).toFixed(1)}" y="${y+5}" font-size="11.5" fill="#64748B">${_csSvgTxt(_csP(c.label||''))}</text>`;
+    y+=42;
+  });
+  g+=`<line x1="${X_END}" y1="${CY-JH/2-8}" x2="${X_END}" y2="${(y-30).toFixed(1)}" stroke="#94A3B8" stroke-width=".9" stroke-dasharray="3 3"/>`;
+
+  // what this end costs the cut length — the same two numbers the cut table
+  // prints, read from the same fields, so they cannot drift apart
+  const ec=(_csCutLength(seg, spec).endCosts||[])
     .find(e=>String(e.ref||'').toUpperCase()===String(end?.ref||'').toUpperCase());
-  if(_ec){
-    g+=`<rect x="300" y="${y-2}" width="400" height="42" fill="#FEF3C7" stroke="#B45309" stroke-width="1"/>
-        <text x="500" y="${y+14}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#7C2D12"${rtlAttr}>${
+  if(ec){
+    g+=`<rect x="330" y="${y-4}" width="440" height="44" fill="#FEF3C7" stroke="#B45309" stroke-width="1"/>
+        <text x="550" y="${y+14}" text-anchor="middle" font-size="12" font-weight="700" fill="#7C2D12">${
           _csSvgTxt(T('This end adds to the cut length'))}</text>
-        <text x="500" y="${y+32}" text-anchor="middle" font-size="14" font-weight="800" fill="#7C2D12" font-family="monospace">${
-          _ec.strip} + ${_ec.margin} = ${_ec.mm} mm</text>`;
-    y+=50;
+        <text x="550" y="${y+33}" text-anchor="middle" font-size="15" font-weight="800" fill="#7C2D12" font-family="monospace">${
+          ec.strip} + ${ec.margin}${ec.conn?` − ${ec.conn}`:''} = ${ec.mm} mm</text>`;
+    y+=54;
   }
 
-  const h=y+40+(layersAssumed?16:0);
-  return `<svg viewBox="0 0 1000 ${h}" xmlns="http://www.w3.org/2000/svg" font-family="Heebo, Public Sans, Arial, sans-serif" direction="ltr">
+  const conn=(_csConnectors(spec)||[]).find(c=>String(c.ref||'').toUpperCase()===String(end?.ref||'').toUpperCase());
+  const sub=[seg?.cable_part_number, conn&&conn.part_number, conn&&conn.contact_pn]
+    .map(x=>String(x||'').trim()).filter(Boolean).join('   |   ');
+  const term=String(conn&&conn.termination||'').toLowerCase();
+  const termLine = /solder/.test(term) ? T('SOLDER TERMINATION')
+                 : /crimp/.test(term)  ? T('CRIMP TERMINATION — DO NOT TIN')
+                 : T('DO NOT TIN STRANDS BEFORE TERMINATION');
+  const H=y+78;
+  const anyTBC=cuts.some(c=>!c.confirmed);
+  return `<svg viewBox="0 0 1100 ${H}" xmlns="http://www.w3.org/2000/svg" font-family="Heebo, Public Sans, Arial, sans-serif" direction="ltr">
     <defs>
-      <marker id="csAr2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#0F172A"/></marker>
-      <marker id="csAr2L" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto"><path d="M8,0 L0,4 L8,8 z" fill="#0F172A"/></marker>
+      <marker id="csFigR" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#0F172A"/></marker>
+      <marker id="csFigL" markerWidth="9" markerHeight="9" refX="1" refY="4.5" orient="auto"><path d="M9,0 L0,4.5 L9,9 z" fill="#0F172A"/></marker>
     </defs>
-    <text x="80" y="34" font-size="15" font-weight="800" fill="#1E293B">${_csSvgTxt(seg?.id||'')} — ${_csSvgTxt(end?.ref||'')}</text>
+    <rect x="6" y="6" width="1088" height="${H-12}" fill="#fff" stroke="#0F172A" stroke-width="1.6"/>
+    <text x="24" y="30" font-size="12" fill="#94A3B8">${_csSvgTxt(`${seg?.id||''} · ${end?.ref||''}`)}</text>
+    <text x="550" y="58" text-anchor="middle" font-size="26" font-weight="800" fill="#0F172A" letter-spacing="1">${
+      _csSvgTxt(T('WIRE END PREPARATION'))}</text>
+    ${sub?`<text x="550" y="88" text-anchor="middle" font-size="15" fill="#334155">${_csSvgTxt(sub)}</text>`:''}
     ${g}
-    ${layersAssumed?`<text x="500" y="${h-38}" text-anchor="middle" font-size="10.5" fill="#B45309"${rtlAttr}>${
-      _csSvgTxt(T('The layer names were not captured from the drawing — the cable is drawn generically. The dimensions are as specified.'))}</text>`:''}
-    <text x="500" y="${h-22}" text-anchor="middle" font-size="11.5" fill="#7F1D1D"${rtlAttr}>${_csSvgTxt(T('Red faces = every cut square to the axis, free of burrs and nicks.'))}</text>
-    ${cuts.some(c=>!c.confirmed)||(cs>0&&!seg.conductor_strip_confirmed)
-      ? `<text x="500" y="${h-6}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#DC2626"${rtlAttr}>* ${_csSvgTxt(T('TO BE CONFIRMED'))}</text>` : ''}
+    <text x="550" y="${H-46}" text-anchor="middle" font-size="15" font-weight="800" fill="#0F172A">${
+      _csSvgTxt(T('STRIP INSULATION ONLY — DO NOT CUT OR NICK CONDUCTOR STRANDS'))}</text>
+    <text x="550" y="${H-25}" text-anchor="middle" font-size="13" fill="#475569">${_csSvgTxt(termLine)}</text>
+    ${anyTBC?`<text x="550" y="${H-8}" text-anchor="middle" font-size="12" font-weight="700" fill="#DC2626">* ${
+      _csSvgTxt(T('TO BE CONFIRMED'))}</text>`:''}
   </svg>`;
 }
 
@@ -11966,83 +12284,97 @@ function _csFormRows(spec){
   });
 }
 
-// ── Wire end preparation figure ───────────────────────────────────────────────
-// Drawn the way the shop's own wire-prep sheets are drawn: the insulation as a
-// solid body, the bared strands fanning out of it, and one dimension under the
-// bared length in millimetres with the inch value beside it, because the
-// contact datasheets these numbers come from are written in inches.
+
+// ── Where to read up on a connector ──────────────────────────────────────────
+// A part number on a form is a dead end: the person holding it still has to go
+// and find the datasheet that says how deep the contact seats and how far back
+// to strip. So every connector on the form carries links.
 //
-// This is deliberately NOT the cable figure above it. That one shows the
-// jacket, the shield and where each cut lands on a multi-layer cable; this one
-// shows a single conductor at the scale the operator works at, and carries the
-// two instructions that ruin a crimp when ignored — do not nick the strands,
-// do not tin a crimped contact.
-const _CS_WIRE_STRANDS=7;
-function _csWireEndSVG(seg, end, spec){
-  const T=_csT;
-  let mm=_csNum(seg?.conductor_strip_mm), confirmed=seg?.conductor_strip_confirmed!==false;
-  if(mm==null){
-    // No conductor strip on this spec — fall back to the smallest real cut at
-    // this end, which on a single-conductor wire IS the wire prep.
-    const cuts=(end?.strip||[]).filter(s=>!s.derived && _csNum(s.value_mm)>0)
-                               .sort((a,b)=>_csNum(a.value_mm)-_csNum(b.value_mm));
-    if(!cuts.length) return '';
-    mm=_csNum(cuts[0].value_mm); confirmed=cuts[0].confirmed!==false;
+// Two kinds, and the difference matters. A SEARCH link is built from the part
+// number and always works, because the distributor does the finding. A PRODUCT
+// link is the real page, and it is only ever stored after the distributor's own
+// API returned it for that exact part — never guessed from a pattern, because a
+// fabricated URL that 404s costs more time than no link at all.
+// Plain data, not builders: the search prefix and the part number, joined and
+// encoded in one place.
+const _CS_SEARCH_SITES=[
+  {name:'Mouser',   base:'https://www.mouser.com/c/?q='},
+  {name:'DigiKey',  base:'https://www.digikey.com/en/products/result?keywords='},
+  {name:'Octopart', base:'https://octopart.com/search?q='},
+];
+// Only http(s) is ever put in an href — a stored value is data, and data that
+// arrives as javascript: is an attack, not a link.
+function _csSafeUrl(u){
+  const s=String(u||'').trim();
+  return /^https?:\/\/[^\s"'<>]+$/i.test(s) ? s : '';
+}
+function _csSearchLinks(pn){
+  const p=String(pn||'').trim();
+  if(!p) return [];
+  return _CS_SEARCH_SITES.map(s=>({name:s.name, url:s.base+encodeURIComponent(p), search:true}));
+}
+// What the form prints for one part number: the real page first when we have
+// one, then the searches.
+function _csPartLinks(pn, stored, vendor){
+  const p=String(pn||'').trim();
+  if(!p) return [];
+  const real=_csSafeUrl(stored);
+  return (real ? [{name:String(vendor||'Product page'), url:real, search:false}] : [])
+    .concat(_csSearchLinks(p));
+}
+function _csLinkChips(pn, stored, vendor){
+  const links=_csPartLinks(pn, stored, vendor);
+  if(!links.length) return '';
+  return `<div class="cs-links">${links.map(l=>
+    `<a class="cs-link${l.search?' cs-link-s':''}" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer"
+        title="${esc(l.search?`${_csT('Search')} ${l.name} — ${pn}`:`${l.name} — ${pn}`)}">${
+        l.search?'🔎':'🔗'} ${esc(l.name)}</a>`).join('')}</div>`;
+}
+// Asks the distributor APIs for the real product page of every connector and
+// contact on the sheet, and saves what comes back. Parts nobody stocks simply
+// keep their search links — that is a legitimate answer for a MIL connector,
+// not a failure worth an error.
+async function _csFetchConnectorLinks(){
+  const spec=csCurrent;
+  if(!spec) return;
+  const btn=document.getElementById('btn-cs-links');
+  const conns=_csConnectors(spec);
+  const jobs=[];
+  conns.forEach((c,i)=>{
+    if(String(c.part_number||'').trim()) jobs.push({i, field:'product_url', pn:c.part_number, desc:c.description||''});
+    if(String(c.contact_pn||'').trim()) jobs.push({i, field:'contact_url', pn:c.contact_pn, desc:'contact'});
+  });
+  if(!jobs.length){ toast(_csT('No connector part numbers on this sheet'),'error'); return; }
+  if(btn){ btn.disabled=true; btn.textContent='…'; }
+  let found=0;
+  for(const j of jobs){
+    try{
+      const r=await lookupPartPrices(j.pn, 1, j.desc);
+      const hit=(r.listed||[]).find(v=>_csSafeUrl(v.url));
+      if(hit){
+        const target=spec.connectors[j.i];
+        if(target){
+          target[j.field]=hit.url;
+          target[j.field+'_vendor']=hit.name||'';
+          if(!target.manufacturer && hit.manufacturer) target.manufacturer=hit.manufacturer;
+          found++;
+        }
+      }
+    }catch(e){ console.warn('[CutStrip] link lookup', j.pn, e.message); }
   }
-  if(mm==null || mm<=0) return '';
-
-  const conn=(_csConnectors(spec)||[]).find(c=>String(c.ref||'').toUpperCase()===String(end?.ref||'').toUpperCase());
-  const sub=[seg?.cable_part_number, conn&&conn.part_number, conn&&conn.contact_pn]
-    .map(s=>String(s||'').trim()).filter(Boolean).join('   |   ');
-  const term=String(conn&&conn.termination||'').toLowerCase();
-  const termLine = /solder/.test(term) ? T('SOLDER TERMINATION')
-                 : /crimp/.test(term)  ? T('CRIMP TERMINATION — DO NOT TIN')
-                 : T('DO NOT TIN STRANDS BEFORE TERMINATION');
-
-  const inch=(mm/25.4);
-  const X_STRIP_L=120, X_STRIP_R=330, X_TIP=980;
-  const CY=150, JH=62, SPREAD=9;
-  const col=confirmed?'#0F172A':'#DC2626';
-
-  let strands='';
-  for(let i=0;i<_CS_WIRE_STRANDS;i++){
-    const off=(i-(_CS_WIRE_STRANDS-1)/2)*SPREAD;
-    // Two shallow crossings make it read as a stranded conductor rather than a
-    // comb of parallel wires; a solid-core wire is drawn as one line.
-    const y0=CY+off*0.72, y1=CY-off*0.5, y2=CY+off*0.62, y3=CY+off*0.28;
-    strands+=`<path d="M${X_STRIP_L},${y0.toFixed(1)} C${X_STRIP_L+70},${y1.toFixed(1)} ${X_STRIP_R-90},${y2.toFixed(1)} ${X_STRIP_R},${y3.toFixed(1)}"
-      fill="none" stroke="#C2703A" stroke-width="2.1" stroke-linecap="round"/>`;
+  if(found){
+    try{
+      const {_id, ...body}=spec;
+      await setDoc(doc(db,'companies',companyId,'cut_strip_specs',_id),
+        {...body, updatedAt:serverTimestamp()}, {merge:false});
+      csSpecs=[];
+    }catch(e){ toast('Save failed: '+e.message,'error'); }
   }
-
-  return `<svg viewBox="0 0 1100 372" xmlns="http://www.w3.org/2000/svg" font-family="Heebo, Public Sans, Arial, sans-serif" direction="ltr">
-    <defs>
-      <marker id="csWAr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="${col}"/></marker>
-      <marker id="csWArL" markerWidth="9" markerHeight="9" refX="1" refY="4.5" orient="auto"><path d="M9,0 L0,4.5 L9,9 z" fill="${col}"/></marker>
-    </defs>
-    <rect x="6" y="6" width="1088" height="360" fill="#fff" stroke="#0F172A" stroke-width="1.6"/>
-    <text x="24" y="28" font-size="12" fill="#94A3B8">${_csSvgTxt(`${seg?.id||''} · ${end?.ref||''}`)}</text>
-    <text x="550" y="56" text-anchor="middle" font-size="27" font-weight="800" fill="#0F172A" letter-spacing="1">${
-      _csSvgTxt(T('WIRE END PREPARATION'))}</text>
-    ${sub?`<text x="550" y="86" text-anchor="middle" font-size="15" fill="#334155">${_csSvgTxt(sub)}</text>`:''}
-
-    ${strands}
-    <rect x="${X_STRIP_R}" y="${CY-JH/2}" width="${X_TIP-X_STRIP_R}" height="${JH}" rx="${JH/2}" fill="#1A1A22"/>
-    <rect x="${X_STRIP_R}" y="${CY-JH/2}" width="34" height="${JH}" fill="#1A1A22"/>
-    <line x1="${X_STRIP_R+30}" y1="${CY-10}" x2="${X_TIP-22}" y2="${CY-10}" stroke="#6B7280" stroke-width="2.4"/>
-
-    <line x1="${X_STRIP_L}" y1="${CY+JH/2+12}" x2="${X_STRIP_L}" y2="${CY+JH/2+96}" stroke="${col}" stroke-width="1.4"/>
-    <line x1="${X_STRIP_R}" y1="${CY+JH/2+12}" x2="${X_STRIP_R}" y2="${CY+JH/2+96}" stroke="${col}" stroke-width="1.4"/>
-    <line x1="${X_STRIP_L}" y1="${CY+JH/2+78}" x2="${X_STRIP_R}" y2="${CY+JH/2+78}" stroke="${col}" stroke-width="1.7"
-      marker-start="url(#csWArL)" marker-end="url(#csWAr)"/>
-    <text x="${X_STRIP_L}" y="${CY+JH/2+62}" font-size="20" font-weight="800" fill="${col}">${
-      mm} mm&#160;&#160;(${inch.toFixed(3)} in)${confirmed?'':' *'}</text>
-
-    <text x="550" y="316" text-anchor="middle" font-size="16" font-weight="800" fill="#0F172A">${
-      _csSvgTxt(T('STRIP INSULATION ONLY — DO NOT CUT OR NICK CONDUCTOR STRANDS'))}</text>
-    <text x="550" y="340" text-anchor="middle" font-size="14" fill="#475569">${_csSvgTxt(termLine)}</text>
-    ${confirmed?'':`<text x="550" y="360" text-anchor="middle" font-size="12.5" font-weight="700" fill="#DC2626">* ${
-      _csSvgTxt(T('TO BE CONFIRMED'))}</text>`}
-  </svg>`;
+  logAudit('cut_strip_links',{drawing:spec.drawing_number, asked:jobs.length, found},true);
+  toast(found ? `${found} ${_csT('product page(s) found')}` : _csT('No product page was found — the search links still work'),
+        found?'success':'info');
+  if(btn){ btn.disabled=false; }
+  renderCutStripSheet();
 }
 
 // ── Rendering: the sheet ──────────────────────────────────────────────────────
@@ -12215,6 +12547,7 @@ function renderCutStripSheet(){
       ${['en','he','ru'].map(L=>`<button class="btn btn-sm ${_csLang===L?'btn-blue':'btn-ghost'}"
           data-cs-lang="${L}" ${_csLang===L?'disabled':''}>${_CS_LANG_NAMES[L]}</button>`).join('')}
     </span>
+    <button class="btn btn-sm btn-ghost" id="btn-cs-links" title="${esc(T('Ask the distributor APIs for each connector\u2019s product page'))}">🔗 ${esc(T('Find links'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-mfg" title="${esc(T('Copy the material list, operation steps, inspection checks and tooling into a manufacturing instruction'))}">🛠️ ${esc(T('To Manufacturing'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-edit">✎ ${esc(T('Edit'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-print">🖨 ${esc(T('Print'))}</button>
@@ -12235,8 +12568,6 @@ function renderCutStripSheet(){
   // instruction, and lives on the Manufacturing Instructions screen — one click
   // away, through "Send to Manufacturing Instructions".
   setContent(`<div id="cs-sheet" class="cs-sheet" dir="${rtl?'rtl':'ltr'}">
-
-    <div class="cs-banner">${esc(T('Generated by AI from the drawing — verify against the drawing before use.'))}</div>
 
     ${_csEditing ? `<div class="cs-edit-bar">
       <b>✎ ${esc(T('Editing'))}</b>
@@ -12344,6 +12675,54 @@ function renderCutStripSheet(){
       </table>
       <p class="cs-note">${esc(T('Length is the length to CUT — it already includes the connector allowances and the trim. Strip is jacket / conductor.'))}</p>
 
+      ${_csSegments(spec).map((seg,si)=>{
+        const cut=_csCutLength(seg, spec);
+        const d=cut.datum||_csDatum(seg, spec);
+        const build=_csWireBuild(seg, spec);
+        return `
+        <div class="cs-datum">
+          <b class="cs-ltr">${esc(seg.id||'')}</b>
+          <span>${esc(T('The drawing\u2019s length is measured'))}:</span>
+          ${_csEditing
+            ? `<select class="cs-in" data-cs-path="segments.${si}.length_basis" data-cs-type="raw">
+                 ${['to_jacket_end','cable_only','over_connectors','unclear'].map(b=>
+                   `<option value="${b}" ${String(seg.length_basis||'unclear')===b?'selected':''}>${esc(T(_CS_BASIS_LABEL[b]))}</option>`).join('')}
+               </select>`
+            : `<b>${esc(T(d.label))}</b>`}
+          ${d.stated ? '' : `<span class="cs-tag cs-tbc">${esc(T('assumed — the drawing does not say'))}</span>`}
+        </div>
+        ${d.basis===_CS_BASIS_OVER ? `<p class="cs-note">${
+          esc(T('Measured over the connectors, so each connector body comes OFF the cut length.'))}${
+          cut.missingConn?` <b style="color:#B91C1C">${esc(T('No body length is on file for'))} ${cut.missingConn} ${
+          esc(T('connector(s) — nothing was subtracted for them. Fill it in before cutting.'))}</b>`:''}</p>` : ''}
+        ${!d.stated ? `<div class="cs-box cs-warn">
+          <b>${esc(T('The drawing does not say where the length is measured from'))}</b>
+          <p>${esc(T('The shop default was used — to the jacket end at each end, with the connector allowance added. If this drawing dimensions over the connectors instead, the cable is SHORTER than the figure above: set it in Edit before anyone cuts.'))}</p>
+        </div>` : ''}
+
+        ${build ? `<div class="cs-box cs-stop">
+          <b>${esc(T('This is not a ready-made cable — it is built from individual wires'))}</b>
+          <p>${esc(T('The BOM carries more wire than one run needs, so the run is made up from separate wires.'))}</p>
+          <table class="cs-tbl cs-form-tbl" style="margin-top:8px">
+            <thead><tr><th style="width:26%">${esc(T('Part number'))}</th>
+              <th style="width:14%">${esc(T('Cut pieces'))}</th><th style="width:16%">${esc(T('Each [mm]'))}</th>
+              <th style="width:16%">${esc(T('Total needed'))}</th><th style="width:28%">${esc(T('BOM allows'))}</th></tr></thead>
+            <tbody><tr>
+              <td class="cs-ltr">${esc(build.pn||'—')}</td>
+              <td class="cs-ctr cs-ltr"><b style="font-size:16px">${build.count}</b></td>
+              <td class="cs-ctr cs-ltr"><b style="font-size:16px;color:#7C2D12">${build.perWireMm}</b></td>
+              <td class="cs-ctr cs-ltr">${build.requiredMm}</td>
+              <td class="cs-ctr cs-ltr">${build.stockMm}${build.spareMm?` <span style="color:#64748B">(+${build.spareMm})</span>`:''}</td>
+            </tr></tbody></table>
+          <p>${esc(T('Cut'))} <b>${build.count}</b> ${esc(T('wires of'))} <b class="cs-ltr">${build.perWireMm} mm</b>
+             ${esc(build.countFrom==='conductors'?T('— one per conductor in the wiring table'):T('— worked out from the BOM length'))}.</p>
+          ${build.shortMm?`<p style="color:#B91C1C;font-weight:700">${esc(T('The BOM is short by'))}
+            <span class="cs-ltr">${build.shortMm} mm</span> — ${esc(T('check the quantity before drawing material.'))}</p>`:''}
+          ${build.ratioMismatch?`<p style="color:#B45309;font-weight:700">${esc(T('The BOM length divides into'))}
+            ${build.ratioMismatch} ${esc(T('pieces, but the wiring table lists'))} ${build.count} —
+            ${esc(T('one of the two is wrong. Resolve it before cutting.'))}</p>`:''}
+        </div>` : ''}`;}).join('')}
+
       ${(()=>{ const strips=_csStripRows(spec); return strips.length ? `
       <h3 class="cs-h3">${esc(T('Strip detail'))}</h3>
       <table class="cs-tbl"><thead><tr><th style="width:34%">${esc(T('End'))}</th>
@@ -12360,11 +12739,12 @@ function renderCutStripSheet(){
     ${_csConnectors(spec).length ? `
     <h2 class="cs-h2"><span class="cs-n">4</span>${esc(T('Connectors'))}</h2>
     <div class="cs-pad"><table class="cs-tbl">
-      <thead><tr><th style="width:7%">${esc(T('Ref'))}</th><th style="width:9%">${esc(T('Kind'))}</th>
-        <th style="width:16%">${esc(T('Part number'))}</th>
-        <th style="width:9%">${esc(T('Manufacturer'))}</th><th style="width:7%">${esc(T('Positions'))}</th>
-        <th style="width:8%">${esc(T('Termination'))}</th><th style="width:15%">${esc(T('Contact P/N'))}</th>
-        <th style="width:29%">${esc(T('Description'))}</th></tr></thead>
+      <thead><tr><th style="width:5%">${esc(T('Ref'))}</th><th style="width:7%">${esc(T('Kind'))}</th>
+        <th style="width:14%">${esc(T('Part number'))}</th>
+        <th style="width:10%">${esc(T('Manufacturer'))}</th><th style="width:5%">${esc(T('Positions'))}</th>
+        <th style="width:8%">${esc(T('Termination'))}</th><th style="width:13%">${esc(T('Contact P/N'))}</th>
+        <th style="width:19%">${esc(T('Description'))}</th>
+        <th style="width:19%">${esc(T('Datasheet / supplier'))}</th></tr></thead>
       <tbody>${_csConnectors(spec).map((c,i)=>`<tr>
         <td class="cs-ctr cs-ltr"><b>${esc(c.ref||'')}</b></td>
         <td class="cs-ctr" style="font-size:12px">${esc(T(c.kind==='open_wires'?'Open wires':(c.kind||'connector')))}</td>
@@ -12374,7 +12754,10 @@ function renderCutStripSheet(){
         <td class="cs-ctr cs-ltr">${esc(c.termination||'—')}</td>
         <td>${_csFRaw(`connectors.${i}.contact_pn`, c.contact_pn)}</td>
         <td>${_csFText(`connectors.${i}.description`, c.description)}
-          ${c._inferred?`<span class="cs-tag cs-tbc">${esc(T('not described on the sheet'))}</span>`:''}</td></tr>`).join('')}
+          ${c._inferred?`<span class="cs-tag cs-tbc">${esc(T('not described on the sheet'))}</span>`:''}</td>
+        <td>${_csLinkChips(c.part_number, c.product_url, c.product_url_vendor)}
+          ${String(c.contact_pn||'').trim()?`<div class="cs-links-sub">${esc(T('Contact'))}:</div>
+            ${_csLinkChips(c.contact_pn, c.contact_url, c.contact_url_vendor)}`:''}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
 
     <h2 class="cs-h2"><span class="cs-n">5</span>${esc(T('Schematic — cut & strip'))}</h2>
@@ -12382,10 +12765,8 @@ function renderCutStripSheet(){
       ${_csSegments(spec).map(seg=>{
         const ends=_csSegEnds(seg, spec);
         const figs=ends.map(e=>{
-          const jacket=_csStripSVG(seg,e,spec);
-          const wire=_csWireEndSVG(seg,e,spec);
-          return (jacket?`<figure class="cs-fig">${jacket}</figure>`:'')
-               + (wire?`<figure class="cs-fig">${wire}</figure>`:'');
+          const fig=_csStripSVG(seg,e,spec);
+          return fig?`<figure class="cs-fig">${fig}</figure>`:'';
         }).join('');
         return figs ? `<h3 class="cs-h3"><span class="cs-ltr">${esc(seg.id)} — ${esc(_csSegLabel(seg))}</span>
           ${esc(T('cut'))}: <span class="cs-ltr">${esc(_csMM(_csCutLength(seg,spec).total))}</span></h3>${figs}` : '';
@@ -12428,6 +12809,7 @@ function renderCutStripSheet(){
   document.getElementById('btn-cs-pdf')?.addEventListener('click',_csExportPDF);
   document.getElementById('btn-cs-edit')?.addEventListener('click',_csEnterEdit);
   document.getElementById('btn-cs-mfg')?.addEventListener('click',_mfgFromCurrentSpec);
+  document.getElementById('btn-cs-links')?.addEventListener('click',_csFetchConnectorLinks);
   document.getElementById('btn-cs-save')?.addEventListener('click',_csSaveSpec);
   document.getElementById('btn-cs-cancel')?.addEventListener('click',()=>{
     if(confirm('Discard unsaved changes to this specification?')) _csCancelEdit();
@@ -12556,9 +12938,10 @@ async function loadMfgDocs(force){
 
 // ── List ────────────────────────────────────────────────────────────────────
 async function renderManufacturing(){
+  const T=_csT;
   mfgCurrent=null; _mfgEditing=false; _mfgBackup=null;
-  setActions(`<button class="btn btn-blue btn-sm" id="btn-mfg-new">＋ New instruction</button>
-    <button class="btn btn-ghost btn-sm" id="btn-mfg-from-cs">↧ From a Cut &amp; Strip spec</button>`);
+  setActions(`<button class="btn btn-blue btn-sm" id="btn-mfg-new">＋ ${esc(T('New instruction'))}</button>
+    <button class="btn btn-ghost btn-sm" id="btn-mfg-from-cs">↧ ${esc(T('From a Cut & Strip spec'))}</button>`);
   setContent(`<div style="text-align:center;padding:60px"><div class="ring" style="margin:0 auto"></div></div>`);
   document.getElementById('btn-mfg-new')?.addEventListener('click',_mfgNew);
   document.getElementById('btn-mfg-from-cs')?.addEventListener('click',_mfgImportModal);
@@ -12570,13 +12953,11 @@ async function renderManufacturing(){
   if(!list.length){
     setContent(`<div class="card" style="max-width:640px;margin:30px auto;text-align:center;padding:40px 30px">
       <div style="font-size:44px;margin-bottom:10px">🛠️</div>
-      <h3 style="margin-bottom:6px">No manufacturing instructions yet</h3>
+      <h3 style="margin-bottom:6px">${esc(T('No manufacturing instructions yet'))}</h3>
       <p style="color:var(--muted);font-size:13px;margin-bottom:20px">
-        A manufacturing instruction holds the material list, the order of operations, the inspection
-        checks and the tooling for one assembly. Write one from scratch, or take the starting content
-        from a cut &amp; strip specification and edit it.</p>
-      <button class="btn btn-blue" id="btn-mfg-new2">＋ New instruction</button>
-      <button class="btn btn-ghost" id="btn-mfg-from-cs2" style="margin-inline-start:8px">↧ From a Cut &amp; Strip spec</button>
+        ${esc(T('A manufacturing instruction holds the material list, the order of operations, the inspection checks and the tooling for one assembly. Write one from scratch, or take the starting content from a cut & strip specification and edit it.'))}</p>
+      <button class="btn btn-blue" id="btn-mfg-new2">＋ ${esc(T('New instruction'))}</button>
+      <button class="btn btn-ghost" id="btn-mfg-from-cs2" style="margin-inline-start:8px">↧ ${esc(T('From a Cut & Strip spec'))}</button>
     </div>`);
     document.getElementById('btn-mfg-new2')?.addEventListener('click',_mfgNew);
     document.getElementById('btn-mfg-from-cs2')?.addEventListener('click',_mfgImportModal);
@@ -12592,13 +12973,13 @@ async function renderManufacturing(){
   });
   setContent(`
     <div class="toolbar" style="margin-bottom:10px;gap:8px">
-      <input class="search-box" id="mfg-search" placeholder="Search instructions…" value="${esc(_mfgListQuery)}" style="max-width:320px">
+      <input class="search-box" id="mfg-search" placeholder="${esc(T('Search instructions…'))}" value="${esc(_mfgListQuery)}" style="max-width:320px">
       <span class="count-badge">${rows.length} of ${list.length}</span>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th style="width:16%">Doc no.</th><th>Title</th><th style="width:13%">Drawing #</th>
-        <th style="width:14%">Customer</th><th style="width:7%">Rev</th>
-        <th style="width:7%">Steps</th><th style="width:12%">Updated</th><th style="width:70px"></th></tr></thead>
+      <thead><tr><th style="width:16%">${esc(T('Doc no.'))}</th><th>${esc(T('Title'))}</th><th style="width:13%">${esc(T('Drawing #'))}</th>
+        <th style="width:14%">${esc(T('Customer'))}</th><th style="width:7%">${esc(T('Rev'))}</th>
+        <th style="width:7%">${esc(T('Steps'))}</th><th style="width:12%">${esc(T('Updated'))}</th><th style="width:70px"></th></tr></thead>
       <tbody>${rows.length?rows.map(d=>`<tr class="mfg-row" data-id="${esc(d._id)}" style="cursor:pointer">
         <td class="cs-ltr" style="font-weight:700">${esc(d.doc_no||'')}</td>
         <td>${esc(d.title||'')}</td>
@@ -12609,7 +12990,7 @@ async function renderManufacturing(){
         <td style="font-size:11px;color:var(--muted)">${fmtDateTime(d.updatedAt)}</td>
         <td style="text-align:right"><button class="btn btn-ghost btn-sm mfg-del" data-id="${esc(d._id)}"
           data-name="${esc(d.doc_no||d.title||d._id)}" title="Delete">🗑</button></td>
-      </tr>`).join('') : `<tr class="empty-row"><td colspan="8">Nothing matches that search</td></tr>`}
+      </tr>`).join('') : `<tr class="empty-row"><td colspan="8">${esc(T('Nothing matches that search'))}</td></tr>`}
       </tbody></table></div>`);
   document.getElementById('mfg-search')?.addEventListener('input',debounce(e=>{
     _mfgListQuery=e.target.value; renderManufacturing();
@@ -12687,30 +13068,37 @@ function _mfgRowDel(kind,i){
 }
 function renderMfgDoc(){
   const d=mfgCurrent;
+  // The form is Hebrew by default and translates on the same switch the cutting
+  // form uses, so the two documents on one bench are never in two languages.
+  const T=_csT;
   if(!d){ renderManufacturing(); return; }
   setActions(_mfgEditing ? `
-    <button class="btn btn-sm btn-blue" id="btn-mfg-save">💾 Save</button>
-    <button class="btn btn-sm btn-ghost" id="btn-mfg-cancel">Cancel</button>` : `
-    <button class="btn btn-sm btn-ghost" id="btn-mfg-edit">✎ Edit</button>
-    <button class="btn btn-sm btn-ghost" id="btn-mfg-print">🖨 Print</button>
-    <button class="btn btn-sm btn-ghost" id="btn-mfg-back">← Back</button>`);
+    <button class="btn btn-sm btn-blue" id="btn-mfg-save">💾 ${esc(T('Save'))}</button>
+    <button class="btn btn-sm btn-ghost" id="btn-mfg-cancel">${esc(T('Cancel'))}</button>` : `
+    <span style="display:inline-flex;gap:4px;margin-inline-end:10px">
+      ${['en','he','ru'].map(L=>`<button class="btn btn-sm ${_csLang===L?'btn-blue':'btn-ghost'}"
+          data-mfg-lang="${L}" ${_csLang===L?'disabled':''}>${_CS_LANG_NAMES[L]}</button>`).join('')}
+    </span>
+    <button class="btn btn-sm btn-ghost" id="btn-mfg-edit">✎ ${esc(T('Edit'))}</button>
+    <button class="btn btn-sm btn-ghost" id="btn-mfg-print">🖨 ${esc(T('Print'))}</button>
+    <button class="btn btn-sm btn-ghost" id="btn-mfg-back">← ${esc(T('Back'))}</button>`);
 
-  setContent(`<div id="cs-sheet" class="cs-sheet" dir="ltr">
-    ${_mfgEditing?`<div class="cs-edit-bar"><b>✎ Editing</b>
-      <span>This document is independent of the cut &amp; strip specification it came from — saving here changes nothing there.</span></div>`:''}
+  setContent(`<div id="cs-sheet" class="cs-sheet" dir="${_csRTL()?'rtl':'ltr'}">
+    ${_mfgEditing?`<div class="cs-edit-bar"><b>✎ ${esc(T('Editing'))}</b>
+      <span>${esc(T('This document is independent of the cut & strip specification it came from — saving here changes nothing there.'))}</span></div>`:''}
 
     <div class="cs-form-head">
       <div class="cs-form-co">${companyLogoB64?`<img src="${companyLogoB64}" alt="">`:`<div class="cs-form-co-n">${esc(companyName||'')}</div>`}</div>
       <div class="cs-form-t">
-        <div class="cs-form-t1">Manufacturing instructions</div>
-        <div class="cs-form-t2 cs-ltr">${_mfgF('title', d.title, {ph:'Assembly name'})}</div>
+        <div class="cs-form-t1">${esc(T('Manufacturing instructions'))}</div>
+        <div class="cs-form-t2 cs-ltr">${_mfgF('title', d.title, {ph:T('Assembly name')})}</div>
       </div>
     </div>
 
-    <h2 class="cs-h2"><span class="cs-n">1</span>Document</h2>
+    <h2 class="cs-h2"><span class="cs-n">1</span>${esc(T('Document'))}</h2>
     <div class="cs-pad"><table class="cs-tbl cs-form-tbl">
-      <thead><tr><th style="width:18%">Doc no.</th><th style="width:16%">Date</th><th style="width:22%">Customer</th>
-        <th style="width:20%">Drawing #</th><th style="width:10%">Rev</th><th style="width:14%">Prepared by</th></tr></thead>
+      <thead><tr><th style="width:18%">${esc(T('Doc no.'))}</th><th style="width:16%">${esc(T('Date'))}</th><th style="width:22%">${esc(T('Customer'))}</th>
+        <th style="width:20%">${esc(T('Drawing #'))}</th><th style="width:10%">${esc(T('Rev'))}</th><th style="width:14%">${esc(T('Prepared by'))}</th></tr></thead>
       <tbody><tr>
         <td class="cs-ctr cs-ltr">${_mfgF('doc_no', d.doc_no, {ph:'MI-…'})}</td>
         <td class="cs-ctr cs-ltr">${_mfgF('form_date', d.form_date)}</td>
@@ -12719,13 +13107,13 @@ function renderMfgDoc(){
         <td class="cs-ctr cs-ltr">${_mfgF('revision', d.revision)}</td>
         <td class="cs-ctr">${_mfgF('prepared_by', d.prepared_by)}</td>
       </tr></tbody></table>
-      ${d.standard?`<p class="cs-note cs-ltr">Workmanship: ${esc(d.standard)}</p>`:''}
+      ${d.standard?`<p class="cs-note cs-ltr">${esc(T('Workmanship'))}: ${esc(d.standard)}</p>`:''}
     </div>
 
-    <h2 class="cs-h2"><span class="cs-n">2</span>Material list</h2>
+    <h2 class="cs-h2"><span class="cs-n">2</span>${esc(T('Material list'))}</h2>
     <div class="cs-pad"><table class="cs-tbl">
-      <thead><tr><th style="width:5%">#</th><th style="width:22%">Part number</th><th style="width:13%">Manufacturer</th>
-        <th style="width:39%">Description</th><th style="width:11%">Qty</th><th style="width:10%">Ref</th></tr></thead>
+      <thead><tr><th style="width:5%">#</th><th style="width:22%">${esc(T('Part number'))}</th><th style="width:13%">${esc(T('Manufacturer'))}</th>
+        <th style="width:39%">${esc(T('Description'))}</th><th style="width:11%">${esc(T('Qty'))}</th><th style="width:10%">${esc(T('Ref'))}</th></tr></thead>
       <tbody>${(d.materials||[]).map((m,i)=>`<tr>
         <td class="cs-ctr">${_mfgRowDel('del-mat',i)}${_mfgF(`materials.${i}.item`, m.item)}</td>
         <td class="cs-ltr">${_mfgF(`materials.${i}.part_number`, m.part_number)}</td>
@@ -12735,54 +13123,54 @@ function renderMfgDoc(){
         <td class="cs-ctr cs-ltr">${_mfgF(`materials.${i}.ref`, m.ref)}</td></tr>`).join('')
         || `<tr class="empty-row"><td colspan="6">—</td></tr>`}
       </tbody></table>
-      ${_mfgEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:10px" data-mfg-act="add-mat">＋ Add material</button>`:''}
+      ${_mfgEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:10px" data-mfg-act="add-mat">＋ ${esc(T('Add material'))}</button>`:''}
     </div>
 
-    <h2 class="cs-h2"><span class="cs-n">3</span>Operation sequence</h2>
+    <h2 class="cs-h2"><span class="cs-n">3</span>${esc(T('Operation sequence'))}</h2>
     <div class="cs-pad">${(d.steps||[]).map((s,i)=>`
       <div class="cs-step">
         <div class="cs-step-n">${esc(String(s.n??(i+1)))}</div>
         <div>
-          <h4>${_mfgRowDel('del-step',i)}${_mfgF(`steps.${i}.title`, s.title, {ph:'Step title'})}</h4>
+          <h4>${_mfgRowDel('del-step',i)}${_mfgF(`steps.${i}.title`, s.title, {ph:T('Step title')})}</h4>
           <div>${_mfgF(`steps.${i}.body`, s.body, {area:true, rows:3})}</div>
-          ${(s.critical||_mfgEditing)?`<div class="cs-crit"><b>CRITICAL:</b> ${_mfgF(`steps.${i}.critical`, s.critical, {area:true})}</div>`:''}
+          ${(s.critical||_mfgEditing)?`<div class="cs-crit"><b>${esc(T('CRITICAL'))}:</b> ${_mfgF(`steps.${i}.critical`, s.critical, {area:true})}</div>`:''}
         </div>
-      </div>`).join('') || `<p class="cs-note">No steps yet.</p>`}
-      ${_mfgEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:12px" data-mfg-act="add-step">＋ Add step</button>`:''}
+      </div>`).join('') || `<p class="cs-note">${esc(T('No steps yet.'))}</p>`}
+      ${_mfgEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:12px" data-mfg-act="add-step">＋ ${esc(T('Add step'))}</button>`:''}
     </div>
 
-    <h2 class="cs-h2"><span class="cs-n">4</span>Inspection</h2>
+    <h2 class="cs-h2"><span class="cs-n">4</span>${esc(T('Inspection'))}</h2>
     <div class="cs-pad"><ul class="cs-chk">${(d.inspection||[]).map((c,i)=>
       `<li><span class="cs-b"></span><span>${_mfgRowDel('del-chk',i)}${_mfgF(`inspection.${i}`, c, {area:true})}</span></li>`).join('')
-      || `<p class="cs-note">No checks yet.</p>`}</ul>
-      ${_mfgEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:12px" data-mfg-act="add-chk">＋ Add check</button>`:''}
+      || `<p class="cs-note">${esc(T('No checks yet.'))}</p>`}</ul>
+      ${_mfgEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:12px" data-mfg-act="add-chk">＋ ${esc(T('Add check'))}</button>`:''}
     </div>
 
-    <h2 class="cs-h2"><span class="cs-n">5</span>Tools &amp; consumables</h2>
+    <h2 class="cs-h2"><span class="cs-n">5</span>${esc(T('Tools & consumables'))}</h2>
     <div class="cs-pad"><table class="cs-tbl">
-      <thead><tr><th style="width:30%">Tool</th><th style="width:20%">Setting</th><th style="width:50%">Note</th></tr></thead>
+      <thead><tr><th style="width:30%">${esc(T('Tool'))}</th><th style="width:20%">${esc(T('Setting'))}</th><th style="width:50%">${esc(T('Note'))}</th></tr></thead>
       <tbody>${(d.tools||[]).map((t,i)=>`<tr>
         <td>${_mfgRowDel('del-tool',i)}${_mfgF(`tools.${i}.tool`, t.tool)}</td>
         <td class="cs-ctr">${_mfgF(`tools.${i}.setting`, t.setting)}</td>
         <td>${_mfgF(`tools.${i}.note`, t.note)}</td></tr>`).join('')
         || `<tr class="empty-row"><td colspan="3">—</td></tr>`}
       </tbody></table>
-      ${_mfgEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:10px" data-mfg-act="add-tool">＋ Add tool</button>`:''}
+      ${_mfgEditing?`<button class="btn btn-sm btn-ghost" style="margin-top:10px" data-mfg-act="add-tool">＋ ${esc(T('Add tool'))}</button>`:''}
     </div>
 
-    <h2 class="cs-h2"><span class="cs-n">6</span>Notes</h2>
+    <h2 class="cs-h2"><span class="cs-n">6</span>${esc(T('Notes'))}</h2>
     <div class="cs-pad">${_mfgEditing
       ? _mfgF('notes', d.notes, {area:true, rows:3})
       : `<div class="cs-notes-box">${d.notes?esc(d.notes):'&nbsp;'}</div>`}</div>
 
-    <h2 class="cs-h2"><span class="cs-n">7</span>Approval</h2>
+    <h2 class="cs-h2"><span class="cs-n">7</span>${esc(T('Approval'))}</h2>
     <div class="cs-pad"><table class="cs-tbl cs-form-tbl">
-      <thead><tr><th style="width:28%">Name</th><th style="width:26%">Signature</th>
-        <th style="width:18%">Date</th><th style="width:28%">Notes</th></tr></thead>
+      <thead><tr><th style="width:28%">${esc(T('Name'))}</th><th style="width:26%">${esc(T('Signature'))}</th>
+        <th style="width:18%">${esc(T('Date'))}</th><th style="width:28%">${esc(T('Notes'))}</th></tr></thead>
       <tbody>
-        <tr><td class="cs-ctr">${_mfgF('prepared_by', d.prepared_by)}<div class="cs-role">Prepared by</div></td>
+        <tr><td class="cs-ctr">${_mfgF('prepared_by', d.prepared_by)}<div class="cs-role">${esc(T('Prepared by'))}</div></td>
           <td class="cs-sig-cell"></td><td class="cs-ctr cs-ltr">${_mfgF('prepared_date', d.prepared_date)}</td><td></td></tr>
-        <tr><td class="cs-ctr">${_mfgF('approved_by', d.approved_by)}<div class="cs-role">Approved for production</div></td>
+        <tr><td class="cs-ctr">${_mfgF('approved_by', d.approved_by)}<div class="cs-role">${esc(T('Approved for production'))}</div></td>
           <td class="cs-sig-cell"></td><td class="cs-ctr cs-ltr">${_mfgF('approved_date', d.approved_date)}</td><td></td></tr>
       </tbody></table>
       <div class="cs-foot">
@@ -12792,6 +13180,9 @@ function renderMfgDoc(){
     </div>
   </div>`);
 
+  document.querySelectorAll('[data-mfg-lang]').forEach(b=>b.addEventListener('click',()=>{
+    _csSetLang(b.dataset.mfgLang); renderMfgDoc();
+  }));
   document.getElementById('btn-mfg-back')?.addEventListener('click',()=>renderManufacturing());
   document.getElementById('btn-mfg-print')?.addEventListener('click',()=>window.print());
   document.getElementById('btn-mfg-edit')?.addEventListener('click',()=>{
