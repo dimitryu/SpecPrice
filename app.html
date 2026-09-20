@@ -458,6 +458,22 @@
     .home-btn:hover { box-shadow:0 4px 14px rgba(31,58,95,.12); transform:translateY(-2px); }
     .home-btn-icon { font-size:30px; }
 
+    /* ── Support: unread markers and attachments ── */
+    .home-btn { position:relative; }
+    .sup-badge { position:absolute; top:-5px; right:-5px; min-width:19px; height:19px;
+                 padding:0 5px; border-radius:10px; background:#E53E3E; color:#fff;
+                 font-size:11px; font-weight:800; line-height:19px; text-align:center;
+                 box-shadow:0 0 0 2px #fff; pointer-events:none; }
+    .adm-alert { background:#E53E3E; color:#fff; border:none; border-radius:12px;
+                 padding:3px 10px; font-size:11px; font-weight:700; cursor:pointer;
+                 white-space:nowrap; }
+    .adm-alert:hover { background:#C53030; }
+    .sup-file { display:inline-flex; align-items:center; gap:5px; background:#fff;
+                border:1px solid var(--border); border-radius:14px; padding:3px 9px;
+                font-size:11px; font-weight:600; color:var(--blue-dark); cursor:pointer;
+                max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .sup-file:hover { background:var(--blue-light); }
+
     /* ── Responsive layout (tablet / phone) ── */
     @media (max-width: 900px) {
       .sd-split { grid-template-columns: 1fr; height:auto; }
@@ -716,7 +732,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.37.0';
+const APP_VER   = '1.38.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -857,6 +873,7 @@ onAuthStateChanged(auth, async user => {
   logAudit('login', {role: currentUserRole}, true);
   route('home');
   autoCheckForUpdate();   // silent unless there's something to update
+  _supStartBadgePolling();   // Support markers, on every screen
 });
 
 // ── Company ───────────────────────────────────────────────────────────────────
@@ -1035,6 +1052,7 @@ function renderHome(){
     .forEach(b=>b.addEventListener('click',()=>route(b.dataset.view)));
   document.getElementById('btn-home-signout')?.addEventListener('click',
     () => logAudit('logout',null,true).finally(()=>signOut(auth).then(() => location.href = 'index.html')));
+  _supRenderBadges();   // the Admin tile carries the "waiting for you" count
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1481,66 +1499,410 @@ function _supportStatusBadge(status){
   const s=_SUPPORT_STATUSES.includes(status)?status:'open';
   return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;color:${_SUPPORT_STATUS_TEXT[s]};background:${_SUPPORT_STATUS_COLOR[s]}">${_SUPPORT_STATUS_LABEL[s]}</span>`;
 }
-// Opens the Support modal: shows the CURRENT user's own past tickets (with
-// status + any admin reply — this is how "reply to the user" surfaces, since
-// there's no outbound email in this build — see openAdminReplyModal) plus a
-// form to submit a new request/complaint. Every submission is also written to
-// the audit log.
+
+// A ticket is a CONVERSATION, not a message with one reply stapled to it.
+// Every turn lives in `thread`, an array of
+//   {role:'user'|'admin', by, text, at (ISO string), files:[{id,name,type,size}]}
+//
+// Two older shapes are still in the database and are folded into the same list
+// when a ticket is read: the original `message` (the first user turn) and a
+// single `adminReply` (the admin's answer, before threads existed). Nothing is
+// migrated in place — old tickets simply read correctly, and the first new
+// reply on one starts the thread.
+//
+// Firestore rejects serverTimestamp() inside an array, so a turn carries a
+// client ISO string. It is a display timestamp only; the authoritative ordering
+// fields (createdAt, lastMsgAt) are real server timestamps on the document.
+function _supportThread(t){
+  const out=[];
+  if(t && (t.message || (t.files||[]).length))
+    out.push({role:'user', by:t.user, text:t.message||'', at:t.createdAt, files:t.files||[]});
+  if(t && t.adminReply)
+    out.push({role:'admin', by:t.repliedBy||'', text:t.adminReply, at:t.repliedAt, files:[]});
+  for(const m of (t && Array.isArray(t.thread) ? t.thread : []))
+    out.push({role:m.role==='admin'?'admin':'user', by:m.by||'', text:m.text||'',
+              at:m.at, files:Array.isArray(m.files)?m.files:[]});
+  return out;
+}
+// Who still has to look at this ticket. Both flags are written by whoever posts
+// (see _supPostMessage) and cleared by the side that reads it, so "unread" means
+// exactly "something happened that you have not opened yet" rather than being
+// re-derived from timestamps that two clocks would disagree about.
+//
+// A ticket written before this version has neither flag. It reads as "nothing
+// new", which is the honest answer: nobody can know today whether it was seen
+// back then, and lighting up every old ticket would train people to ignore the
+// marker on the first day.
+function _supportNeedsUser(t){ return t && t.userUnread===true; }
+function _supportNeedsAdmin(t){ return t && t.adminUnread===true; }
+function _supportUnreadDot(on,title){
+  return on ? `<span title="${esc(title||'Unread')}" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#E53E3E;flex-shrink:0"></span>` : '';
+}
+
+// ── Attachments ─────────────────────────────────────────────────────────────
+// A screenshot of what went wrong is worth more than a paragraph describing it,
+// so a ticket and every reply can carry files.
+//
+// There is no Firebase Storage bucket in this build, so a file is stored as a
+// base64 data URL in a document of its own — in the SAME support_tickets
+// collection, deliberately WITHOUT a `createdAt` field. Firestore's orderBy
+// only returns documents that actually carry the ordered field, and every query
+// that lists tickets orders by createdAt, so attachment documents never come
+// back with the ticket list however large they get. They are fetched one at a
+// time, by id, when someone clicks the attachment. (Both list paths also filter
+// on `kind` — belt and braces, not a substitute: the ordering is what keeps the
+// bytes off the wire.)
+//
+// A Firestore document is capped at 1 MiB, so the base64 payload is capped well
+// below that. Images are re-encoded down to fit; anything else has to arrive
+// small enough on its own.
+const _SUP_FILE_MAX_B64=900000;       // ≈ 660 KB of original bytes
+const _SUP_IMG_MAX_PX=1600;
+const _SUP_IMG_QUALITIES=[0.82,0.7,0.58,0.45,0.35];
+const _SUP_MAX_FILES=4;
+function _supFmtBytes(n){
+  const b=Number(n)||0;
+  return b<1024 ? `${b} B` : b<1048576 ? `${(b/1024).toFixed(0)} KB` : `${(b/1048576).toFixed(1)} MB`;
+}
+function _supReadDataUrl(file){
+  return new Promise((res,rej)=>{
+    const fr=new FileReader();
+    fr.onload=()=>res(String(fr.result||''));
+    fr.onerror=()=>rej(new Error('Could not read '+file.name));
+    fr.readAsDataURL(file);
+  });
+}
+// Screenshots off a 4K monitor are several megabytes of mostly empty desktop.
+// Re-encoding at 1600px is invisible for reading an error message and is what
+// makes "attach a screenshot" work at all within the document limit.
+async function _supShrinkImage(file, dataUrl){
+  if(!/^image\//.test(file.type||'') || /svg/i.test(file.type||'')) return dataUrl;
+  try{
+    const img=await new Promise((res,rej)=>{
+      const i=new Image(); i.onload=()=>res(i); i.onerror=()=>rej(new Error('bad image')); i.src=dataUrl;
+    });
+    const scale=Math.min(1,_SUP_IMG_MAX_PX/Math.max(img.width,img.height));
+    if(scale>=1 && dataUrl.length<=_SUP_FILE_MAX_B64) return dataUrl;
+    const cv=document.createElement('canvas');
+    cv.width=Math.max(1,Math.round(img.width*scale));
+    cv.height=Math.max(1,Math.round(img.height*scale));
+    cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+    let out=dataUrl;
+    for(const q of _SUP_IMG_QUALITIES){
+      out=cv.toDataURL('image/jpeg',q);
+      if(out.length<=_SUP_FILE_MAX_B64) return out;
+    }
+    return out;
+  }catch{ return dataUrl; }   // not decodable as an image — fall through to the size check
+}
+// Turns the File objects picked in the dialog into records ready to be written.
+// Anything too big is reported by name rather than silently dropped.
+async function _supPrepareFiles(files){
+  const ready=[], rejected=[];
+  for(const f of Array.from(files||[]).slice(0,_SUP_MAX_FILES)){
+    let data;
+    try{ data=await _supShrinkImage(f, await _supReadDataUrl(f)); }
+    catch(e){ rejected.push(`${f.name} (${e.message})`); continue; }
+    if(data.length>_SUP_FILE_MAX_B64){
+      rejected.push(`${f.name} — ${_supFmtBytes(f.size)}, too large (max ≈ ${_supFmtBytes(_SUP_FILE_MAX_B64*0.73)})`);
+      continue;
+    }
+    ready.push({name:f.name||'attachment', type:f.type||'application/octet-stream',
+                size:f.size||0, data});
+  }
+  return {ready, rejected};
+}
+async function _supUploadFiles(ticketId, prepared){
+  const metas=[];
+  for(const p of prepared){
+    const ref=await addDoc(collection(db,'companies',companyId,'support_tickets'),{
+      kind:'file', ticketId, name:p.name, type:p.type, size:p.size, data:p.data,
+      by:currentUserEmail, at:new Date().toISOString()
+    });
+    metas.push({id:ref.id, name:p.name, type:p.type, size:p.size});
+  }
+  return metas;
+}
+function _supFileIcon(type){
+  const t=String(type||'');
+  return /^image\//.test(t) ? '🖼️' : /pdf/.test(t) ? '📕'
+       : /sheet|excel|csv/.test(t) ? '📊' : /word|document/.test(t) ? '📄' : '📎';
+}
+function _supFileChips(files){
+  if(!files || !files.length) return '';
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${files.map(f=>
+    `<button class="sup-file" data-id="${esc(f.id)}" data-name="${esc(f.name)}"
+       title="Download ${esc(f.name)}">${_supFileIcon(f.type)} ${esc(f.name)}
+       <span style="color:var(--muted);font-weight:400">${_supFmtBytes(f.size)}</span></button>`).join('')}</div>`;
+}
+// Attachments are downloaded rather than previewed: the data URL is already in
+// hand, and a download works the same for a screenshot, a PDF and a workbook.
+async function _supDownloadFile(fileId, name){
+  try{
+    const snap=await getDoc(doc(db,'companies',companyId,'support_tickets',fileId));
+    if(!snap.exists()){ toast('That attachment is no longer stored','error'); return; }
+    const a=document.createElement('a');
+    a.href=snap.data().data; a.download=name||snap.data().name||'attachment';
+    document.body.appendChild(a); a.click(); a.remove();
+  }catch(e){ toast('Could not open the attachment: '+e.message,'error'); }
+}
+function _supBindFileButtons(root){
+  (root||document).querySelectorAll('.sup-file').forEach(b=>b.addEventListener('click',e=>{
+    e.preventDefault(); e.stopPropagation();
+    _supDownloadFile(b.dataset.id, b.dataset.name);
+  }));
+}
+
+// ── Posting a turn ──────────────────────────────────────────────────────────
+// Any new turn re-opens the ticket. A "Done" ticket someone writes into again is
+// not done — that is the whole reason they wrote. The admin can still pick a
+// different status in the same breath (the reply dialog carries the dropdown),
+// which is what makes this a default rather than a rule that fights them.
+async function _supPostMessage(ticketId, text, prepared, asAdmin, status){
+  const metas=prepared && prepared.length ? await _supUploadFiles(ticketId, prepared) : [];
+  const entry={role:asAdmin?'admin':'user', by:currentUserEmail, text:text||'',
+               at:new Date().toISOString()};
+  if(metas.length) entry.files=metas;
+  await updateDoc(doc(db,'companies',companyId,'support_tickets',ticketId),{
+    thread:arrayUnion(entry),
+    status:_SUPPORT_STATUSES.includes(status)?status:'open',
+    lastMsgAt:serverTimestamp(), lastMsgRole:entry.role,
+    userUnread:!!asAdmin, adminUnread:!asAdmin,
+    updatedAt:serverTimestamp()
+  });
+  logAudit(asAdmin?'ticket_replied':'ticket_user_replied',
+    {ticketId, files:metas.length, chars:(text||'').length}, true);
+  return entry;
+}
+
+// ── Unread markers ──────────────────────────────────────────────────────────
+// Two counts, refreshed on a timer and after anything that could change them:
+// what is waiting for THIS user on their own tickets, and — for an
+// administrator — what is waiting for the admin on everyone else's. They are
+// drawn on the Support button, in the top bar and on the Home screen, so the
+// answer to "does anything need me?" is visible from every screen without
+// opening anything.
+let _supUserAlerts=0, _supAdminAlerts=0, _supPollTimer=null;
+const _SUP_POLL_MS=90000;
+function _supCanAdminSupport(){ return currentUserRole===PROTECTED_ROLE || allowedViews().includes('admin'); }
+async function _supRefreshBadges(){
+  if(!companyId || !currentUserEmail) return;
+  try{
+    const mine=await getDocs(query(collection(db,'companies',companyId,'support_tickets'),
+      where('user','==',currentUserEmail), where('userUnread','==',true)));
+    _supUserAlerts=mine.size;
+  }catch(e){ console.warn('support badge (user)', e.message); }
+  if(_supCanAdminSupport()){
+    try{
+      const pending=await getDocs(query(collection(db,'companies',companyId,'support_tickets'),
+        where('adminUnread','==',true)));
+      // An admin's own ticket already shows on their Support button; counting it
+      // again as "someone needs you" would be the same news twice.
+      _supAdminAlerts=pending.docs.filter(d=>d.data().user!==currentUserEmail).length;
+    }catch(e){ console.warn('support badge (admin)', e.message); }
+  } else _supAdminAlerts=0;
+  _supRenderBadges();
+}
+function _supRenderBadges(){
+  const fab=document.getElementById('btn-support-fab');
+  if(fab){
+    let b=document.getElementById('sup-fab-badge');
+    if(_supUserAlerts>0){
+      if(!b){ b=mkEl('span','sup-badge'); b.id='sup-fab-badge'; fab.appendChild(b); }
+      b.textContent=String(_supUserAlerts);
+      fab.title=`Support — ${_supUserAlerts} update${_supUserAlerts>1?'s':''} on your request${_supUserAlerts>1?'s':''}`;
+    }else{
+      if(b) b.remove();
+      fab.title='Support — send a request or report a problem';
+    }
+  }
+  const info=document.getElementById('topbar-info');
+  if(info){
+    let chip=document.getElementById('btn-adm-alert');
+    if(_supAdminAlerts>0){
+      if(!chip){
+        chip=mkEl('button','adm-alert'); chip.id='btn-adm-alert';
+        chip.addEventListener('click',()=>{
+          route('admin');
+          setTimeout(()=>document.getElementById('adm-tickets-body')
+            ?.scrollIntoView({behavior:'smooth',block:'center'}),400);
+        });
+        info.insertBefore(chip, info.firstChild);
+      }
+      chip.textContent=`🛡️ ${_supAdminAlerts} support`;
+      chip.title='Support requests from other users are waiting — click to open the Admin screen';
+    } else if(chip) chip.remove();
+  }
+  const adminBtn=document.querySelector('.home-btn[data-view="admin"]');
+  if(adminBtn){
+    let hb=adminBtn.querySelector('.sup-badge');
+    if(_supAdminAlerts>0){
+      if(!hb){ hb=mkEl('span','sup-badge'); adminBtn.appendChild(hb); }
+      hb.textContent=String(_supAdminAlerts);
+    } else if(hb) hb.remove();
+  }
+}
+function _supStartBadgePolling(){
+  _supRefreshBadges();
+  if(_supPollTimer) clearInterval(_supPollTimer);
+  _supPollTimer=setInterval(_supRefreshBadges,_SUP_POLL_MS);
+}
+// Clearing is per side and only ever done by the side that actually looked.
+async function _supMarkRead(ticketIds, asAdmin){
+  const ids=(ticketIds||[]).filter(Boolean);
+  if(!ids.length) return;
+  try{
+    const batch=writeBatch(db);
+    ids.forEach(id=>batch.update(doc(db,'companies',companyId,'support_tickets',id),
+      asAdmin?{adminUnread:false}:{userUnread:false}));
+    await batch.commit();
+  }catch(e){ console.warn('support mark read', e.message); }
+  _supRefreshBadges();
+}
+
+// ── The Support window (every user) ─────────────────────────────────────────
+// Their own tickets as conversations: the whole exchange, an attachment button
+// on every turn, a reply box per ticket, and a composer for a new request.
+let _supOpenTicket=null;    // which ticket is expanded, so a reload keeps your place
 async function openSupportModal(){
-  const bg=showModal(`<div class="modal modal-sm">
+  showModal(`<div class="modal" style="width:min(94vw,680px)">
     <div class="modal-head"><h3>${_SUPPORT_ICON_SVG} Support</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
-    <div class="modal-body" id="support-modal-body" style="max-height:60vh;overflow-y:auto">
+    <div class="modal-body" id="support-modal-body" style="max-height:58vh">
       <div style="text-align:center;padding:30px"><div class="ring" style="margin:0 auto"></div></div>
     </div>
     <div class="modal-foot" style="flex-direction:column;align-items:stretch;gap:8px">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">New request</div>
       <textarea id="support-new-msg" placeholder="Describe your request or the problem you're seeing…" rows="3"
         style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;resize:vertical"></textarea>
-      <button class="btn btn-blue" id="btn-support-send" style="justify-content:center">Send to Admin</button>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <input type="file" id="support-new-files" multiple style="font-size:11px;flex:1;min-width:180px"
+          accept="image/*,.pdf,.xlsx,.xls,.csv,.txt,.doc,.docx,.html">
+        <button class="btn btn-blue" id="btn-support-send">Send to Admin</button>
+      </div>
+      <div style="font-size:10px;color:var(--muted)">Screenshots are resized automatically. Up to ${_SUP_MAX_FILES} files, ≈ 650 KB each.</div>
     </div>
   </div>`);
   const body=document.getElementById('support-modal-body');
   const loadMine=async()=>{
     try{
-      const snap=await getDocs(query(collection(db,'companies',companyId,'support_tickets'),orderBy('createdAt','desc')));
-      const mine=snap.docs.map(d=>({_id:d.id,...d.data()})).filter(t=>t.user===currentUserEmail);
-      if(!mine.length){ body.innerHTML=`<p style="color:var(--muted);font-size:12px;text-align:center;padding:10px 0">No previous requests.</p>`; return; }
-      body.innerHTML=mine.map(t=>`
-        <div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <span style="font-size:10px;color:var(--muted)">${fmtDateTime(t.createdAt)}</span>
-            ${_supportStatusBadge(t.status)}
-          </div>
-          <div style="font-size:13px;white-space:pre-wrap">${esc(t.message||'')}</div>
-          ${t.adminReply ? `<div style="margin-top:8px;padding:8px;background:#f0f7ff;border-radius:6px;font-size:12px">
-            <div style="font-weight:700;color:var(--blue-dark);margin-bottom:2px">Admin reply:</div>
-            <div style="white-space:pre-wrap">${esc(t.adminReply)}</div>
-          </div>` : ''}
-        </div>`).join('');
+      const snap=await getDocs(query(collection(db,'companies',companyId,'support_tickets'),
+        orderBy('createdAt','desc')));
+      const mine=snap.docs.map(d=>({_id:d.id,...d.data()}))
+                          .filter(t=>!t.kind && t.user===currentUserEmail);
+      if(!mine.length){
+        body.innerHTML=`<p style="color:var(--muted);font-size:12px;text-align:center;padding:10px 0">No previous requests.</p>`;
+        return;
+      }
+      if(!_supOpenTicket || !mine.some(t=>t._id===_supOpenTicket))
+        _supOpenTicket=(mine.find(_supportNeedsUser)||mine[0])._id;
+      body.innerHTML=mine.map(t=>_supTicketCard(t, t._id===_supOpenTicket)).join('');
+      _supBindTicketCards(body, mine, loadMine);
+      // Seeing the list is seeing the news: the status and the latest turn are
+      // both on the card, so the marker has done its job by now.
+      _supMarkRead(mine.filter(_supportNeedsUser).map(t=>t._id), false);
     }catch(e){ body.innerHTML=`<p style="color:red;font-size:12px">${esc(e.message)}</p>`; }
   };
   loadMine();
+
   document.getElementById('btn-support-send').addEventListener('click',async()=>{
     const ta=document.getElementById('support-new-msg');
     const message=ta.value.trim();
+    const picker=document.getElementById('support-new-files');
     if(!message){ toast('Type a message first','error'); return; }
     const btn=document.getElementById('btn-support-send');
     btn.disabled=true; btn.textContent='Sending…';
     try{
-      await addDoc(collection(db,'companies',companyId,'support_tickets'),{
+      const {ready,rejected}=await _supPrepareFiles(picker.files);
+      if(rejected.length) toast('Not attached: '+rejected.join('; '),'error');
+      const ref=await addDoc(collection(db,'companies',companyId,'support_tickets'),{
         user:currentUserEmail, userId:auth.currentUser?.uid||'', message, status:'open',
-        createdAt:serverTimestamp()
+        createdAt:serverTimestamp(), lastMsgAt:serverTimestamp(), lastMsgRole:'user',
+        userUnread:false, adminUnread:true
       });
-      logAudit('support_ticket_submitted',{message:message.slice(0,200)},true);
-      // Confirm and close — the ticket is filed, so keeping the modal open just
-      // leaves the user wondering whether it went through. Their full request
-      // history (with any admin reply) is here again next time they open Support.
-      ta.value='';
-      closeModal();
+      if(ready.length){
+        const metas=await _supUploadFiles(ref.id, ready);
+        await updateDoc(doc(db,'companies',companyId,'support_tickets',ref.id),{files:metas});
+      }
+      logAudit('support_ticket_submitted',{message:message.slice(0,200),files:ready.length},true);
+      ta.value=''; picker.value='';
       toast('Your request has been sent to the system administrator','success');
-      return;
+      _supOpenTicket=ref.id;
+      await loadMine();
+      _supRefreshBadges();
     }catch(e){ toast('Error: '+e.message,'error'); logAudit('support_ticket_submitted',{error:e.message},false); }
     btn.disabled=false; btn.textContent='Send to Admin';
   });
+}
+// One turn in the conversation. `userLabel` is who the reader is looking at
+// when a user wrote it: "You" in the user's own Support window, their address
+// in the administrator's copy of the same thread.
+function _supTurn(m, opts){
+  const admin=m.role==='admin';
+  const who=admin ? 'Admin' : ((opts && opts.userLabel) || 'You');
+  return `<div style="margin-top:8px;padding:8px 10px;border-radius:7px;
+      background:${admin?'#F0F7FF':'#F7FAFC'};border-left:3px solid ${admin?'#2E75B6':'#CBD5E1'}">
+    <div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;color:var(--muted);margin-bottom:3px">
+      <span style="font-weight:700;color:${admin?'var(--blue-dark)':'#475569'}">${esc(who)}${m.by&&m.by!==who?` · ${esc(m.by)}`:''}</span>
+      <span>${esc(fmtDateTime(m.at))}</span>
+    </div>
+    ${m.text?`<div style="font-size:13px;white-space:pre-wrap;word-break:break-word">${esc(m.text)}</div>`:''}
+    ${_supFileChips(m.files)}
+  </div>`;
+}
+function _supTicketCard(t, expanded){
+  const turns=_supportThread(t);
+  const last=turns[turns.length-1];
+  const unread=_supportNeedsUser(t);
+  return `<div class="sup-card" data-id="${esc(t._id)}"
+      style="border:1px solid ${unread?'#93C5FD':'var(--border)'};border-radius:8px;margin-bottom:8px;overflow:hidden">
+    <div class="sup-card-head" data-id="${esc(t._id)}"
+      style="display:flex;align-items:center;gap:8px;padding:9px 11px;cursor:pointer;background:${unread?'#EFF6FF':'#fff'}">
+      ${_supportUnreadDot(unread,'New activity on this request')}
+      <span style="font-size:10px;color:var(--muted);white-space:nowrap">${esc(fmtDateTime(t.createdAt))}</span>
+      <span style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((last&&last.text)||t.message||'')}</span>
+      <span style="font-size:10px;color:var(--muted)">${turns.length} msg</span>
+      ${_supportStatusBadge(t.status)}
+      <span style="color:var(--muted);font-size:11px">${expanded?'▾':'▸'}</span>
+    </div>
+    ${expanded?`<div style="padding:0 11px 11px">
+      ${turns.map(_supTurn).join('')}
+      <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
+        <textarea class="sup-reply-inp" data-id="${esc(t._id)}" rows="2" placeholder="Write a reply…"
+          style="width:100%;padding:7px 9px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit;resize:vertical"></textarea>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <input type="file" class="sup-reply-files" data-id="${esc(t._id)}" multiple style="font-size:11px;flex:1;min-width:170px"
+            accept="image/*,.pdf,.xlsx,.xls,.csv,.txt,.doc,.docx,.html">
+          <button class="btn btn-blue btn-sm sup-reply-send" data-id="${esc(t._id)}">Send reply</button>
+        </div>
+        <div style="font-size:10px;color:var(--muted)">Replying re-opens this request so the administrator sees it again.</div>
+      </div>
+    </div>`:''}
+  </div>`;
+}
+function _supBindTicketCards(root, tickets, reload){
+  root.querySelectorAll('.sup-card-head').forEach(h=>h.addEventListener('click',()=>{
+    _supOpenTicket = _supOpenTicket===h.dataset.id ? null : h.dataset.id;
+    const list=tickets.map(t=>_supTicketCard(t, t._id===_supOpenTicket)).join('');
+    root.innerHTML=list;
+    _supBindTicketCards(root, tickets, reload);
+  }));
+  _supBindFileButtons(root);
+  root.querySelectorAll('.sup-reply-send').forEach(btn=>btn.addEventListener('click',async()=>{
+    const id=btn.dataset.id;
+    const ta=root.querySelector(`.sup-reply-inp[data-id="${id}"]`);
+    const picker=root.querySelector(`.sup-reply-files[data-id="${id}"]`);
+    const text=(ta?.value||'').trim();
+    if(!text){ toast('Type a reply first','error'); return; }
+    btn.disabled=true; btn.textContent='Sending…';
+    try{
+      const {ready,rejected}=await _supPrepareFiles(picker?picker.files:null);
+      if(rejected.length) toast('Not attached: '+rejected.join('; '),'error');
+      await _supPostMessage(id, text, ready, false, 'open');
+      toast('Reply sent — the request is open again','success');
+      await reload();
+      _supRefreshBadges();
+    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='Send reply'; }
+  }));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -8185,16 +8547,25 @@ async function renderAdminDistributorApiSection(){
 
 const _ADM_TICKET_CACHE={}; // ticketId -> ticket data (ALL fetched tickets, unfiltered) — used by openAdminReplyModal
 let _admTicketsAll=[], _admTicketsFilterUser='', _admTicketsFilterStatus='';
+// Which tickets were waiting when this screen was opened. Opening the screen
+// clears the flags in Firestore, but the row still has to SHOW which ones were
+// new — clearing a marker and leaving no trace of what it marked is how you
+// lose the one ticket you came to answer.
+let _admTicketsWasUnread=[];
 async function renderAdminTicketsSection(){
   const body=document.getElementById('adm-tickets-body');
   if(!body) return;
   body.innerHTML=`<div style="text-align:center;padding:30px"><div class="ring" style="margin:0 auto"></div></div>`;
   try{
     const snap=await getDocs(query(collection(db,'companies',companyId,'support_tickets'),orderBy('createdAt','desc')));
-    _admTicketsAll=snap.docs.map(d=>({_id:d.id,...d.data()}));
+    // Attachment documents live in this same collection and carry no createdAt,
+    // so orderBy already excludes them; `kind` is checked as well in case a
+    // future query forgets the ordering (see the attachment notes above).
+    _admTicketsAll=snap.docs.map(d=>({_id:d.id,...d.data()})).filter(t=>!t.kind);
   }catch(e){ body.innerHTML=`<p style="color:red;padding:20px">${esc(e.message)}</p>`; return; }
   Object.keys(_ADM_TICKET_CACHE).forEach(k=>delete _ADM_TICKET_CACHE[k]);
   _admTicketsAll.forEach(t=>_ADM_TICKET_CACHE[t._id]=t);
+  _admTicketsWasUnread=_admTicketsAll.filter(_supportNeedsAdmin).map(t=>t._id);
   if(!_admTicketsAll.length){ body.innerHTML=`<p style="color:var(--muted);font-size:12px;padding:10px 0">No support requests yet.</p>`; return; }
   const users=[...new Set(_admTicketsAll.map(t=>t.user).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   if(_admTicketsFilterUser && !users.includes(_admTicketsFilterUser)) _admTicketsFilterUser='';
@@ -8208,15 +8579,20 @@ async function renderAdminTicketsSection(){
         <option value="">All Statuses</option>
         ${_SUPPORT_STATUSES.map(s=>`<option value="${s}" ${s===_admTicketsFilterStatus?'selected':''}>${_SUPPORT_STATUS_LABEL[s]}</option>`).join('')}
       </select>
+      ${_admTicketsWasUnread.length?`<span class="count-badge" style="background:#FEE2E2;color:#9B1C1C;font-weight:700">${_admTicketsWasUnread.length} waiting for you</span>`:''}
       <span class="count-badge" id="adm-tickets-count"></span>
     </div>
     <div class="table-wrap"><table>
-    <thead><tr><th>Date/Time</th><th>User</th><th>Message</th><th style="width:130px">Status</th><th style="width:90px"></th></tr></thead>
+    <thead><tr><th style="width:26px"></th><th>Date/Time</th><th>User</th><th>Conversation</th><th style="width:130px">Status</th><th style="width:90px"></th></tr></thead>
     <tbody id="adm-tickets-tbody"></tbody>
   </table></div>`;
   document.getElementById('adm-tickets-filter-user').addEventListener('change',e=>{ _admTicketsFilterUser=e.target.value; _admTicketsFilterRows(); });
   document.getElementById('adm-tickets-filter-status').addEventListener('change',e=>{ _admTicketsFilterStatus=e.target.value; _admTicketsFilterRows(); });
   _admTicketsFilterRows();
+  // Reading the list is reading the news — but only for other people's tickets.
+  // An admin's own request is answered by an admin, so clearing it here would
+  // wipe the marker on the one ticket nobody else is going to pick up.
+  _supMarkRead(_admTicketsAll.filter(t=>_supportNeedsAdmin(t) && t.user!==currentUserEmail).map(t=>t._id), true);
 }
 function _admTicketsFilterRows(){
   const tbody=document.getElementById('adm-tickets-tbody');
@@ -8228,15 +8604,26 @@ function _admTicketsFilterRows(){
     return true;
   });
   if(countEl) countEl.textContent=`${tickets.length} of ${_admTicketsAll.length}`;
-  tbody.innerHTML=tickets.length ? tickets.map(t=>`<tr data-id="${esc(t._id)}" style="background:${_SUPPORT_ROW_BG[_SUPPORT_STATUSES.includes(t.status)?t.status:'open']}">
+  tbody.innerHTML=tickets.length ? tickets.map(t=>{
+    const turns=_supportThread(t);
+    const last=turns[turns.length-1]||{};
+    const files=turns.reduce((a,m)=>a+((m.files||[]).length),0);
+    return `<tr data-id="${esc(t._id)}" style="background:${_SUPPORT_ROW_BG[_SUPPORT_STATUSES.includes(t.status)?t.status:'open']}">
+      <td style="text-align:center">${_supportUnreadDot(_admTicketsWasUnread.includes(t._id),'New since you last looked')}</td>
       <td style="white-space:nowrap;font-size:11px;color:var(--muted)">${fmtDateTime(t.createdAt)}</td>
       <td style="font-size:12px">${esc(t.user||'')}</td>
-      <td style="font-size:12px;max-width:340px;white-space:pre-wrap">${esc(t.message||'')}${t.adminReply?`<div style="margin-top:4px;padding:4px 6px;background:#f0f7ff;border-radius:4px;font-size:11px"><strong>Reply:</strong> ${esc(t.adminReply)}</div>`:''}</td>
+      <td style="font-size:12px;max-width:380px">
+        <div style="white-space:pre-wrap;word-break:break-word">${esc(t.message||'')}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:3px">
+          ${turns.length} message${turns.length>1?'s':''}${files?` · ${files} attachment${files>1?'s':''}`:''}
+          ${turns.length>1?` · last: <strong>${last.role==='admin'?'admin':'user'}</strong> — ${esc(String(last.text||'').slice(0,80))}`:''}
+        </div>
+      </td>
       <td><select class="form-input adm-ticket-status" data-id="${esc(t._id)}" style="padding:3px 6px;font-size:12px;font-weight:700;border:none;border-radius:5px;background:${_SUPPORT_STATUS_COLOR[_SUPPORT_STATUSES.includes(t.status)?t.status:'open']};color:${_SUPPORT_STATUS_TEXT[_SUPPORT_STATUSES.includes(t.status)?t.status:'open']}">
         ${_SUPPORT_STATUSES.map(s=>`<option value="${s}" ${t.status===s?'selected':''}>${_SUPPORT_STATUS_LABEL[s]}</option>`).join('')}
       </select></td>
-      <td><button class="btn btn-ghost btn-sm adm-ticket-reply" data-id="${esc(t._id)}">💬 Reply</button></td>
-    </tr>`).join('') : `<tr class="empty-row"><td colspan="5">No tickets match this filter</td></tr>`;
+      <td><button class="btn btn-ghost btn-sm adm-ticket-reply" data-id="${esc(t._id)}">💬 Open</button></td>
+    </tr>`;}).join('') : `<tr class="empty-row"><td colspan="6">No tickets match this filter</td></tr>`;
   tbody.querySelectorAll('.adm-ticket-status').forEach(sel=>sel.addEventListener('change',async()=>{
     const id=sel.dataset.id, status=sel.value;
     sel.style.background=_SUPPORT_STATUS_COLOR[status]; sel.style.color=_SUPPORT_STATUS_TEXT[status];
@@ -8244,45 +8631,63 @@ function _admTicketsFilterRows(){
     if(_ADM_TICKET_CACHE[id]) _ADM_TICKET_CACHE[id].status=status;
     const cached=_admTicketsAll.find(t=>t._id===id); if(cached) cached.status=status;
     try{
-      await updateDoc(doc(db,'companies',companyId,'support_tickets',id),{status,updatedAt:serverTimestamp()});
+      // Closing someone's ticket is news for them, so it lights up their Support
+      // button exactly like a reply would — otherwise "Done" is a decision the
+      // person who asked never finds out about.
+      await updateDoc(doc(db,'companies',companyId,'support_tickets',id),
+        {status, userUnread:true, statusChangedAt:serverTimestamp(), updatedAt:serverTimestamp()});
       logAudit('ticket_status_changed',{ticketId:id,status},true);
       toast('Status updated','success');
       if(_admTicketsFilterStatus) _admTicketsFilterRows();
     }catch(e){ toast('Error: '+e.message,'error'); }
   }));
   tbody.querySelectorAll('.adm-ticket-reply').forEach(btn=>btn.addEventListener('click',()=>openAdminReplyModal(btn.dataset.id)));
+  _supBindFileButtons(tbody);
 }
+// The admin side of the same conversation: the whole exchange, a reply with
+// attachments, and the status in the same dialog — so answering and deciding
+// are one action rather than two that can disagree.
 function openAdminReplyModal(ticketId){
   const t=_ADM_TICKET_CACHE[ticketId];
   if(!t) return;
-  showModal(`<div class="modal modal-sm">
-    <div class="modal-head"><h3>💬 Reply to ${esc(t.user||'')}</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">
-      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Their request:</div>
-      <div style="font-size:13px;white-space:pre-wrap;padding:8px;background:#f7f9fb;border-radius:6px;margin-bottom:12px">${esc(t.message||'')}</div>
-      <div class="form-field">
-        <label>Your Reply</label>
-        <textarea class="form-input" id="adm-reply-inp" rows="4" style="resize:vertical">${esc(t.adminReply||'')}</textarea>
-      </div>
+  const turns=_supportThread(t);
+  showModal(`<div class="modal" style="width:min(94vw,680px)">
+    <div class="modal-head"><h3>💬 ${esc(t.user||'')}</h3>${_supportStatusBadge(t.status)}<button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" id="adm-reply-thread" style="max-height:52vh">
+      ${turns.map(m=>_supTurn(m,{userLabel:t.user||'User'})).join('')}
     </div>
-    <div class="modal-foot">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-green" id="btn-adm-reply-save">Save Reply</button>
+    <div class="modal-foot" style="flex-direction:column;align-items:stretch;gap:8px">
+      <textarea class="form-input" id="adm-reply-inp" rows="3" placeholder="Write your reply…" style="resize:vertical"></textarea>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <input type="file" id="adm-reply-files" multiple style="font-size:11px;flex:1;min-width:170px"
+          accept="image/*,.pdf,.xlsx,.xls,.csv,.txt,.doc,.docx,.html">
+        <label for="adm-reply-status" style="font-size:11px;color:var(--muted)">Status</label>
+        <select class="form-input" id="adm-reply-status" style="width:auto">
+          ${_SUPPORT_STATUSES.map(s=>`<option value="${s}" ${s==='open'?'selected':''}>${_SUPPORT_STATUS_LABEL[s]}</option>`).join('')}
+        </select>
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-green" id="btn-adm-reply-save">Send reply</button>
+      </div>
+      <div style="font-size:10px;color:var(--muted)">A reply re-opens the request by default — pick another status here if you are closing it in the same breath.</div>
     </div>
   </div>`);
+  _supBindFileButtons(document.getElementById('adm-reply-thread'));
   document.getElementById('btn-adm-reply-save').addEventListener('click',async()=>{
-    const adminReply=document.getElementById('adm-reply-inp').value.trim();
+    const text=document.getElementById('adm-reply-inp').value.trim();
+    const status=document.getElementById('adm-reply-status').value;
+    const picker=document.getElementById('adm-reply-files');
+    if(!text && !(picker.files||[]).length){ toast('Write a reply or attach a file','error'); return; }
     const btn=document.getElementById('btn-adm-reply-save');
-    btn.disabled=true; btn.textContent='Saving…';
+    btn.disabled=true; btn.textContent='Sending…';
     try{
-      await updateDoc(doc(db,'companies',companyId,'support_tickets',ticketId),{
-        adminReply, repliedAt:serverTimestamp(), repliedBy:currentUserEmail
-      });
-      logAudit('ticket_replied',{ticketId},true);
-      toast('Reply saved','success');
+      const {ready,rejected}=await _supPrepareFiles(picker.files);
+      if(rejected.length) toast('Not attached: '+rejected.join('; '),'error');
+      await _supPostMessage(ticketId, text, ready, true, status);
+      toast('Reply sent','success');
       closeModal();
       renderAdminTicketsSection();
-    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='Save Reply'; }
+      _supRefreshBadges();
+    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='Send reply'; }
   });
 }
 

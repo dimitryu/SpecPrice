@@ -1252,6 +1252,95 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
     Object.keys(buttons).filter(k=>!routed.includes(k)), []);
 }
 
+// ──────────────────────────── 31. support: a ticket is a conversation
+{
+  const thread=G('_supportThread'), needsUser=G('_supportNeedsUser'),
+        needsAdmin=G('_supportNeedsAdmin'), dot=G('_supportUnreadDot'),
+        chips=G('_supFileChips'), icon=G('_supFileIcon'), bytes=G('_supFmtBytes'),
+        turn=G('_supTurn'), card=G('_supTicketCard'), badge=G('_supportStatusBadge'),
+        maxB64=G('_SUP_FILE_MAX_B64'), statuses=G('_SUPPORT_STATUSES');
+
+  // A ticket written before threads existed: one message, one reply, no array.
+  const legacy={user:'a@x', message:'Printer is on fire', createdAt:'2026-09-01T08:00:00Z',
+                adminReply:'Unplug it', repliedBy:'admin@x', repliedAt:'2026-09-01T09:00:00Z',
+                status:'done'};
+  const lt=thread(legacy);
+  t('support: a legacy ticket still reads as a conversation', lt.length, 2);
+  t('support: ...starting with what the user wrote', [lt[0].role,lt[0].text], ['user','Printer is on fire']);
+  t('support: ...then the admin answer', [lt[1].role,lt[1].text], ['admin','Unplug it']);
+
+  // The same ticket once someone replies on the new build.
+  const mixed={...legacy, thread:[
+    {role:'user', by:'a@x', text:'Still smoking', at:'2026-09-02T07:00:00Z'},
+    {role:'admin', by:'admin@x', text:'On my way', at:'2026-09-02T07:30:00Z', files:[{id:'f1',name:'a.png',type:'image/png',size:1024}]},
+  ]};
+  const mt=thread(mixed);
+  t('support: old turns and new turns are one list', mt.length, 4);
+  t('support: in the order they happened',
+    mt.map(m=>m.text), ['Printer is on fire','Unplug it','Still smoking','On my way']);
+  t('support: a turn keeps its attachments', mt[3].files.length, 1);
+  t('support: a turn with none reads as none', mt[2].files, []);
+  t('support: a malformed thread field does not break the ticket',
+    thread({message:'hi', thread:'not-an-array'}).length, 1);
+  t('support: an empty ticket is an empty conversation', thread({}).length, 0);
+  t('support: a ticket that is only an attachment still shows',
+    thread({user:'a@x', message:'', files:[{id:'f',name:'x.png'}]}).length, 1);
+
+  t('support: nothing waiting is nothing waiting', needsUser({}), false);
+  t('support: ...for the admin too', needsAdmin({}), false);
+  t('support: a ticket from before this version is not "new"', needsUser(legacy), false);
+  t('support: a flag set by a reply is', needsUser({userUnread:true}), true);
+  t('support: ...and the admin side reads its own flag', needsAdmin({adminUnread:true}), true);
+  t('support: the two sides are independent',
+    [needsUser({adminUnread:true}), needsAdmin({userUnread:true})], [false,false]);
+
+  ok('support: an unread dot is drawn when there is news', /background:#E53E3E/.test(dot(true,'x')));
+  t('support: ...and nothing at all when there is not', dot(false,'x'), '');
+
+  t('support: bytes', [bytes(500),bytes(2048),bytes(3*1048576)], ['500 B','2 KB','3.0 MB']);
+  t('support: a missing size does not print NaN', bytes(undefined), '0 B');
+  t('support: attachments are iconed by kind',
+    [icon('image/png'),icon('application/pdf'),icon('text/csv'),icon('application/zip')],
+    ['🖼️','📕','📊','📎']);
+  t('support: no attachments, no chip row', chips([]), '');
+  ok('support: a chip carries the id it downloads',
+     /data-id="f1"/.test(chips([{id:'f1',name:'a.png',type:'image/png',size:10}])));
+
+  // Everything a user typed is rendered as text, never as markup.
+  const xss=turn({role:'user', by:'<b>a@x</b>', text:'<img src=x onerror=alert(1)>',
+                  at:'2026-09-01T08:00:00Z', files:[{id:'<i>',name:'<script>',type:'',size:1}]});
+  t('support: a message cannot inject markup', /<img src=x/.test(xss), false);
+  t('support: ...nor can the sender name', /<b>a@x<\/b>/.test(xss), false);
+  t('support: ...nor an attachment name', /<script>/.test(xss), false);
+  ok('support: the escaped text is still there', /&lt;img src=x/.test(xss));
+
+  // The same turn reads differently depending on who is looking at it.
+  const mine=turn({role:'user', by:'a@x', text:'hi', at:'2026-09-01T08:00:00Z'});
+  const theirs=turn({role:'user', by:'a@x', text:'hi', at:'2026-09-01T08:00:00Z'}, {userLabel:'a@x'});
+  ok('support: in your own window a message of yours says "You"', /You/.test(mine));
+  t('support: ...and in the admin copy it says who wrote it', /You/.test(theirs), false);
+  ok('support: ...naming them once, not twice', (theirs.match(/a@x/g)||[]).length===1);
+  ok('support: an admin turn is always labelled Admin',
+     /Admin/.test(turn({role:'admin', by:'admin@x', text:'ok', at:'2026-09-01T08:00:00Z'}, {userLabel:'a@x'})));
+
+  const c=card({_id:'t1', user:'a@x', message:'Hello', status:'done', userUnread:true,
+                thread:[{role:'admin',by:'admin@x',text:'Fixed',at:'2026-09-02T07:00:00Z'}]}, true);
+  ok('support: an expanded card offers a reply box', /class="sup-reply-inp"/.test(c));
+  ok('support: ...and a way to attach a file', /class="sup-reply-files"/.test(c));
+  ok('support: ...and shows both turns', /Hello/.test(c) && /Fixed/.test(c));
+  ok('support: an unread card is marked', /background:#E53E3E/.test(c));
+  const collapsed=card({_id:'t1', user:'a@x', message:'Hello', status:'open'}, false);
+  t('support: a collapsed card has no reply box', /sup-reply-inp/.test(collapsed), false);
+  ok('support: ...but still states the status', /Open<\/span>/.test(collapsed));
+
+  t('support: an unknown status falls back to Open', /Open</.test(badge('nonsense')), true);
+  statuses.forEach(st=>ok('support: status renders: '+st, badge(st).length>0));
+
+  // The cap has to stay under Firestore's 1 MiB document limit with room for
+  // the rest of the fields.
+  ok('support: the attachment cap fits in a Firestore document', maxB64 < 1048576*0.95);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }
