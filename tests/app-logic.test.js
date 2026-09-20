@@ -1403,7 +1403,12 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('figure: a confirmed dimension carries no asterisk', /\* /.test(svg), false);
 
   const tbcSvg=wire(unconf.segments[0], unconf.segments[0].ends[0], unconf);
-  t('figure: nothing to draw is nothing drawn', wire({}, {}, {}), '');
+  // An end the analysis could not dimension still gets its drawing, with the
+  // blank marked — no figure at all reads as "this end needs nothing".
+  const blank=wire({id:'S1'}, {ref:'P1', strip:[]}, {connectors:[]});
+  ok('figure: an end with no dimensions still gets a figure', blank.length>0);
+  ok('figure: ...with the dimension left blank', /A = \? mm/.test(blank));
+  ok('figure: ...and marked to be confirmed', /TO BE CONFIRMED/.test(blank));
   ok('figure: an unconfirmed dimension is still drawn', tbcSvg.length>0);
   ok('figure: ...and marked', /TO BE CONFIRMED/.test(tbcSvg));
 
@@ -1556,6 +1561,17 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   const build=G('_csWireBuild'), len=G('_csMatLenMm'), isWire=G('_csIsWireMaterial'),
         MODEL=G('_CS_CUT_MODEL');
 
+  const stock=G('_csMatStock');
+  // The quantity column IS the length on these BOMs: "12" with unit "m" is
+  // twelve metres, and must never be read as twelve of anything.
+  t('wires: quantity 12 with unit m is 12 metres', stock({qty:'12', unit:'m'}), {mm:12000, qty:1});
+  t('wires: ...and is counted once, not twelve times',
+    stock({qty:'12', unit:'m', length_mm:3000}).mm, 12000);
+  t('wires: a unit of pc leaves the length field alone',
+    stock({qty:'2', unit:'pc', length_mm:3000}), {mm:3000, qty:2});
+  t('wires: millimetres in the quantity column', stock({qty:'500', unit:'mm'}), {mm:500, qty:1});
+  t('wires: feet too', stock({qty:'10', unit:'ft'}).mm, 3048);
+
   t('wires: a length in its own field', len({length_mm:4000}), 4000);
   t('wires: metres become millimetres', len({qty:'12 m'}), 12000);
   t('wires: inches too', len({description:'wire 10 in'}), 254);
@@ -1640,6 +1656,8 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('wires: eight wires in the bundle', bs.pieces, 8);
   t('wires: the heat-shrink is not wire', bs.lines.some(l=>/DR-25/.test(l.pn)), false);
   t('wires: a metre quantity is not multiplied by itself', bs.lines[0].totalMm, 12000);
+  t('wires: ...so it is four pieces, not twelve', bs.lines[0].pieces, 4);
+  t('wires: ...and eight wires in the bundle, not twenty-four', bs.pieces, 8);
 
   const s4=spec(12000,3); s4.materials=[];
   t('wires: no BOM length, no instruction', build(s4.segments[0], s4), null);

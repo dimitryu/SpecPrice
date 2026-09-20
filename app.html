@@ -763,7 +763,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.43.0';
+const APP_VER   = '1.44.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -9762,21 +9762,42 @@ const _CS_WIRE_RE=/\b(wire|hook[- ]?up|lead|conductor)\b/i;
 const _CS_CABLE_RE=/\b(cable|jacket|sheath|multi-?conductor|coax)\b/i;
 // A length written anywhere the BOM puts it: its own field, the quantity column
 // with a unit, or the description.
-function _csMatLenMm(m){
-  if(!m) return null;
+// How much wire one BOM line actually calls for, in millimetres.
+//
+// The trap this exists for: on these BOMs the QUANTITY column IS the length —
+// "12" with unit "m" is twelve metres of wire, not twelve pieces. Reading it as
+// a count and multiplying it by a length found elsewhere turns 12 m into 36 m
+// and four pieces into twelve. So the unit column decides, and it decides
+// FIRST, ahead of any length the analysis may have filled in.
+const _CS_LEN_UNITS={mm:1, millimeter:1, millimetre:1, 'מ"מ':1, 'מ״מ':1,
+                     m:1000, meter:1000, metre:1000, meters:1000, metres:1000, "מ'":1000,
+                     cm:10, in:25.4, inch:25.4, inches:25.4, ft:304.8, feet:304.8, foot:304.8};
+// {mm, qty} — mm is the whole line's length, qty is how many times it is
+// counted (always 1 when the quantity was itself the length).
+function _csMatStock(m){
+  if(!m) return {mm:null, qty:1};
+  const unit=String(m.unit||'').trim().toLowerCase();
+  const qtyNum=_csNum(m.qty);
+  const f=_CS_LEN_UNITS[unit];
+  // 1. the quantity column, when its unit says it is a length
+  if(f!=null && qtyNum!=null && qtyNum>0) return {mm:_csR(qtyNum*f), qty:1};
+  // 2. an explicit length field, counted as many times as the line is ordered
   const direct=_csNum(m.length_mm);
-  if(direct!=null && direct>0) return direct;
-  const texts=[m.qty, m.unit&&`${m.qty} ${m.unit}`, m.description].map(x=>String(x==null?'':x));
+  if(direct!=null && direct>0)
+    return {mm:direct, qty:(qtyNum!=null && qtyNum>0 && qtyNum<1000 && !f) ? qtyNum : 1};
+  // 3. a length written into the quantity or the description
+  const texts=[String(m.qty==null?'':m.qty), String(m.description||'')];
   for(const t of texts){
-    let mm=/([\d.,]+)\s*(mm|מ"מ|מ״מ)\b/i.exec(t);
-    if(mm) return _csNum(String(mm[1]).replace(/,/g,''));
-    let m2=/([\d.,]+)\s*(m|meters?|metres?|מ')\b/i.exec(t);
-    if(m2){ const v=_csNum(String(m2[1]).replace(/,/g,'')); return v==null?null:_csR(v*1000); }
-    let inch=/([\d.,]+)\s*(in|inch|inches|")\b/i.exec(t);
-    if(inch){ const v=_csNum(String(inch[1]).replace(/,/g,'')); return v==null?null:_csR(v*25.4); }
+    const hit=/([\d.,]+)\s*(mm|cm|m|meters?|metres?|in|inch|inches|ft|feet|foot|מ"מ|מ״מ|מ')\b/i.exec(t);
+    if(hit){
+      const v=_csNum(String(hit[1]).replace(/,/g,''));
+      const k=_CS_LEN_UNITS[String(hit[2]).toLowerCase()];
+      if(v!=null && k!=null) return {mm:_csR(v*k), qty:1};
+    }
   }
-  return null;
+  return {mm:null, qty:1};
 }
+function _csMatLenMm(m){ return _csMatStock(m).mm; }
 function _csIsWireMaterial(m){
   if(!m) return false;
   if(String(m.kind||'').toLowerCase()==='wire') return true;
@@ -9790,10 +9811,6 @@ function _csIsWireMaterial(m){
 // together. Two 12 m lines on the BOM make eight. So every wire line is counted
 // separately, its own division is shown, and the totals are the sum — which is
 // also the only way the arithmetic stays checkable when the lines differ.
-function _csMatQty(m){
-  const n=_csNum(m && m.qty);
-  return (n!=null && n>0 && n<1000) ? n : 1;   // a qty that IS a length is handled by _csMatLenMm
-}
 function _csWireBuild(seg, spec){
   const perWire=_csNum(_csCutLength(seg, spec).total);
   if(perWire==null || perWire<=0) return null;
@@ -9814,14 +9831,12 @@ function _csWireBuild(seg, spec){
   if(!chosen.length) return null;
 
   const lines=chosen.map(x=>{
-    // A quantity multiplies the line only when the length is a field of its
-    // own. When the length WAS the quantity ("3" with unit "m"), multiplying by
-    // it again counts the same reel three times.
-    const qty=_csNum(x.m.length_mm)>0 ? _csMatQty(x.m) : 1;
-    const totalMm=_csR(x.mm*qty);
+    const st=_csMatStock(x.m);
+    const qty=st.qty;
+    const totalMm=_csR(st.mm*qty);
     const pieces=Math.floor(totalMm/perWire);
     return {pn:String(x.m.part_number||''), description:String(x.m.description||''),
-            reelMm:x.mm, qty, totalMm, pieces, leftoverMm:_csR(totalMm-pieces*perWire)};
+            reelMm:st.mm, qty, totalMm, pieces, leftoverMm:_csR(totalMm-pieces*perWire)};
   }).filter(l=>l.pieces>0);
   if(!lines.length) return null;
 
@@ -10132,6 +10147,9 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "no strip dimension on the drawing — fill it in":"אין מידת חשיפה בסרטוט — יש להשלים",
+    "No figure could be drawn for":"לא ניתן לצייר סרטוט עבור",
+    "this end has no dimensions at all on the specification.":"לקצה הזה אין אף מידה במפרט.",
     "The Length column is what you CUT. It is worked out from the drawing’s dimension and from what that dimension measures — stated per run below. Strip is jacket / conductor.":"עמודת האורך היא מה שחותכים. היא מחושבת מהמידה שבסרטוט ומהאופן שבו המידה נלקחת — מצוין לכל מקטע למטה. החשיפה היא מעטפת / מוליך.",
     "The harness is made of":"הצמה מורכבת מ",
     "each":"כל אחד",
@@ -10425,6 +10443,7 @@ const _CS_LABELS={
       'הופק על ידי AI מתוך הסרטוט — לאמת מול הסרטוט לפני שימוש.',
   },
   ru:{
+    "no strip dimension on the drawing — fill it in":"на чертеже нет размера зачистки — заполнить",
     "The harness is made of":"Жгут состоит из",
     "each":"каждый",
     "total":"всего",
@@ -11866,7 +11885,7 @@ function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, showForm
 const _CS_FIG_STRANDS=7;
 function _csStripSVG(seg, end, spec){
   const T=_csT;
-  const cuts=(end?.strip||[]).filter(s=>!s.derived && _csNum(s.value_mm)>0)
+  let cuts=(end?.strip||[]).filter(s=>!s.derived && _csNum(s.value_mm)>0)
     .map(s=>({code:String(s.code||''), mm:_csNum(s.value_mm), confirmed:s.confirmed!==false,
               label:String(s.label||'')}))
     .sort((a,b)=>a.mm-b.mm);
@@ -11875,13 +11894,24 @@ function _csStripSVG(seg, end, spec){
     cuts.unshift({code:'W', mm:cs, confirmed:seg?.conductor_strip_confirmed!==false,
                   label:T('each conductor'), conductor:true});
   cuts.sort((a,b)=>a.mm-b.mm);
-  if(!cuts.length) return '';
+  // An end with no strip dimension still gets its drawing. The operator has to
+  // prepare that end whatever the analysis managed to read, and a figure with a
+  // blank dimension marked TBC is a usable instruction — an absent figure is
+  // just a hole in the sheet where an end used to be.
+  const unknown=!cuts.length;
+  if(unknown) cuts=[{code:'A', mm:null, confirmed:false,
+                     label:T('no strip dimension on the drawing — fill it in')}];
 
-  const A=cuts[cuts.length-1].mm;                 // the outermost cut sets the scale
   const X_END=90, X_JACKET=470, X_TIP=1010;
-  const S=A>0 ? (X_JACKET-X_END)/A : 1;
+  const A=unknown ? null : cuts[cuts.length-1].mm;   // the outermost cut sets the scale
+  const S=(A!=null && A>0) ? (X_JACKET-X_END)/A : 1;
   const CY=210, JH=64;
-  const at=mm=>X_END+mm*S;
+  // With nothing to scale to, the bands are laid out evenly: the picture is
+  // schematic, and the numbers beside it say so.
+  const at=mm=>{
+    if(A==null || mm==null) return X_JACKET;
+    return X_END+mm*S;
+  };
 
   // Everything the jacket was covering, drawn band by band from the end.
   // Each cut removes one layer and exposes the next one down, so the band a cut
@@ -11932,7 +11962,7 @@ function _csStripSVG(seg, end, spec){
           marker-start="url(#csFigL)" marker-end="url(#csFigR)"/>
         <line x1="${x.toFixed(1)}" y1="${CY+JH/2+8}" x2="${x.toFixed(1)}" y2="${(y+7).toFixed(1)}" stroke="${col}" stroke-width=".9" stroke-dasharray="3 3"/>
         <text x="${X_END}" y="${y-9}" font-size="17" font-weight="800" fill="${col}">${
-          _csSvgTxt(c.code?`${c.code} = `:'')}${c.mm} mm${c.confirmed?'':' *'}</text>
+          _csSvgTxt(c.code?`${c.code} = `:'')}${c.mm==null?'?':c.mm} mm${c.confirmed?'':' *'}</text>
         <text x="${(x+14).toFixed(1)}" y="${y+5}" font-size="11.5" fill="#64748B">${_csSvgTxt(_csP(c.label||''))}</text>`;
     y+=42;
   });
@@ -12379,6 +12409,30 @@ function _csDatasheetLink(url, vendor){
   return `<a class="cs-link" href="${esc(u)}" target="_blank" rel="noopener noreferrer"
      title="${esc(_csT('Datasheet'))}${vendor?` — ${esc(vendor)}`:''}">\uD83D\uDCC4 ${esc(_csT('Datasheet'))}</a>`;
 }
+// A specification made before this existed — or one whose parts the
+// distributors had nothing on that day — has no links. Opening it fills them
+// in, once, in the background: no button to remember, and no repeat of a
+// lookup that already came back empty.
+let _csDsBusy=false;
+async function _csBackfillDatasheets(spec){
+  if(!spec || _csDsBusy || spec.datasheets_checked) return;
+  const conns=_csConnectors(spec);
+  if(!conns.some(c=>String(c.part_number||'').trim() || String(c.contact_pn||'').trim())) return;
+  if(conns.some(c=>_csSafeUrl(c.datasheet_url) || _csSafeUrl(c.contact_datasheet_url))) return;
+  _csDsBusy=true;
+  spec.datasheets_checked=true;          // in memory at once, so a re-render cannot start a second run
+  try{
+    const found=await _csAttachDatasheets(spec);
+    const {_id, ...body}=spec;
+    if(_id) await setDoc(doc(db,'companies',companyId,'cut_strip_specs',_id),
+      {...body, updatedAt:serverTimestamp()}, {merge:false});
+    csSpecs=[];
+    logAudit('cut_strip_datasheets',{drawing:spec.drawing_number, found, backfill:true},true);
+    if(found && csCurrent===spec) renderCutStripSheet();
+  }catch(e){ console.warn('[CutStrip] datasheet backfill', e.message); }
+  _csDsBusy=false;
+}
+
 // Best-effort, and deliberately silent: a drawing analysis must not fail, or
 // even slow down noticeably, because a distributor API was having a bad minute.
 async function _csAttachDatasheets(spec, onProgress){
@@ -12791,8 +12845,13 @@ function renderCutStripSheet(){
           const fig=_csStripSVG(seg,e,spec);
           return fig?`<figure class="cs-fig">${fig}</figure>`:'';
         }).join('');
-        return figs ? `<h3 class="cs-h3"><span class="cs-ltr">${esc(seg.id)} — ${esc(_csSegLabel(seg))}</span>
-          ${esc(T('cut'))}: <span class="cs-ltr">${esc(_csMM(_csCutLength(seg,spec).total))}</span></h3>${figs}` : '';
+        // Every end of every run must have a figure. If one is missing, the
+        // sheet says which — silence would read as "this end needs nothing".
+        const missing=ends.filter(e=>!_csStripSVG(seg,e,spec)).map(e=>e.ref||'?');
+        return (figs||missing.length) ? `<h3 class="cs-h3"><span class="cs-ltr">${esc(seg.id)} — ${esc(_csSegLabel(seg))}</span>
+          ${esc(T('cut'))}: <span class="cs-ltr">${esc(_csMM(_csCutLength(seg,spec).total))}</span></h3>${figs}
+          ${missing.length?`<p class="cs-note" style="color:#B45309">${esc(T('No figure could be drawn for'))}
+            <span class="cs-ltr">${esc(missing.join(', '))}</span> — ${esc(T('this end has no dimensions at all on the specification.'))}</p>`:''}` : '';
       }).join('')}
     </div>
 
@@ -12827,6 +12886,8 @@ function renderCutStripSheet(){
       </div>
     </div>
   </div>`);
+
+  if(!_csEditing) _csBackfillDatasheets(spec);
 
   document.getElementById('btn-cs-back')?.addEventListener('click',()=>{
     if(_csEditing && !confirm('Discard unsaved changes to this specification?')) return;

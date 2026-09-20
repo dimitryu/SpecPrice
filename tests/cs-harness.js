@@ -108,6 +108,9 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   no('form: no inches on the drawings', / in\)/.test(html));
   // datasheets: only a real one, and no button to press
   no('form: a connector with no datasheet on file gets no link', /class="cs-link/.test(html));
+  // A sheet with no links tries once to fill them in, with no button to press.
+  ok('form: opening a sheet asks for the datasheets it is missing',
+     /cut_strip_datasheets|datasheets_checked/.test(M._csBackfillDatasheets.toString()));
   no('form: there is no "find links" button',
      /btn-cs-links/.test(g.document.getElementById('topbar-actions').innerHTML));
   no('form: and no way across to manufacturing',
@@ -155,6 +158,28 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   ok('wires: ...and says what the reel is cut into', /Cut into/.test(wh));
   ok('wires: ...and what the harness then is', /The harness is/.test(wh));
   ok('wires: ...naming the wire', /M22759\/16-22-9/.test(wh));
+
+  // The shop's own BOM shape: the quantity column IS the length.
+  const SHOP=JSON.parse(JSON.stringify(SPEC));
+  SHOP.cut_model='jacket_end_v1';
+  SHOP.materials=[{item:7, part_number:'55A0111-22-0', description:'Wire 22 AWG Black', qty:'12', unit:'m'},
+                  {item:8, part_number:'55A0111-22-2', description:'Wire 22 AWG Red',   qty:'12', unit:'m'}];
+  SHOP.segments[0].cable_part_number='';
+  SHOP.segments[0].finished_length_mm=3000;
+  SHOP.segments[0].length_basis='over_connectors';
+  SHOP.segments[0].conductors=[];
+  vm.runInContext(`csCurrent=${JSON.stringify(SHOP)};`, ctx);
+  M.renderCutStripSheet();
+  const sh=g.document.getElementById('content').innerHTML;
+  ok('shop: 12 m of each wire is four pieces, not twelve',
+     (sh.match(/4 <\/span>?×|>4<\/span> ×/g)||[]).length>0 || /4<\/span> × <span[^>]*>3000/.test(sh));
+  ok('shop: both part numbers are listed', /55A0111-22-0/.test(sh) && /55A0111-22-2/.test(sh));
+  ok('shop: the bundle is eight wires', /8 /.test(sh.replace(/\s+/g,' ')));
+  ok('shop: the cut is the drawn 3000, not more', /3000/.test(sh) && !/30[1-9][0-9]/.test(sh));
+  ok('shop: every end still gets a figure',
+     (sh.match(/WIRE END PREPARATION/g)||[]).length===2);
+  vm.runInContext(`csCurrent=${JSON.stringify(SPEC)};`, ctx);
+  M.renderCutStripSheet();
   vm.runInContext(`csCurrent=${JSON.stringify(SPEC)};`, ctx);
   M.renderCutStripSheet();
 
