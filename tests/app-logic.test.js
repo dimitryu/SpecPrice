@@ -1809,6 +1809,76 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('loop: a short answer is never called a loop', loopy('{"a":1}'), false);
 }
 
+// ──────────────────────────── 38. the drawing this was all written for
+{
+  const stock=G('_csMatStock'), build=G('_csWireBuild'), propose=G('_csProposeStrips'),
+        cut=G('_csCutLength'), stripFor=G('_csStripForAwg'), awgOf=G('_csAwgOf'),
+        MODEL=G('_CS_CUT_MODEL');
+
+  // What the analysis actually returned for ARKHRNS0032: the BOM's "12 m" read
+  // as twelve pieces, and the harness length copied onto the wire line.
+  const spec=()=>({cut_model:MODEL,
+    materials:[{item:7, part_number:'55A0111-22-0', description:'Wire 22 AWG Black', qty:12, length_mm:3000},
+               {item:8, part_number:'55A0111-22-2', description:'Wire 22 AWG Red',   qty:12, length_mm:3000}],
+    connectors:[{ref:'P1', kind:'connector', termination:'crimp'},
+                {ref:'T1', kind:'connector', termination:'crimp'}],
+    segments:[{id:'S1', finished_length_mm:3000, length_basis:'over_connectors',
+      cable_description:'22 AWG wires, black and red', conductors:[],
+      ends:[{ref:'P1', strip:[]},{ref:'T1', strip:[]}]}]});
+
+  const sp=spec();
+  const b=build(sp.segments[0], sp);
+  t('ARKHRNS0032: four pieces from each reel, not twelve', b.lines.map(l=>l.pieces), [4,4]);
+  t('ARKHRNS0032: ...eight wires in the bundle', b.pieces, 8);
+  t('ARKHRNS0032: ...each the 3 m the drawing gives', b.perWireMm, 3000);
+  t('ARKHRNS0032: ...counted by part number',
+    b.byPn.map(x=>[x.pn,x.pieces]), [['55A0111-22-0',4],['55A0111-22-2',4]]);
+  t('ARKHRNS0032: ...from 12 m of each, not 36', b.lines.map(l=>l.totalMm), [12000,12000]);
+  t('ARKHRNS0032: the cut never exceeds the drawn length', cut(sp.segments[0], sp).total, 3000);
+
+  // The length field is only overruled when it is the run length on a wire
+  // line — a real reel length is believed.
+  t('stock: a genuine reel length is kept',
+    stock({description:'Wire 22 AWG', qty:2, length_mm:12000}, 3000), {mm:12000, qty:2});
+  t('stock: the harness length copied onto a wire line is not',
+    stock({description:'Wire 22 AWG', qty:12, length_mm:3000}, 3000).mm, 12000);
+  t('stock: ...and it is counted once', stock({description:'Wire 22 AWG', qty:12, length_mm:3000}, 3000).qty, 1);
+  t('stock: a connector line is never read as metres',
+    stock({description:'13 Pos Circ Conn Plug', qty:2, length_mm:3000}, 3000), {mm:3000, qty:2});
+  t('stock: the unit column still wins', stock({qty:'12', unit:'m', length_mm:3000}, 3000).mm, 12000);
+
+  // A drawing that dimensions no strip still produces a number to work to.
+  const sp2=spec();
+  t('strip: the gauge is read off the description', awgOf(sp2.segments[0], sp2), 22);
+  t('strip: 22 AWG is bared 3.5 mm for a crimp contact', stripFor(22), 3.5);
+  const n=propose(sp2);
+  t('strip: both ends and the conductor get a number', n, 3);
+  t('strip: ...on the first end', sp2.segments[0].ends[0].strip[0].value_mm, 3.5);
+  t('strip: ...and the second', sp2.segments[0].ends[1].strip[0].value_mm, 3.5);
+  t('strip: ...and for each conductor', sp2.segments[0].conductor_strip_mm, 3.5);
+  t('strip: nothing proposed is ever marked confirmed',
+    sp2.segments[0].ends[0].strip[0].confirmed, false);
+  t('strip: ...and it says it was proposed', sp2.segments[0].ends[0].strip[0].proposed, true);
+  ok('strip: ...with its basis written down', /contact datasheet/.test(sp2.segments[0].ends[0].strip[0].basis));
+  ok('strip: an open item records it', (sp2.open_items||[]).some(o=>/not on the drawing/i.test(o.what)));
+
+  // A dimension the drawing DOES give is never overwritten.
+  const sp3=spec();
+  sp3.segments[0].ends[0].strip=[{code:'A', value_mm:50, confirmed:true}];
+  propose(sp3);
+  t('strip: a dimension read from the drawing stands', sp3.segments[0].ends[0].strip.length, 1);
+  t('strip: ...unchanged', sp3.segments[0].ends[0].strip[0].value_mm, 50);
+  // A junction terminates nothing, so it gets nothing.
+  const sp4=spec();
+  sp4.connectors[1].kind='breakout';
+  propose(sp4);
+  t('strip: a breakout is not a terminated end', sp4.segments[0].ends[1].strip.length, 0);
+  // No gauge anywhere: nothing is invented.
+  const sp5=spec();
+  sp5.materials=[]; sp5.segments[0].cable_description='cable';
+  t('strip: with no gauge to work from, nothing is proposed', propose(sp5), 0);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

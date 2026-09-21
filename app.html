@@ -763,7 +763,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.48.0';
+const APP_VER   = '1.49.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -9657,6 +9657,81 @@ function _csDatum(seg, spec){
   };
 }
 
+// ── A strip dimension, even when the drawing has none ────────────────────────
+// A harness drawing usually does NOT dimension the strip: it belongs to the
+// contact, not to the cable, and the number lives in the contact's datasheet.
+// The operator still has to strip the wire, so a sheet that says nothing at
+// that end is a sheet they cannot work from — which is exactly what came back
+// from this drawing: two ends, both blank.
+//
+// So when nothing was read, the app proposes the ordinary strip for that wire
+// gauge and marks it unconfirmed, with its basis written on the row. A number
+// an engineer checks in thirty seconds beats a blank that stops the bench, and
+// nothing here is ever presented as if it came off the drawing.
+//
+// Lengths are the usual bared length for a crimp barrel of that size; every
+// one of them is a starting point, not a specification.
+const _CS_AWG_STRIP={28:2.5, 26:3.0, 24:3.0, 22:3.5, 20:4.0, 18:4.5, 16:5.0, 14:5.5, 12:6.5, 10:8.0};
+function _csAwgOf(seg, spec){
+  const fromWire=(seg?.conductors||[]).map(w=>_csNum(w&&w.awg)).find(v=>v!=null);
+  if(fromWire!=null) return fromWire;
+  const texts=[seg?.cable_description, seg?.cable_part_number]
+    .concat((spec?.materials||[]).filter(_csIsWireMaterial).map(m=>m.description))
+    .map(x=>String(x||''));
+  for(const t of texts){
+    const m=/(\d{1,2})\s*AWG/i.exec(t);
+    if(m) return parseInt(m[1],10);
+  }
+  return null;
+}
+function _csStripForAwg(awg){
+  const n=_csNum(awg);
+  if(n==null) return null;
+  if(_CS_AWG_STRIP[n]!=null) return _CS_AWG_STRIP[n];
+  // between two sizes in the table, or off the end of it
+  const keys=Object.keys(_CS_AWG_STRIP).map(Number).sort((a,b)=>a-b);
+  if(n<keys[0]) return _CS_AWG_STRIP[keys[0]];
+  if(n>keys[keys.length-1]) return _CS_AWG_STRIP[keys[keys.length-1]];
+  const above=keys.filter(k=>k>n)[0];
+  return _CS_AWG_STRIP[above];
+}
+// Fills only what is missing, and only on an end that is actually terminated.
+// Returns how many dimensions it had to propose, for the audit trail.
+function _csProposeStrips(spec){
+  let n=0;
+  const conns=_csConnectors(spec);
+  _csSegments(spec).forEach(seg=>{
+    const awg=_csAwgOf(seg, spec);
+    const mm=_csStripForAwg(awg);
+    if(mm==null) return;
+    const basis=`Not dimensioned on the drawing. Typical bared length for a ${awg} AWG crimp contact — confirm against the contact datasheet before the first production lot.`;
+    (seg.ends||[]).forEach(e=>{
+      const c=conns.find(x=>String(x.ref||'').toUpperCase()===String(e.ref||'').toUpperCase());
+      const kind=String(c&&c.kind||'').toLowerCase();
+      if(kind==='breakout' || kind==='splice') return;     // nothing is terminated here
+      const has=(e.strip||[]).some(x=>_csNum(x.value_mm)!=null);
+      if(has) return;
+      e.strip=(Array.isArray(e.strip)?e.strip:[]).concat([{
+        code:'A', label:'Insulation removed from the wire end for its contact',
+        value_mm:mm, derived:false, confirmed:false, proposed:true, basis}]);
+      n++;
+    });
+    // On loose wires the conductor strip IS the strip, so the two must not be
+    // two different numbers on one sheet.
+    if(_csNum(seg.conductor_strip_mm)==null){
+      seg.conductor_strip_mm=mm;
+      seg.conductor_strip_confirmed=false;
+      seg.conductor_strip_proposed=true;
+      n++;
+    }
+  });
+  if(n) (spec.open_items=Array.isArray(spec.open_items)?spec.open_items:[]).push({
+    what:'Strip dimensions were not on the drawing',
+    why:`The app proposed ${n} of them from the wire gauge. They are marked TBC on the sheet.`,
+    action:'Check them against the contact datasheet and tick Confirmed.'});
+  return n;
+}
+
 function _csCutLength(seg, spec){
   const finished=_csNum(seg?.finished_length_mm);
   const allowances=(Array.isArray(seg?.allowances)?seg.allowances:[])
@@ -9774,18 +9849,30 @@ const _CS_LEN_UNITS={mm:1, millimeter:1, millimetre:1, 'מ"מ':1, 'מ״מ':1,
                      cm:10, in:25.4, inch:25.4, inches:25.4, ft:304.8, feet:304.8, foot:304.8};
 // {mm, qty} — mm is the whole line's length, qty is how many times it is
 // counted (always 1 when the quantity was itself the length).
-function _csMatStock(m){
+function _csMatStock(m, runMm){
   if(!m) return {mm:null, qty:1};
   const unit=String(m.unit||'').trim().toLowerCase();
   const qtyNum=_csNum(m.qty);
   const f=_CS_LEN_UNITS[unit];
   // 1. the quantity column, when its unit says it is a length
   if(f!=null && qtyNum!=null && qtyNum>0) return {mm:_csR(qtyNum*f), qty:1};
-  // 2. an explicit length field, counted as many times as the line is ordered
+  // 2. An explicit length field, counted as many times as the line is ordered.
   const direct=_csNum(m.length_mm);
-  if(direct!=null && direct>0)
+  if(direct!=null && direct>0){
+    // …unless the "length" is just the harness length copied onto a wire line,
+    // which is what turns 12 m of wire into "12 pieces of 3 m": 36 metres the
+    // BOM never called for, and twelve cuts instead of four. Wire is bought by
+    // the metre, never by the piece, so on a wire line whose length equals the
+    // run it describes, the quantity is the length.
+    const copiedRunLength = runMm!=null && Math.abs(direct-runMm)<=Math.max(1, runMm*0.02);
+    if(copiedRunLength && qtyNum!=null && qtyNum>1 && qtyNum<=5000 && _csIsWireMaterial(m))
+      return {mm:_csR(qtyNum*1000), qty:1, assumedMetres:true};
     return {mm:direct, qty:(qtyNum!=null && qtyNum>0 && qtyNum<1000 && !f) ? qtyNum : 1};
-  // 3. a length written into the quantity or the description
+  }
+  // 3. No length field at all on a wire line: the quantity is metres.
+  if(!f && !unit && qtyNum!=null && qtyNum>0 && qtyNum<=5000 && _csIsWireMaterial(m))
+    return {mm:_csR(qtyNum*1000), qty:1, assumedMetres:true};
+  // 4. a length written into the quantity or the description
   const texts=[String(m.qty==null?'':m.qty), String(m.description||'')];
   for(const t of texts){
     const hit=/([\d.,]+)\s*(mm|cm|m|meters?|metres?|in|inch|inches|ft|feet|foot|מ"מ|מ״מ|מ')\b/i.exec(t);
@@ -9831,7 +9918,7 @@ function _csWireBuild(seg, spec){
   if(!chosen.length) return null;
 
   const lines=chosen.map(x=>{
-    const st=_csMatStock(x.m);
+    const st=_csMatStock(x.m, perWire);
     const qty=st.qty;
     const totalMm=_csR(st.mm*qty);
     const pieces=Math.floor(totalMm/perWire);
@@ -10147,6 +10234,7 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "Not on the drawing — proposed from the wire gauge. Confirm against the contact datasheet.":"לא מופיע בסרטוט — הוצע לפי עובי החוט. לאמת מול דף הנתונים של המגע.",
     "This sheet was built from an incomplete reply":"הדף הזה נבנה מתשובה חלקית",
     "The analysis ran out of room before it finished, so part of the drawing is missing from this sheet. Everything shown was read from the drawing and is as good as any other sheet — but check that every run, end and connector you see on the drawing is here before using it, and fill in what is not.":"לניתוח נגמר המקום לפני שסיים, ולכן חלק מהסרטוט חסר בדף הזה. כל מה שמוצג נקרא מהסרטוט ותקף כמו בכל דף אחר — אבל לפני שימוש יש לוודא שכל מקטע, קצה ומחבר שרואים בסרטוט מופיעים כאן, ולהשלים את מה שחסר.",
     "no strip dimension on the drawing — fill it in":"אין מידת חשיפה בסרטוט — יש להשלים",
@@ -11380,6 +11468,19 @@ RULES — these matter more than completeness:
      - genuinely ambiguous → "unclear". Say so; do not pick one to look decisive. The sheet prints
        "assumed" against an unclear basis and asks a human, which is the correct outcome.
 
+18b. THE QUANTITY COLUMN IS OFTEN A LENGTH. These BOMs have QTY and UNIT columns side by side:
+   "12" with UNIT "m" is TWELVE METRES of wire, not twelve pieces. Copy both columns as they are
+   printed — "qty":"12","unit":"m" — and put the converted length in "length_mm" (12000). Never turn a
+   length into a piece count, and never copy the harness length onto a wire line: a wire line saying
+   12 m against a 3 m harness means four pieces of 3 m, and writing it as "12 × 3000" orders 36 metres
+   the drawing never asked for.
+
+18c. A TERMINATED END ALWAYS GETS A STRIP DIMENSION. Drawings rarely dimension the strip — it belongs
+   to the contact, not to the cable — but the operator still has to strip the wire, so an end with an
+   empty "strip" is a sheet nobody can work from. Give your best number from the contact and the wire
+   gauge (a 22 AWG crimp contact is bared about 3.5 mm), set "confirmed":false, and say in "basis"
+   that it comes from the contact rather than the drawing. Do the same for "conductor_strip_mm".
+
 19. READY-MADE CABLE, OR WIRES YOU BUILD IT FROM? Compare the wire/cable length on the BOM with the run
    length. A BOM line for 12 000 mm against a 4 000 mm run is not a 12 m cable: it is three 4 m wires,
    and the assembly is built from loose wire rather than from a jacketed cable. When that is what the
@@ -11774,6 +11875,13 @@ async function aiAnalyzeCutStrip(text, isImage, imgData, lang){
   // guessing.
   spec.lang = lang || _CS_SOURCE_LANG;
   spec.cut_model = _CS_CUT_MODEL;
+  // A drawing rarely dimensions the strip — it belongs to the contact. Rather
+  // than hand the bench a blank, propose the ordinary length for the gauge and
+  // mark it TBC (see _csProposeStrips).
+  try{
+    const n=_csProposeStrips(spec);
+    if(n) logSystemAudit('cut_strip_proposed_strips',{drawing:spec.drawing_number, count:n}, true);
+  }catch(e){ console.warn('[CutStrip] strip proposal', e.message); }
   return spec;
 }
 
@@ -12618,11 +12726,13 @@ function _csStripRows(spec){
   _csSegments(spec).forEach(seg=>{
     (_csSegEnds(seg, spec)||[]).forEach(e=>{
       (e.strip||[]).filter(x=>!x.derived && _csNum(x.value_mm)!=null).forEach(x=>
-        out.push({seg:seg.id, ref:e.ref, code:x.code, label:x.label, mm:x.value_mm, ok:x.confirmed!==false}));
+        out.push({seg:seg.id, ref:e.ref, code:x.code, label:x.label, mm:x.value_mm,
+                  ok:x.confirmed!==false, proposed:x.proposed===true, basis:x.basis||''}));
     });
     if(_csNum(seg.conductor_strip_mm)!=null)
       out.push({seg:seg.id, ref:_csT('each conductor'), code:'W', label:_csT('Insulation removed from each individual conductor for its contact'),
-                mm:seg.conductor_strip_mm, ok:seg.conductor_strip_confirmed!==false});
+                mm:seg.conductor_strip_mm, ok:seg.conductor_strip_confirmed!==false,
+                proposed:seg.conductor_strip_proposed===true});
   });
   return out;
 }
@@ -13084,7 +13194,9 @@ function renderCutStripSheet(){
           <td class="cs-ltr">${esc(x.seg)} · ${esc(x.ref)}</td>
           <td class="cs-ctr cs-ltr"><b>${esc(x.code)}</b></td>
           <td class="cs-ctr cs-ltr"><b>${esc(_csMM(x.mm))}</b>${x.ok?'':` <span class="cs-tag cs-tbc">${esc(T('TBC'))}</span>`}</td>
-          <td style="font-size:12px">${esc(_csP(x.label||''))}</td></tr>`).join('')}
+          <td style="font-size:12px">${esc(_csP(x.label||''))}
+            ${x.proposed?`<div style="font-size:11px;color:#B45309;margin-top:2px">${
+              esc(T('Not on the drawing — proposed from the wire gauge. Confirm against the contact datasheet.'))}</div>`:''}</td></tr>`).join('')}
         </tbody></table>` : ''; })()}
     </div>
 
