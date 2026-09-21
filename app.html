@@ -763,7 +763,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.45.0';
+const APP_VER   = '1.46.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -10147,6 +10147,8 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "This sheet was built from an incomplete reply":"הדף הזה נבנה מתשובה חלקית",
+    "The analysis ran out of room before it finished, so part of the drawing is missing from this sheet. Everything shown was read from the drawing and is as good as any other sheet — but check that every run, end and connector you see on the drawing is here before using it, and fill in what is not.":"לניתוח נגמר המקום לפני שסיים, ולכן חלק מהסרטוט חסר בדף הזה. כל מה שמוצג נקרא מהסרטוט ותקף כמו בכל דף אחר — אבל לפני שימוש יש לוודא שכל מקטע, קצה ומחבר שרואים בסרטוט מופיעים כאן, ולהשלים את מה שחסר.",
     "no strip dimension on the drawing — fill it in":"אין מידת חשיפה בסרטוט — יש להשלים",
     "No figure could be drawn for":"לא ניתן לצייר סרטוט עבור",
     "this end has no dimensions at all on the specification.":"לקצה הזה אין אף מידה במפרט.",
@@ -10853,7 +10855,9 @@ async function _csTranslateChunk(todo, lang, bucket){
 // Reading a whole drawing and emitting several thousand tokens of structured
 // JSON is the longest single request this app makes. 60s — the app-wide default
 // — was cutting it off mid-generation and reporting it as a hang.
-const _CS_ANALYSIS_TIMEOUT = 180000;
+// A 64k-token reply takes longer to write than a 32k one, and a request that
+// is aborted mid-answer wastes the whole analysis. Five minutes per request.
+const _CS_ANALYSIS_TIMEOUT = 300000;
 // Output budget. 8192 was enough for one coax with two ends in English; it is
 // not enough for a real harness. The schema now carries connectors, one block
 // per cable run, and a wiring table per run — and Hebrew costs roughly twice
@@ -11432,23 +11436,96 @@ function _csLooksTruncated(text){
   }
   return inStr || depth>0;
 }
+// ── Rescuing an answer that did not arrive whole ─────────────────────────────
+// Until now an unfinished or malformed reply threw everything away: the
+// operator waited two minutes, watched the upload, and got "nothing was saved,
+// try again" — which costs another two minutes and usually ends the same way.
+//
+// A reply that stopped early is not worthless. Everything before the cut is
+// exactly what the model meant to write; only the tail is missing. So the JSON
+// is trimmed back to the last value that finished, the open brackets are
+// closed, and the sheet is built from that — marked plainly as partial, with
+// the sections that did not arrive named on the sheet rather than silently
+// absent. A partial cut-and-strip form an engineer can finish beats no form.
+function _csRepairJson(raw){
+  let t=String(raw||'');
+  const start=t.indexOf('{');
+  if(start<0) return '';
+  t=t.slice(start);
+
+  // One pass: track strings and nesting, and remember the last position where a
+  // complete value had just been written — a closing bracket or the comma that
+  // follows one. Anything after that point is the half-written tail.
+  const open=[];
+  let inStr=false, esc=false, lastSafe=-1;
+  for(let k=0;k<t.length;k++){
+    const ch=t[k];
+    if(esc){ esc=false; continue; }
+    if(ch==='\\'){ esc=true; continue; }
+    if(inStr){ if(ch==='"') inStr=false; continue; }
+    if(ch==='"'){ inStr=true; continue; }
+    if(ch==='{'){ open.push('}'); }
+    else if(ch==='['){ open.push(']'); }
+    // Only a CLOSED bracket is a safe place to cut. A comma looks safe too,
+    // but cutting there keeps the half-described object that follows it — a
+    // run with an id and nothing else, which reads on the form as a real run
+    // that needs no work. Whole objects only.
+    else if(ch==='}'||ch===']'){ open.pop(); lastSafe=k; }
+  }
+  if(!open.length && !inStr) return t;            // it was whole after all
+
+  let head = lastSafe>=0 ? t.slice(0, lastSafe+1) : t;
+  // Tidy the cut edge: a trailing comma closes nothing, and a key whose value
+  // never arrived cannot be closed either.
+  head = head.replace(/,\s*$/,'')
+             .replace(/,?\s*"(?:[^"\\]|\\.)*"\s*:\s*$/,'')
+             .replace(/,\s*$/,'');
+  if(!head.trim()) return '';
+
+  // Re-walk the trimmed text: the tail that was cut may have opened brackets
+  // that are no longer there, so the closers are computed from what remains.
+  const need=[];
+  inStr=false; esc=false;
+  for(const ch of head){
+    if(esc){ esc=false; continue; }
+    if(ch==='\\'){ esc=true; continue; }
+    if(inStr){ if(ch==='"') inStr=false; continue; }
+    if(ch==='"'){ inStr=true; continue; }
+    if(ch==='{') need.push('}');
+    else if(ch==='[') need.push(']');
+    else if(ch==='}'||ch===']') need.pop();
+  }
+  if(inStr) head+='"';
+  return head+need.reverse().join('');
+}
 function _csParse(raw){
   const text=String(raw||'').trim();
   if(!text) throw new Error('The AI returned an empty response');
+  let obj=null, partial=false;
   const m=text.match(/\{[\s\S]*\}/);
-  if(!m){
-    if(_csLooksTruncated(text)) throw new Error(_CS_TRUNCATED);
-    throw new Error('No JSON in the AI response: '+text.slice(0,160));
+  if(m){ try{ obj=JSON.parse(m[0]); }catch(e){ obj=null; } }
+  if(!obj){
+    // Not parseable as it stands — repair it rather than throw the analysis
+    // away. An unfinished reply and one with a broken string both land here,
+    // and both usually hold a usable specification up to the damage.
+    const fixed=_csRepairJson(text);
+    if(fixed){ try{ obj=JSON.parse(fixed); partial=true; }catch(e){ obj=null; } }
   }
-  let obj;
-  try{ obj=JSON.parse(m[0]); }
-  catch(e){
+  if(!obj){
     if(_csLooksTruncated(text)) throw new Error(_CS_TRUNCATED);
-    throw new Error('Malformed JSON from the AI: '+m[0].slice(0,160));
+    throw new Error('Malformed JSON from the AI: '+String(m?m[0]:text).slice(0,160));
   }
-  if(!obj || typeof obj!=='object') throw new Error('AI response was not an object');
-  if(!Array.isArray(obj.steps) || !obj.steps.length)
-    throw new Error('AI response had no operation steps — the drawing may not be a cable/harness drawing');
+  if(typeof obj!=='object') throw new Error('AI response was not an object');
+  // A cutting form needs runs and ends; the operation steps moved to the
+  // Manufacturing Instructions screen and are no longer what makes a reply
+  // usable. Refuse only when there is nothing of a harness in it at all.
+  const hasHarness = (Array.isArray(obj.segments) && obj.segments.length)
+                  || (Array.isArray(obj.ends) && obj.ends.length)
+                  || (obj.cable && typeof obj.cable==='object')
+                  || (Array.isArray(obj.steps) && obj.steps.length);
+  if(!hasHarness)
+    throw new Error('AI response had no cable runs — the drawing may not be a cable/harness drawing');
+  if(partial) obj._partial=true;
   // Normalise the shapes the renderer indexes into, so a partial response
   // degrades to a thinner sheet rather than throwing halfway through drawing.
   obj.ends       = Array.isArray(obj.ends) ? obj.ends : [];
@@ -11495,7 +11572,13 @@ async function _csAnthropic(text, isImage, imgData, lang){
       method:'POST',
       headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
                'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-      body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:_CS_MAX_TOKENS,temperature:0,messages:msgs})
+      // The first pass is at 0: reading dimensions off a drawing is not a
+      // creative task, and a spec that comes back different every run cannot be
+      // checked against itself. A continuation runs slightly warm, because a
+      // reply that filled its window at 0 will often walk straight back into
+      // the same repetition when continued at 0.
+      body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:_CS_MAX_TOKENS,
+                           temperature:(msgs.length>1?0.2:0),messages:msgs})
     }, _CS_ANALYSIS_TIMEOUT);
     if(!resp.ok){let m=`Anthropic error ${resp.status}`;
       try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(_csProviderHint('Anthropic', m));}
@@ -11512,7 +11595,7 @@ async function _csAnthropic(text, isImage, imgData, lang){
   // most common way this screen failed.
   let out=await ask(messages);
   let reply=out.text, rounds=0;
-  while(out.stop==='max_tokens' && rounds<_CS_MAX_CONTINUATIONS){
+  while(out.stop==='max_tokens' && rounds<_CS_MAX_CONTINUATIONS && !_csLoopy(reply)){
     rounds++;
     if(_csOnProgress) _csOnProgress(rounds);
     // The partial answer becomes a prefilled assistant turn; the model writes
@@ -11521,8 +11604,29 @@ async function _csAnthropic(text, isImage, imgData, lang){
     out=await ask([...messages, {role:'assistant', content:partial}]);
     reply=_csStitch(partial, out.text);
   }
-  if(out.stop==='max_tokens') throw new Error(_CS_TRUNCATED);
-  return _csParse(reply);
+  // Out of continuations and still unfinished: rather than throwing away
+  // everything the model did write, the reply is repaired and whatever it
+  // contains becomes the sheet — marked partial, so nobody mistakes it for a
+  // complete reading of the drawing. _csParse only throws now when there is
+  // genuinely nothing usable in the answer.
+  const spec=_csParse(reply);
+  if(out.stop==='max_tokens') spec._partial=true;
+  logSystemAudit('cut_strip_reply',
+    {stop:out.stop, rounds, chars:reply.length, partial:!!spec._partial}, true);
+  return spec;
+}
+// A model writing a long structured answer at temperature 0 can fall into a
+// repetition loop — the same row, over and over, until the reply fills up.
+// Continuing such a reply just buys another window of the same thing, so the
+// loop is spotted and the answer is taken as it stands.
+const _CS_LOOP_TAIL=240, _CS_LOOP_HITS=3;
+function _csLoopy(text){
+  const t=String(text||'');
+  if(t.length<_CS_LOOP_TAIL*_CS_LOOP_HITS) return false;
+  const tail=t.slice(-_CS_LOOP_TAIL);
+  let n=0, i=0;
+  while((i=t.indexOf(tail,i))!==-1){ n++; i+=_CS_LOOP_TAIL; if(n>=_CS_LOOP_HITS) return true; }
+  return false;
 }
 // The API rejects a prefilled assistant turn that ends in whitespace, and a
 // continuation must not repeat the character it stopped on.
@@ -12710,6 +12814,11 @@ function renderCutStripSheet(){
         <div class="cs-form-t2 cs-ltr">${esc(spec.drawing_name||spec.title||'')}</div>
       </div>
     </div>
+
+    ${spec._partial ? `<div class="cs-pad"><div class="cs-box cs-stop">
+      <b>${esc(T('This sheet was built from an incomplete reply'))}</b>
+      <p>${esc(T('The analysis ran out of room before it finished, so part of the drawing is missing from this sheet. Everything shown was read from the drawing and is as good as any other sheet — but check that every run, end and connector you see on the drawing is here before using it, and fill in what is not.'))}</p>
+    </div></div>` : ''}
 
     <h2 class="cs-h2"><span class="cs-n">1</span>${esc(T('Planning'))}</h2>
     <div class="cs-pad"><table class="cs-tbl cs-form-tbl">

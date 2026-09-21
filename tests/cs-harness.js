@@ -56,6 +56,7 @@ vm.runInContext(pre+src, ctx);
 const M=ctx.module.exports;
 
 let pass=0, fail=0; const fails=[];
+const _csSegCount=sp=>((sp&&sp.segments)||[]).length;
 const ok=(n,c)=>{ if(c) pass++; else {fail++; fails.push(n);} };
 const no=(n,c)=>ok(n,!c);
 
@@ -290,14 +291,25 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
      && calls[1].messages[calls[1].messages.length-1].content.endsWith('Cut to len'));
   ok('continuation: ...and asks for the model\'s full output', calls[0].max_tokens>=64000);
 
-  // Still overflowing after the retries is a real failure, and says so.
+  // Still overflowing after the retries: the operator gets the sheet anyway,
+  // built from what did arrive and marked as partial. Two minutes of analysis
+  // is never thrown away again.
   calls=[];
-  ctx.__f.p2=()=>PART1;
+  ctx.__f.p2=()=>'gth"}],"segments":[{"id":"S1","ends":[]},{"id":"S2","cable_desc';
+  const partial=await M.aiAnalyzeCutStrip('drawing text', false, null, 'en');
+  ok('cut off: a sheet is still produced', !!partial && partial.drawing_number==='X1');
+  ok('cut off: ...marked partial so nobody mistakes it for the whole drawing', partial._partial===true);
+  ok('cut off: ...keeping the runs that arrived whole', _csSegCount(partial)>=1);
+  ok('cut off: ...after a bounded number of tries', calls.length<=5);
+
+  // Nothing usable at all is still a failure, and says so.
+  calls=[];
+  ctx.__f.p1=()=>'sorry, I cannot read this drawing';
+  ctx.__f.p2=()=>'';
   let threw='';
   try{ await M.aiAnalyzeCutStrip('drawing text', false, null, 'en'); }
   catch(e){ threw=e.message; }
-  ok('continuation: an answer that never finishes still fails', /cut off/.test(threw));
-  ok('continuation: ...after a bounded number of tries', calls.length<=5);
+  ok('cut off: an answer with nothing in it still fails', threw.length>0);
 
   console.log(`\n  ${pass} passed, ${fail} failed\n`);
   fails.forEach(f=>console.log('  ✗ '+f));

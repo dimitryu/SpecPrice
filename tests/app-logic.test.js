@@ -1694,6 +1694,50 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   ok('continuation: the number of continuations is bounded', ROUNDS>=1 && ROUNDS<=5);
 }
 
+// ──────────────────────────── 37. an answer that did not arrive whole
+{
+  const repair=G('_csRepairJson'), parse=G('_csParse'), loopy=G('_csLoopy');
+
+  // Cut in the middle of a string, inside two levels of nesting.
+  const cut='{"drawing_number":"X1","segments":[{"id":"S1","ends":[{"ref":"P1","strip":[{"code":"A","value_mm":50}]}]},{"id":"S2","cable_desc';
+  const fixed=repair(cut);
+  const obj=JSON.parse(fixed);
+  t('repair: what arrived whole is kept', obj.drawing_number, 'X1');
+  t('repair: ...including the complete run', obj.segments.length, 1);
+  t('repair: ...with its end intact', obj.segments[0].ends[0].strip[0].value_mm, 50);
+  t('repair: the half-written tail is dropped', /cable_desc/.test(fixed), false);
+
+  // Cut right after a comma, and cut inside an array.
+  ok('repair: a trailing comma closes nothing',
+     !!JSON.parse(repair('{"a":1,"b":[1,2,')));
+  t('repair: ...and keeps what was complete', JSON.parse(repair('{"a":1,"b":[1,2,')).b, [1,2]);
+  t('repair: an answer that was whole is returned unchanged',
+    JSON.parse(repair('{"a":1}')).a, 1);
+  t('repair: nothing to repair is nothing', repair('no json here'), '');
+
+  // The parser uses it: a cut-off reply becomes a sheet, marked partial.
+  const spec=parse('{"drawing_number":"X1","segments":[{"id":"S1","ends":[]}],"steps":[{"n":1,"title":"Cu');
+  t('repair: a cut-off reply still produces a specification', spec.drawing_number, 'X1');
+  t('repair: ...marked as partial', spec._partial, true);
+  const whole=parse('{"drawing_number":"X2","segments":[{"id":"S1","ends":[]}],"steps":[]}');
+  t('repair: a whole reply is not marked', whole._partial, undefined);
+
+  // A reply with nothing of a harness in it is still refused.
+  let threw='';
+  try{ parse('{"drawing_number":"X"}'); }catch(e){ threw=e.message; }
+  ok('repair: an answer with no harness in it is refused', /no cable runs/.test(threw));
+  // Operation steps alone are enough — they moved screens, they did not stop mattering.
+  ok('repair: steps alone still count as a harness',
+     !!parse('{"steps":[{"n":1,"title":"Cut"}]}'));
+
+  // A model stuck repeating itself is not worth continuing.
+  const row='{"n":1,"from_pin":"1","to_pin":"A","color":"RED","awg":"22","note":"crimp to contact 55A0111-22-0 per the assembly spec"},';
+  t('wires: one row is not a loop', loopy('{"conductors":['+row+']}'), false);
+  // A looping reply is cut off mid-row — it never reaches its closing bracket.
+  ok('loop: the same row over and over is', loopy('{"conductors":['+row.repeat(40)));
+  t('loop: a short answer is never called a loop', loopy('{"a":1}'), false);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }
