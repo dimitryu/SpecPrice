@@ -1735,6 +1735,31 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('hebrew: an ordinary JSON quote is untouched', heb('{"a":"b"}'), '{"a":"b"}');
   t('hebrew: ...and so is an English quote inside text', heb('{"a":"the \"A\" dim"}'), '{"a":"the \"A\" dim"}');
 
+  // 2c. The general case: a quote the model forgot to escape. A quote only ends
+  //     a string when what follows it could legally follow one — so a quoted
+  //     phrase, an inch mark and a Hebrew abbreviation all survive, while real
+  //     JSON structure is still read as structure.
+  const stray=G('_csEscapeStrayQuotes');
+  const phrase='{"open_items":[{"what":"the note says "do not tin" here","why":"x"}],"segments":[{"id":"S1","ends":[]}]}';
+  const rp=salvage(phrase);
+  ok('quotes: a quoted phrase inside a note is rescued', !!rp);
+  t('quotes: ...with the run intact', rp.obj.segments.length, 1);
+  ok('quotes: ...and the phrase still reads', /do not tin/.test(rp.obj.open_items[0].what));
+
+  const inch=salvage('{"a":"strip 0.125" from the end","segments":[{"id":"S1","ends":[]}]}');
+  ok('quotes: an inch mark is content, not a delimiter', !!inch && /0\.125/.test(inch.obj.a));
+
+  const said=salvage('{"a":"he said "hi", then left","segments":[{"id":"S1","ends":[]}]}');
+  ok('quotes: a quote before a comma is judged by what follows the comma', !!said);
+  ok('quotes: ...and the sentence survives whole', said && /then left/.test(said.obj.a));
+
+  // Real structure must still read as structure.
+  const arr=salvage('{"inspection":["a","b"],"segments":[{"id":"S1","ends":[]}]}');
+  t('quotes: a list of strings is still a list of strings', arr.obj.inspection, ['a','b']);
+  t('quotes: ...and nothing is called partial', arr.partial, false);
+  t('quotes: a clean object is left alone', stray('{"a":"x","b":1}'), '{"a":"x","b":1}');
+  t('quotes: an already-escaped quote is not doubled', stray('{"a":"say \\"hi\\""}'), '{"a":"say \\"hi\\""}');
+
   // 3. Broken beyond repair in the middle — an unescaped quote in a note. The
   //    head is kept, the damage and everything after it is cut.
   const bad='{"drawing_number":"X1","segments":[{"id":"S1","ends":[]}],"open_items":[{"what":"the "A" dimension","why":"x"}]}';
@@ -1764,6 +1789,12 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   let threw='';
   try{ parse('{"drawing_number":"X"}'); }catch(e){ threw=e.message; }
   ok('salvage: an answer with no harness in it is refused', /no cable runs/.test(threw));
+  // Damaged near the start reads differently from "this is not a cable drawing",
+  // and the two must not be confused — one is a retry, the other is a wrong file.
+  threw='';
+  try{ parse('{"drawing_number":"X1","counts":{"runs":2},"segments":[{"id":"S1","en'); }
+  catch(e){ threw=e.message; }
+  ok('salvage: a reply damaged at the start says so', /damaged near the start/.test(threw));
   ok('salvage: steps alone still count as a harness',
      !!parse('{"steps":[{"n":1,"title":"Cut"}]}'));
   // And an unreadable one says where it broke rather than shrugging.

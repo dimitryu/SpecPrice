@@ -763,7 +763,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.47.0';
+const APP_VER   = '1.48.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -11455,6 +11455,9 @@ function _csLooksTruncated(text){
 //      Hebrew note, most often) → cut back to the last point that still parses
 // Everything before the damage is exactly what the model meant to write, so a
 // partial cut-and-strip form an engineer can finish beats no form at all.
+// The last reply that could not be read, kept so the operator can hand it over
+// instead of describing it. A failure nobody can see is a failure nobody can fix.
+let _csLastRawReply='';
 function _csTryParse(t){
   try{ const o=JSON.parse(t); return (o && typeof o==='object') ? o : null; }
   catch(e){ return null; }
@@ -11490,6 +11493,42 @@ function _csSanitizeJson(t){
     out+=ch;
   }
   return out.replace(/,(\s*[}\]])/g,'$1');
+}
+// The general case of the same problem: a quote inside a value that the model
+// did not escape — a quoted phrase in a note, a Hebrew abbreviation the
+// gershayim rule did not catch, an inch mark. A quote only ENDS a string when
+// the next thing after it is one of the characters that can legally follow a
+// string: a comma, a colon, or a closing bracket. Any other quote is content,
+// and is escaped rather than obeyed.
+//
+// This is the aggressive repair, so it runs only after the gentle ones have
+// failed, and its result still has to parse before it is used.
+function _csEscapeStrayQuotes(t){
+  const src=String(t||'');
+  let out='', inStr=false, esc=false;
+  for(let i=0;i<src.length;i++){
+    const ch=src[i];
+    if(esc){ out+=ch; esc=false; continue; }
+    if(ch==='\\'){ out+=ch; esc=true; continue; }
+    if(ch!=='"'){ out+=ch; continue; }
+    if(!inStr){ inStr=true; out+=ch; continue; }
+    let k=i+1;
+    while(k<src.length && /\s/.test(src[k])) k++;
+    const next=src[k];
+    let closes = k>=src.length || next===':' || next==='}' || next===']';
+    if(!closes && next===','){
+      // A comma only ends a string when what follows it could START the next
+      // value or key. `"he said "hi", then left"` fails that test — "then" is
+      // not a JSON token — so the quote before it is content, which is exactly
+      // how a person reads it.
+      let j=k+1;
+      while(j<src.length && /\s/.test(src[j])) j++;
+      closes = /["{[\-0-9]/.test(src[j]||'') || /^(true|false|null)\b/.test(src.slice(j,j+5));
+    }
+    if(closes){ inStr=false; out+=ch; }
+    else out+='\\"';                      // content, not a delimiter
+  }
+  return out;
 }
 // Closes whatever is still open, after tidying the cut edge: a trailing comma
 // closes nothing, and a key whose value never arrived cannot be closed either.
@@ -11540,11 +11579,16 @@ function _csSalvageJson(raw){
   obj=_csTryParse(_csCloseJson(clean));
   if(obj) return {obj, partial:true};
 
+  const escaped=_csEscapeStrayQuotes(clean);
+  obj=_csTryParse(escaped) || _csTryParse(_csCloseJson(escaped));
+  if(obj) return {obj, partial:escaped!==clean};
+
   // Bracket positions outside strings, so a "}" inside a note is never a cut.
+  const base=escaped;
   const stops=[];
   let inStr=false, esc=false;
-  for(let i=0;i<clean.length;i++){
-    const ch=clean[i];
+  for(let i=0;i<base.length;i++){
+    const ch=base[i];
     if(esc){ esc=false; continue; }
     if(ch==='\\'){ esc=true; continue; }
     if(inStr){ if(ch==='"') inStr=false; continue; }
@@ -11552,7 +11596,7 @@ function _csSalvageJson(raw){
     if(ch==='}'||ch===']') stops.push(i);
   }
   for(let k=stops.length-1, n=0; k>=0 && n<_CS_SALVAGE_TRIES; k--, n++){
-    obj=_csTryParse(_csCloseJson(clean.slice(0, stops[k]+1)));
+    obj=_csTryParse(_csCloseJson(base.slice(0, stops[k]+1)));
     if(obj) return {obj, partial:true};
   }
   return null;
@@ -11567,6 +11611,7 @@ function _csParse(raw){
     // Nothing in it could be read at all. Say which failure it was and show
     // where it broke, so the next report is diagnosable instead of a shrug.
     console.error('[CutStrip] unreadable reply:', text);
+    _csLastRawReply=text;
     if(_csLooksTruncated(text)) throw new Error(_CS_TRUNCATED);
     let where='';
     try{ JSON.parse(text.slice(text.indexOf('{'))); }
@@ -11586,8 +11631,17 @@ function _csParse(raw){
                   || (Array.isArray(obj.ends) && obj.ends.length)
                   || (obj.cable && typeof obj.cable==='object')
                   || (Array.isArray(obj.steps) && obj.steps.length);
-  if(!hasHarness)
-    throw new Error('AI response had no cable runs — the drawing may not be a cable/harness drawing');
+  if(!hasHarness){
+    // The reply was readable but has no harness in it. Say which of the two
+    // happened — the model read the drawing as something else, or the answer
+    // was damaged so early that only its header survived — and keep the reply
+    // so it can be handed over instead of described.
+    console.error('[CutStrip] no runs in reply:', text);
+    _csLastRawReply=text;
+    throw new Error(partial
+      ? `The reply was damaged near the start — only its header could be read (${Object.keys(obj).length} fields, no cable runs). Try again; if it repeats, use the Copy button and send the reply on.`
+      : 'The AI read this drawing but found no cable runs in it — it may not be a cable/harness drawing');
+  }
   if(partial) obj._partial=true;
   // Normalise the shapes the renderer indexes into, so a partial response
   // degrades to a thinner sheet rather than throwing halfway through drawing.
@@ -12539,7 +12593,14 @@ async function handleCSFile(file){
       <p style="font-size:13px;margin-top:8px">${esc(e.message)}</p>
       <p style="font-size:12px;color:var(--muted);margin-top:10px">
         Nothing was saved. If the drawing is a scan, a sharper image usually fixes this.</p></div>`;
-    if(foot) foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+    if(foot) foot.innerHTML=(_csLastRawReply
+        ? `<button class="btn btn-ghost" id="btn-cs-copy-raw">\u{1F4CB} Copy the AI reply</button>` : '')
+      + `<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+    document.getElementById('btn-cs-copy-raw')?.addEventListener('click',async ev=>{
+      try{ await navigator.clipboard.writeText(_csLastRawReply);
+           ev.currentTarget.textContent='\u2713 Copied'; }
+      catch{ toast('Could not copy — the reply is in the browser console','error'); }
+    });
   }
 }
 
