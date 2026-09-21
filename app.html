@@ -763,7 +763,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.44.0';
+const APP_VER   = '1.45.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -10860,7 +10860,12 @@ const _CS_ANALYSIS_TIMEOUT = 180000;
 // the tokens of the same English text. The two together overran the limit and
 // the reply came back cut off mid-string, which surfaced as "malformed JSON"
 // when the real cause was that the model was still writing.
-const _CS_MAX_TOKENS = 32000;
+// Haiku 4.5 will write up to 64k tokens in one reply. A harness drawing with a
+// full wiring table gets close, so there is no reason to ask for less — and
+// when even this is not enough, the reply is continued rather than thrown away
+// (see _csAnthropic).
+const _CS_MAX_TOKENS = 64000;
+const _CS_MAX_CONTINUATIONS = 3;
 // Vision needs to read dimension callouts, not fine-print BOM rows, so the
 // analysis image can be smaller than the one BOM extraction uses. Less to
 // upload is less time spent before the model even starts.
@@ -11053,6 +11058,12 @@ Enum values ("coax", "multi_conductor", "crimp", "cable_only" …) also stay Eng
   return `You are a cable-harness manufacturing engineer. From this drawing, produce a CUT AND STRIP specification that a bench operator can work from.
 ${langRule}
 Return ONLY a JSON object. No markdown fence, no commentary.
+
+OUTPUT SIZE — a reply that runs out of room is a wasted analysis. Return MINIFIED JSON: no indentation,
+no line breaks between fields, no spaces after colons or commas. Keep every prose string under 200
+characters — a step body is an instruction, not an essay, and a long "basis" costs space the dimensions
+need. Never restate a number in prose that already has its own field. Omit a key entirely rather than
+writing an empty string or an empty array for something the drawing does not have.
 
 {
   "drawing_number": "the DRAWING NO from the title block — the part number of THIS harness",
@@ -11460,6 +11471,10 @@ function _csParse(raw){
   return obj;
 }
 
+// Set by the import screen so a long analysis can say what it is doing. A
+// continuation takes as long as the first request, and a progress bar that
+// sits still for four minutes reads as a hang.
+let _csOnProgress=null;
 async function _csAnthropic(text, isImage, imgData, lang){
   const prompt=_csPrompt(lang);
   // Each sheet is announced before its image. Without the labels the model sees
@@ -11472,23 +11487,47 @@ async function _csAnthropic(text, isImage, imgData, lang){
   const messages = isImage
     ? [{role:'user',content:[...imgBlocks, {type:'text',text:prompt}]}]
     : [{role:'user', content: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,24000)}];
-  const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
-    method:'POST',
-    headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
-             'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-    // temperature 0 for the same reason as the labor estimate: reading
-    // dimensions off a drawing is not a creative task, and a spec that comes
-    // back different every time it is run cannot be checked against itself.
-    body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:_CS_MAX_TOKENS,temperature:0,messages})
-  }, _CS_ANALYSIS_TIMEOUT);
-  if(!resp.ok){let m=`Anthropic error ${resp.status}`;
-    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(_csProviderHint('Anthropic', m));}
-  const data=await resp.json();
-  // Truncation is reported by the provider, so say so rather than letting the
-  // JSON parser report a syntax error for a reply that was simply unfinished.
-  if(data.stop_reason==='max_tokens') throw new Error(_CS_TRUNCATED);
-  return _csParse(data.content[0].text);
+  // temperature 0 for the same reason as the labor estimate: reading dimensions
+  // off a drawing is not a creative task, and a spec that comes back different
+  // every time it is run cannot be checked against itself.
+  const ask=async msgs=>{
+    const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
+               'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
+      body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:_CS_MAX_TOKENS,temperature:0,messages:msgs})
+    }, _CS_ANALYSIS_TIMEOUT);
+    if(!resp.ok){let m=`Anthropic error ${resp.status}`;
+      try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(_csProviderHint('Anthropic', m));}
+    const d=await resp.json();
+    return {text:(d.content&&d.content[0]&&d.content[0].text)||'', stop:d.stop_reason};
+  };
+
+  // A drawing with a full wiring table can outrun even a 64k reply. Rather than
+  // throwing the work away and telling the operator to "try again" — which
+  // costs another full analysis and usually ends the same way — the unfinished
+  // answer is handed back to the model to carry on from, and the pieces are
+  // joined. This is the ordinary way to get one long answer out of a model with
+  // a per-reply ceiling, and it is why the old truncation error had become the
+  // most common way this screen failed.
+  let out=await ask(messages);
+  let reply=out.text, rounds=0;
+  while(out.stop==='max_tokens' && rounds<_CS_MAX_CONTINUATIONS){
+    rounds++;
+    if(_csOnProgress) _csOnProgress(rounds);
+    // The partial answer becomes a prefilled assistant turn; the model writes
+    // the rest of it. Trailing whitespace in a prefill is rejected by the API.
+    const partial=_csTrimPrefill(reply);
+    out=await ask([...messages, {role:'assistant', content:partial}]);
+    reply=_csStitch(partial, out.text);
+  }
+  if(out.stop==='max_tokens') throw new Error(_CS_TRUNCATED);
+  return _csParse(reply);
 }
+// The API rejects a prefilled assistant turn that ends in whitespace, and a
+// continuation must not repeat the character it stopped on.
+function _csTrimPrefill(t){ return String(t||'').replace(/\s+$/,''); }
+function _csStitch(a, b){ return _csTrimPrefill(a)+String(b||''); }
 // A rejected KEY is not a transient failure — it will be rejected identically on
 // every subsequent drawing. Retrying it each time just spends a round-trip
 // before the fallback, on a screen where the total wait already matters. So a
@@ -12262,7 +12301,10 @@ async function handleCSFile(file){
     // Russian are translations of it, produced on demand by the language
     // buttons, exactly like each other.
     setM('Analysing cut & strip requirements… a dense drawing can take up to 2 minutes — leave this open',55);
-    const spec=await aiAnalyzeCutStrip(text, isImage, imgData, _CS_SOURCE_LANG);
+    _csOnProgress=n=>setM(`The drawing is bigger than one reply — continuing (${n})…`, 55+n*3);
+    let spec;
+    try{ spec=await aiAnalyzeCutStrip(text, isImage, imgData, _CS_SOURCE_LANG); }
+    finally{ _csOnProgress=null; }
     // The drawing is only kept once the analysis has said where the customer's
     // branding is. No boxes, no stored copy — the sheet says so rather than
     // quietly publishing someone else's logo to the shop floor.

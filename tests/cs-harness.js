@@ -264,6 +264,41 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   ok('mfg: the saved document is listed',
      /Power harness 3C/.test(g.document.getElementById('content').innerHTML));
 
+  // ── an analysis too long for one reply ───────────────────────────────
+  // The real failure the operator saw: the model filled its reply and the whole
+  // analysis was thrown away. It must now carry on instead.
+  const PART1='{"drawing_number":"X1","steps":[{"n":1,"title":"Cut","body":"Cut to len';
+  const PART2='gth"}],"segments":[{"id":"S1","ends":[]}],"connectors":[]}';
+  let calls=[];
+  vm.runInContext(`anthKey='sk-test'; _csDeadProviders={};
+    _fetchWithRetry=async(u,o)=>{ const body=JSON.parse(o.body); __f.note(body);
+      const n=__f.count();
+      return {ok:true, json:async()=>n===1
+        ? {content:[{type:'text',text:__f.p1()}], stop_reason:'max_tokens'}
+        : {content:[{type:'text',text:__f.p2()}], stop_reason:'end_turn'}};
+    };`, ctx);
+  ctx.__f.note=b=>calls.push(b);
+  ctx.__f.count=()=>calls.length;
+  ctx.__f.p1=()=>PART1;
+  ctx.__f.p2=()=>PART2;
+  const spec=await M.aiAnalyzeCutStrip('drawing text', false, null, 'en');
+  ok('continuation: a cut-off reply is carried on, not thrown away', !!spec);
+  ok('continuation: ...and the stitched answer is the real spec', spec.drawing_number==='X1');
+  ok('continuation: it took exactly two requests', calls.length===2);
+  ok('continuation: the second one prefills the first answer',
+     calls[1].messages[calls[1].messages.length-1].role==='assistant'
+     && calls[1].messages[calls[1].messages.length-1].content.endsWith('Cut to len'));
+  ok('continuation: ...and asks for the model\'s full output', calls[0].max_tokens>=64000);
+
+  // Still overflowing after the retries is a real failure, and says so.
+  calls=[];
+  ctx.__f.p2=()=>PART1;
+  let threw='';
+  try{ await M.aiAnalyzeCutStrip('drawing text', false, null, 'en'); }
+  catch(e){ threw=e.message; }
+  ok('continuation: an answer that never finishes still fails', /cut off/.test(threw));
+  ok('continuation: ...after a bounded number of tries', calls.length<=5);
+
   console.log(`\n  ${pass} passed, ${fail} failed\n`);
   fails.forEach(f=>console.log('  ✗ '+f));
   if(fail) process.exit(1);

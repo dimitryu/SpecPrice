@@ -1663,6 +1663,37 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('wires: no BOM length, no instruction', build(s4.segments[0], s4), null);
 }
 
+// ──────────────────────────── 36. an answer too long for one reply
+{
+  const stitch=G('_csStitch'), trim=G('_csTrimPrefill'), parse=G('_csParse'),
+        MAXTOK=G('_CS_MAX_TOKENS'), ROUNDS=G('_CS_MAX_CONTINUATIONS');
+
+  // The API rejects a prefilled assistant turn ending in whitespace, so the
+  // partial answer is trimmed before it is handed back.
+  t('continuation: a prefill never ends in whitespace', trim('{"a":1 \n  '), '{"a":1');
+  t('continuation: ...and is otherwise untouched', trim('{"a":1'), '{"a":1');
+  t('continuation: nothing is nothing', trim(null), '');
+
+  // The two halves join into exactly the text the model would have written in
+  // one go — no separator, no repeated character.
+  t('continuation: the halves join seamlessly',
+    stitch('{"steps":[{"n":1,"title":"Cu', 't"}]}'), '{"steps":[{"n":1,"title":"Cut"}]}');
+  t('continuation: whitespace at the seam is not doubled',
+    stitch('{"a":1,\n', '"b":2}'), '{"a":1,"b":2}');
+
+  // And the joined text parses as the whole answer.
+  const whole=stitch('{"steps":[{"n":1,"title":"Cut","body":"Cut to leng',
+                     'th"}],"segments":[],"connectors":[]}');
+  const obj=parse(whole);
+  t('continuation: the stitched answer parses', obj.steps.length, 1);
+  t('continuation: ...with the split string intact', obj.steps[0].body, 'Cut to length');
+
+  // The ceiling is the model's own, and the retry count is bounded — an answer
+  // that keeps overflowing must fail, not loop.
+  ok('continuation: the reply ceiling is the model\'s full output', MAXTOK>=64000);
+  ok('continuation: the number of continuations is bounded', ROUNDS>=1 && ROUNDS<=5);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }
