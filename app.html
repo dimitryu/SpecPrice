@@ -763,7 +763,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.49.0';
+const APP_VER   = '1.50.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -10234,6 +10234,7 @@ const _CS_LANG_NAMES={en:'English', he:'עברית', ru:'Русский'};
 // readable document, not a skeleton.
 const _CS_LABELS={
   he:{
+    "The dimension is the finished harness, connectors included — so nothing is added for the ends, each connector body comes OFF, and the piece is never cut longer than the drawn length. The strip is taken OUT of this length, not added to it.":"המידה היא הצמה המוגמרת כולל המחברים — לכן לא מתווסף דבר עבור הקצוות, אורך גוף כל מחבר יורד, והחתיכה לעולם לא נחתכת ארוכה מהמידה שבסרטוט. החשיפה נלקחת מתוך האורך הזה, לא מתווספת אליו.",
     "Not on the drawing — proposed from the wire gauge. Confirm against the contact datasheet.":"לא מופיע בסרטוט — הוצע לפי עובי החוט. לאמת מול דף הנתונים של המגע.",
     "This sheet was built from an incomplete reply":"הדף הזה נבנה מתשובה חלקית",
     "The analysis ran out of room before it finished, so part of the drawing is missing from this sheet. Everything shown was read from the drawing and is as good as any other sheet — but check that every run, end and connector you see on the drawing is here before using it, and fill in what is not.":"לניתוח נגמר המקום לפני שסיים, ולכן חלק מהסרטוט חסר בדף הזה. כל מה שמוצג נקרא מהסרטוט ותקף כמו בכל דף אחר — אבל לפני שימוש יש לוודא שכל מקטע, קצה ומחבר שרואים בסרטוט מופיעים כאן, ולהשלים את מה שחסר.",
@@ -10245,7 +10246,6 @@ const _CS_LABELS={
     "each":"כל אחד",
     "total":"סה\"כ",
     "wires":"גידים",
-    "The dimension is the finished harness, connectors included — so nothing is added for the ends, each connector body comes OFF, and the piece is never cut longer than the drawn length.":"המידה היא הצמה המוגמרת כולל המחברים — לכן לא מתווסף דבר עבור הקצוות, אורך גוף כל מחבר יורד, והחתיכה לעולם לא נחתכת ארוכה מהמידה שבסרטוט.",
     "connector(s) — nothing was subtracted for them, so the piece is cut to the full drawn length.":"מחברים — לא הופחת עבורם דבר, ולכן החתיכה נחתכת לאורך המלא שבסרטוט.",
     "Allowances were held back to keep the piece within the drawn length.":"התוספות נעצרו כדי שהחתיכה לא תעבור את המידה שבסרטוט.",
     "Datasheet":"דף נתונים",
@@ -10952,12 +10952,14 @@ const _CS_ANALYSIS_TIMEOUT = 300000;
 // the tokens of the same English text. The two together overran the limit and
 // the reply came back cut off mid-string, which surfaced as "malformed JSON"
 // when the real cause was that the model was still writing.
-// Haiku 4.5 will write up to 64k tokens in one reply. A harness drawing with a
-// full wiring table gets close, so there is no reason to ask for less — and
-// when even this is not enough, the reply is continued rather than thrown away
-// (see _csAnthropic).
-const _CS_MAX_TOKENS = 64000;
-const _CS_MAX_CONTINUATIONS = 3;
+// Asked in bites rather than in one 64k mouthful. A model that falls into a
+// repetition loop fills whatever window it is given, so a big window means a
+// long wait and a big waste before anyone notices; a small one is caught in
+// seconds, the loop check runs between bites, and the continuation carries on
+// from where the last one stopped. Four bites reach the same ceiling as one
+// 64k reply, and a real specification needs one or two.
+const _CS_MAX_TOKENS = 16000;
+const _CS_MAX_CONTINUATIONS = 4;
 // Vision needs to read dimension callouts, not fine-print BOM rows, so the
 // analysis image can be smaller than the one BOM extraction uses. Less to
 // upload is less time spent before the model even starts.
@@ -11157,11 +11159,21 @@ character ENDS the JSON string it sits in and destroys the rest of the answer. N
 value. Write the abbreviation with the Hebrew gershayim ״ (U+05F4) — מק״ט, מ״מ — or spell the word
 out. The same goes for a quoted phrase: use ״ ״ or drop the quotes entirely.
 
-OUTPUT SIZE — a reply that runs out of room is a wasted analysis. Return MINIFIED JSON: no indentation,
-no line breaks between fields, no spaces after colons or commas. Keep every prose string under 200
-characters — a step body is an instruction, not an essay, and a long "basis" costs space the dimensions
-need. Never restate a number in prose that already has its own field. Omit a key entirely rather than
-writing an empty string or an empty array for something the drawing does not have.
+OUTPUT SIZE — a reply that runs out of room is a wasted analysis, and this is the most common way this
+job fails. Return MINIFIED JSON: no indentation, no line breaks between fields, no spaces after colons
+or commas. Omit a key entirely rather than writing an empty string or an empty array. Never restate in
+prose a number that already has its own field.
+
+Hard limits, and they are limits, not targets:
+  - every prose string: 120 characters
+  - "steps": at most 8, each body one sentence
+  - "inspection": at most 6 lines
+  - "tools": at most 6
+  - "engineering_notes": only notes that change what the operator DOES; at most 6
+  - "open_items" and "discrepancies": at most 5 each
+  - "materials": one line per BOM row, description copied short — never re-described
+The dimensions, the ends and the wiring table are what this sheet is for. Everything else is
+supporting text, and supporting text that crowds out a dimension has cost more than it is worth.
 
 {
   "drawing_number": "the DRAWING NO from the title block — the part number of THIS harness",
@@ -13152,7 +13164,7 @@ function renderCutStripSheet(){
           ${d.stated ? '' : `<span class="cs-tag cs-tbc">${esc(T('assumed — the drawing does not say'))}</span>`}
         </div>
         ${d.basis===_CS_BASIS_OVER ? `<p class="cs-note">${
-          esc(T('The dimension is the finished harness, connectors included — so nothing is added for the ends, each connector body comes OFF, and the piece is never cut longer than the drawn length.'))}${
+          esc(T('The dimension is the finished harness, connectors included — so nothing is added for the ends, each connector body comes OFF, and the piece is never cut longer than the drawn length. The strip is taken OUT of this length, not added to it.'))}${
           cut.missingConn?` <b style="color:#B91C1C">${esc(T('No body length is on file for'))} ${cut.missingConn} ${
           esc(T('connector(s) — nothing was subtracted for them, so the piece is cut to the full drawn length.'))}</b>`:''}${
           cut.capped?` <b>${esc(T('Allowances were held back to keep the piece within the drawn length.'))}</b>`:''}</p>` : ''}

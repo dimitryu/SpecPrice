@@ -289,7 +289,10 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   ok('continuation: the second one prefills the first answer',
      calls[1].messages[calls[1].messages.length-1].role==='assistant'
      && calls[1].messages[calls[1].messages.length-1].content.endsWith('Cut to len'));
-  ok('continuation: ...and asks for the model\'s full output', calls[0].max_tokens>=64000);
+  ok('continuation: ...asking in bites, not one long mouthful', calls[0].max_tokens<=20000);
+  ok('continuation: the first pass is deterministic', calls[0].temperature===0);
+  ok('continuation: ...and the continuation runs slightly warm, to break a loop',
+     calls[1].temperature>0);
 
   // Still overflowing after the retries: the operator gets the sheet anyway,
   // built from what did arrive and marked as partial. Two minutes of analysis

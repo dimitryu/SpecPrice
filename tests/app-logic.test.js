@@ -1690,8 +1690,12 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
 
   // The ceiling is the model's own, and the retry count is bounded — an answer
   // that keeps overflowing must fail, not loop.
-  ok('continuation: the reply ceiling is the model\'s full output', MAXTOK>=64000);
-  ok('continuation: the number of continuations is bounded', ROUNDS>=1 && ROUNDS<=5);
+  // The answer is asked for in bites, so a model that runs away is caught in
+  // seconds rather than after a full window — and the bites together still
+  // reach as far as one long reply would.
+  ok('continuation: each bite is small enough to catch a runaway early', MAXTOK<=20000);
+  ok('continuation: the bites together reach a full-length answer', MAXTOK*(ROUNDS+1)>=64000);
+  ok('continuation: the number of continuations is bounded', ROUNDS>=1 && ROUNDS<=6);
 }
 
 // ──────────────────────────── 37. an answer that did not arrive whole
