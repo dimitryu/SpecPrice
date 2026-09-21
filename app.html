@@ -763,7 +763,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.46.0';
+const APP_VER   = '1.47.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -11063,6 +11063,12 @@ Enum values ("coax", "multi_conductor", "crimp", "cable_only" …) also stay Eng
 ${langRule}
 Return ONLY a JSON object. No markdown fence, no commentary.
 
+HEBREW AND THE DOUBLE QUOTE — this is the single most common way a reply is thrown away.
+Hebrew abbreviations are written with a double quote inside the word: מק"ט, מ"מ, ס"מ, ח"כ. That
+character ENDS the JSON string it sits in and destroys the rest of the answer. Never type " inside a
+value. Write the abbreviation with the Hebrew gershayim ״ (U+05F4) — מק״ט, מ״מ — or spell the word
+out. The same goes for a quoted phrase: use ״ ״ or drop the quotes entirely.
+
 OUTPUT SIZE — a reply that runs out of room is a wasted analysis. Return MINIFIED JSON: no indentation,
 no line breaks between fields, no spaces after colons or commas. Keep every prose string under 200
 characters — a step body is an instruction, not an essay, and a long "basis" costs space the dimensions
@@ -11441,52 +11447,60 @@ function _csLooksTruncated(text){
 // operator waited two minutes, watched the upload, and got "nothing was saved,
 // try again" — which costs another two minutes and usually ends the same way.
 //
-// A reply that stopped early is not worthless. Everything before the cut is
-// exactly what the model meant to write; only the tail is missing. So the JSON
-// is trimmed back to the last value that finished, the open brackets are
-// closed, and the sheet is built from that — marked plainly as partial, with
-// the sections that did not arrive named on the sheet rather than silently
-// absent. A partial cut-and-strip form an engineer can finish beats no form.
-function _csRepairJson(raw){
-  let t=String(raw||'');
-  const start=t.indexOf('{');
-  if(start<0) return '';
-  t=t.slice(start);
-
-  // One pass: track strings and nesting, and remember the last position where a
-  // complete value had just been written — a closing bracket or the comma that
-  // follows one. Anything after that point is the half-written tail.
-  const open=[];
-  let inStr=false, esc=false, lastSafe=-1;
-  for(let k=0;k<t.length;k++){
-    const ch=t[k];
-    if(esc){ esc=false; continue; }
-    if(ch==='\\'){ esc=true; continue; }
-    if(inStr){ if(ch==='"') inStr=false; continue; }
-    if(ch==='"'){ inStr=true; continue; }
-    if(ch==='{'){ open.push('}'); }
-    else if(ch==='['){ open.push(']'); }
-    // Only a CLOSED bracket is a safe place to cut. A comma looks safe too,
-    // but cutting there keeps the half-described object that follows it — a
-    // run with an id and nothing else, which reads on the form as a real run
-    // that needs no work. Whole objects only.
-    else if(ch==='}'||ch===']'){ open.pop(); lastSafe=k; }
+// Three things go wrong with model-written JSON, and each has its own repair:
+//   1. it stops mid-sentence  → close what is open and keep the head
+//   2. a raw newline or tab sits inside a string, or a comma dangles before a
+//      closing bracket → both are one-character fixes
+//   3. something inside is broken beyond repair (an unescaped quote in a
+//      Hebrew note, most often) → cut back to the last point that still parses
+// Everything before the damage is exactly what the model meant to write, so a
+// partial cut-and-strip form an engineer can finish beats no form at all.
+function _csTryParse(t){
+  try{ const o=JSON.parse(t); return (o && typeof o==='object') ? o : null; }
+  catch(e){ return null; }
+}
+// Raw control characters inside a string, and commas before a closing bracket,
+// are the two things a model gets wrong in JSON that a reader would not even
+// notice. Neither changes the meaning, so both are simply corrected.
+// Hebrew writes abbreviations with a double quote INSIDE the word — מק"ט,
+// מ"מ, ס"מ. A model writing Hebrew into JSON reaches for that character
+// naturally and breaks the string it is in, which is why Hebrew analyses
+// failed where the same drawing in English did not. A quote with a Hebrew
+// letter on both sides is a gershayim, never a delimiter, so it is replaced
+// with the real one (U+05F4) — the text reads identically and the JSON parses.
+const _CS_GERSHAYIM=/([\u0590-\u05FF])"([\u0590-\u05FF])/g;
+function _csFixHebrewQuotes(t){
+  let out=String(t||''), prev;
+  // twice: "מק"ט" style words can chain, and one pass consumes the neighbours
+  do{ prev=out; out=out.replace(_CS_GERSHAYIM,'$1\u05F4$2'); }while(out!==prev);
+  return out;
+}
+function _csSanitizeJson(t){
+  let out='', inStr=false, esc=false;
+  for(const ch of _csFixHebrewQuotes(t)){
+    if(esc){ out+=ch; esc=false; continue; }
+    if(ch==='\\'){ out+=ch; esc=true; continue; }
+    if(ch==='"'){ inStr=!inStr; out+=ch; continue; }
+    if(inStr){
+      if(ch==='\n'){ out+='\\n'; continue; }
+      if(ch==='\r'){ out+='\\r'; continue; }
+      if(ch==='\t'){ out+='\\t'; continue; }
+      if(ch.charCodeAt(0)<0x20){ out+=' '; continue; }
+    }
+    out+=ch;
   }
-  if(!open.length && !inStr) return t;            // it was whole after all
-
-  let head = lastSafe>=0 ? t.slice(0, lastSafe+1) : t;
-  // Tidy the cut edge: a trailing comma closes nothing, and a key whose value
-  // never arrived cannot be closed either.
-  head = head.replace(/,\s*$/,'')
-             .replace(/,?\s*"(?:[^"\\]|\\.)*"\s*:\s*$/,'')
-             .replace(/,\s*$/,'');
-  if(!head.trim()) return '';
-
-  // Re-walk the trimmed text: the tail that was cut may have opened brackets
-  // that are no longer there, so the closers are computed from what remains.
+  return out.replace(/,(\s*[}\]])/g,'$1');
+}
+// Closes whatever is still open, after tidying the cut edge: a trailing comma
+// closes nothing, and a key whose value never arrived cannot be closed either.
+function _csCloseJson(head){
+  let t=String(head||'')
+    .replace(/,\s*$/,'')
+    .replace(/,?\s*"(?:[^"\\]|\\.)*"\s*:\s*$/,'')
+    .replace(/,\s*$/,'');
   const need=[];
-  inStr=false; esc=false;
-  for(const ch of head){
+  let inStr=false, esc=false;
+  for(const ch of t){
     if(esc){ esc=false; continue; }
     if(ch==='\\'){ esc=true; continue; }
     if(inStr){ if(ch==='"') inStr=false; continue; }
@@ -11495,26 +11509,75 @@ function _csRepairJson(raw){
     else if(ch==='[') need.push(']');
     else if(ch==='}'||ch===']') need.pop();
   }
-  if(inStr) head+='"';
-  return head+need.reverse().join('');
+  if(inStr) t+='"';
+  return t+need.reverse().join('');
+}
+function _csRepairJson(raw){
+  const t=String(raw||'');
+  const start=t.indexOf('{');
+  return start<0 ? '' : _csCloseJson(t.slice(start));
+}
+// Everything above, in the order that loses the least: parse it, correct the
+// harmless mistakes, and only then start cutting the tail off — closing bracket
+// by closing bracket, newest first, until what is left parses.
+const _CS_SALVAGE_TRIES=300;
+function _csSalvageJson(raw){
+  const whole=String(raw||'');
+  const start=whole.indexOf('{');
+  if(start<0) return null;
+  const t=whole.slice(start);
+
+  let obj=_csTryParse(t);
+  if(obj) return {obj, partial:false};
+
+  obj=_csTryParse(_csFixHebrewQuotes(t));
+  if(obj) return {obj, partial:false};
+
+  const clean=_csSanitizeJson(t);
+  obj=_csTryParse(clean);
+  if(obj) return {obj, partial:false};
+
+  obj=_csTryParse(_csCloseJson(clean));
+  if(obj) return {obj, partial:true};
+
+  // Bracket positions outside strings, so a "}" inside a note is never a cut.
+  const stops=[];
+  let inStr=false, esc=false;
+  for(let i=0;i<clean.length;i++){
+    const ch=clean[i];
+    if(esc){ esc=false; continue; }
+    if(ch==='\\'){ esc=true; continue; }
+    if(inStr){ if(ch==='"') inStr=false; continue; }
+    if(ch==='"'){ inStr=true; continue; }
+    if(ch==='}'||ch===']') stops.push(i);
+  }
+  for(let k=stops.length-1, n=0; k>=0 && n<_CS_SALVAGE_TRIES; k--, n++){
+    obj=_csTryParse(_csCloseJson(clean.slice(0, stops[k]+1)));
+    if(obj) return {obj, partial:true};
+  }
+  return null;
 }
 function _csParse(raw){
   const text=String(raw||'').trim();
   if(!text) throw new Error('The AI returned an empty response');
-  let obj=null, partial=false;
-  const m=text.match(/\{[\s\S]*\}/);
-  if(m){ try{ obj=JSON.parse(m[0]); }catch(e){ obj=null; } }
-  if(!obj){
-    // Not parseable as it stands — repair it rather than throw the analysis
-    // away. An unfinished reply and one with a broken string both land here,
-    // and both usually hold a usable specification up to the damage.
-    const fixed=_csRepairJson(text);
-    if(fixed){ try{ obj=JSON.parse(fixed); partial=true; }catch(e){ obj=null; } }
-  }
-  if(!obj){
+  // Parse it, correct the harmless mistakes, or cut back to the last point that
+  // still parses — in that order, so as little as possible is lost.
+  const got=_csSalvageJson(text);
+  if(!got){
+    // Nothing in it could be read at all. Say which failure it was and show
+    // where it broke, so the next report is diagnosable instead of a shrug.
+    console.error('[CutStrip] unreadable reply:', text);
     if(_csLooksTruncated(text)) throw new Error(_CS_TRUNCATED);
-    throw new Error('Malformed JSON from the AI: '+String(m?m[0]:text).slice(0,160));
+    let where='';
+    try{ JSON.parse(text.slice(text.indexOf('{'))); }
+    catch(e){
+      const at=/position (\d+)/.exec(e.message||'');
+      where = at ? ` — at character ${at[1]}: …${text.slice(Math.max(0,+at[1]-60), +at[1]+60)}…`
+                 : ` — ${e.message}`;
+    }
+    throw new Error('The AI reply could not be read as a specification'+where);
   }
+  const obj=got.obj, partial=got.partial;
   if(typeof obj!=='object') throw new Error('AI response was not an object');
   // A cutting form needs runs and ends; the operation steps moved to the
   // Manufacturing Instructions screen and are no longer what makes a reply

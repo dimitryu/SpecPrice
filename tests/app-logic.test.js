@@ -1696,44 +1696,84 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
 
 // ──────────────────────────── 37. an answer that did not arrive whole
 {
-  const repair=G('_csRepairJson'), parse=G('_csParse'), loopy=G('_csLoopy');
+  const salvage=G('_csSalvageJson'), sanitize=G('_csSanitizeJson'), close=G('_csCloseJson'),
+        parse=G('_csParse'), loopy=G('_csLoopy');
 
-  // Cut in the middle of a string, inside two levels of nesting.
+  // 1. Stopped mid-sentence, two levels deep.
   const cut='{"drawing_number":"X1","segments":[{"id":"S1","ends":[{"ref":"P1","strip":[{"code":"A","value_mm":50}]}]},{"id":"S2","cable_desc';
-  const fixed=repair(cut);
-  const obj=JSON.parse(fixed);
-  t('repair: what arrived whole is kept', obj.drawing_number, 'X1');
-  t('repair: ...including the complete run', obj.segments.length, 1);
-  t('repair: ...with its end intact', obj.segments[0].ends[0].strip[0].value_mm, 50);
-  t('repair: the half-written tail is dropped', /cable_desc/.test(fixed), false);
+  const r1=salvage(cut);
+  ok('salvage: a cut-off reply is read', !!r1);
+  t('salvage: what arrived whole is kept', r1.obj.drawing_number, 'X1');
+  t('salvage: ...including the complete run', r1.obj.segments.length, 1);
+  t('salvage: ...with its end intact', r1.obj.segments[0].ends[0].strip[0].value_mm, 50);
+  t('salvage: ...and it says it is partial', r1.partial, true);
 
-  // Cut right after a comma, and cut inside an array.
-  ok('repair: a trailing comma closes nothing',
-     !!JSON.parse(repair('{"a":1,"b":[1,2,')));
-  t('repair: ...and keeps what was complete', JSON.parse(repair('{"a":1,"b":[1,2,')).b, [1,2]);
-  t('repair: an answer that was whole is returned unchanged',
-    JSON.parse(repair('{"a":1}')).a, 1);
-  t('repair: nothing to repair is nothing', repair('no json here'), '');
+  // 2. The two harmless mistakes a model makes: a raw newline inside a string,
+  //    and a comma before a closing bracket. Neither loses anything.
+  const nl='{"a":"line one\nline two","b":[1,2,],}';
+  const r2=salvage(nl);
+  ok('salvage: a raw newline inside a string is corrected', !!r2);
+  t('salvage: ...keeping the text', r2.obj.a, 'line one\nline two');
+  t('salvage: a dangling comma is dropped', r2.obj.b, [1,2]);
+  t('salvage: ...and nothing is called partial for it', r2.partial, false);
+  ok('sanitize: a tab inside a string is escaped', /\\t/.test(sanitize('{"a":"x\ty"}')));
+  t('sanitize: text outside strings is untouched', sanitize('{"a":1}'), '{"a":1}');
 
-  // The parser uses it: a cut-off reply becomes a sheet, marked partial.
+  // 2b. THE Hebrew failure: מק"ט and מ"מ are written with a double quote inside
+  //     the word, which ends the JSON string it sits in. A quote with Hebrew on
+  //     both sides is a gershayim, never a delimiter — so the reply is read in
+  //     full and nothing is lost.
+  const heb=G('_csFixHebrewQuotes');
+  const hebBad='{"a":"\u05d4\u05d7\u05e9\u05d9\u05e4\u05d4 \u05d1\u05de\u05e7"\u05d8 55A0111 \u05d4\u05d9\u05d0 5 \u05de"\u05de","segments":[{"id":"S1","ends":[]}]}';
+  const rh=salvage(hebBad);
+  ok('hebrew: a reply with gershayim is read, not thrown away', !!rh);
+  t('hebrew: ...in full, not in part', rh.partial, false);
+  t('hebrew: ...with the run intact', rh.obj.segments.length, 1);
+  ok('hebrew: ...and the text reads the same', /\u05de\u05e7\u05f4\u05d8/.test(rh.obj.a));
+  t('hebrew: the quote is only replaced between Hebrew letters',
+    heb('{"a":"say \u05de\u05e7"\u05d8 now"}'), '{"a":"say \u05de\u05e7\u05f4\u05d8 now"}');
+  t('hebrew: an ordinary JSON quote is untouched', heb('{"a":"b"}'), '{"a":"b"}');
+  t('hebrew: ...and so is an English quote inside text', heb('{"a":"the \"A\" dim"}'), '{"a":"the \"A\" dim"}');
+
+  // 3. Broken beyond repair in the middle — an unescaped quote in a note. The
+  //    head is kept, the damage and everything after it is cut.
+  const bad='{"drawing_number":"X1","segments":[{"id":"S1","ends":[]}],"open_items":[{"what":"the "A" dimension","why":"x"}]}';
+  const r3=salvage(bad);
+  ok('salvage: a broken string does not lose the whole reply', !!r3);
+  t('salvage: ...the good part survives', r3.obj.segments.length, 1);
+  t('salvage: ...and it is flagged partial', r3.partial, true);
+
+  // 4. A whole reply is returned untouched and unflagged.
+  const r4=salvage('{"a":1,"b":{"c":[1]}}');
+  t('salvage: a whole reply parses as itself', r4.obj.b.c, [1]);
+  t('salvage: ...and is not partial', r4.partial, false);
+  t('salvage: nothing to read is nothing', salvage('no json at all'), null);
+
+  ok('close: an open string is closed', !!JSON.parse(close('{"a":"unfinished')));
+  ok('close: a dangling key is dropped', !!JSON.parse(close('{"a":1,"b":')));
+  t('close: ...keeping what was complete', JSON.parse(close('{"a":1,"b":')).a, 1);
+
+  // The parser uses all of it.
   const spec=parse('{"drawing_number":"X1","segments":[{"id":"S1","ends":[]}],"steps":[{"n":1,"title":"Cu');
-  t('repair: a cut-off reply still produces a specification', spec.drawing_number, 'X1');
-  t('repair: ...marked as partial', spec._partial, true);
+  t('salvage: a cut-off reply still produces a specification', spec.drawing_number, 'X1');
+  t('salvage: ...marked as partial', spec._partial, true);
   const whole=parse('{"drawing_number":"X2","segments":[{"id":"S1","ends":[]}],"steps":[]}');
-  t('repair: a whole reply is not marked', whole._partial, undefined);
+  t('salvage: a whole reply is not marked', whole._partial, undefined);
 
   // A reply with nothing of a harness in it is still refused.
   let threw='';
   try{ parse('{"drawing_number":"X"}'); }catch(e){ threw=e.message; }
-  ok('repair: an answer with no harness in it is refused', /no cable runs/.test(threw));
-  // Operation steps alone are enough — they moved screens, they did not stop mattering.
-  ok('repair: steps alone still count as a harness',
+  ok('salvage: an answer with no harness in it is refused', /no cable runs/.test(threw));
+  ok('salvage: steps alone still count as a harness',
      !!parse('{"steps":[{"n":1,"title":"Cut"}]}'));
+  // And an unreadable one says where it broke rather than shrugging.
+  threw='';
+  try{ parse('this is not json at all'); }catch(e){ threw=e.message; }
+  ok('salvage: an unreadable answer explains itself', threw.length>10);
 
   // A model stuck repeating itself is not worth continuing.
   const row='{"n":1,"from_pin":"1","to_pin":"A","color":"RED","awg":"22","note":"crimp to contact 55A0111-22-0 per the assembly spec"},';
-  t('wires: one row is not a loop', loopy('{"conductors":['+row+']}'), false);
-  // A looping reply is cut off mid-row — it never reaches its closing bracket.
+  t('loop: one row is not a loop', loopy('{"conductors":['+row+']}'), false);
   ok('loop: the same row over and over is', loopy('{"conductors":['+row.repeat(40)));
   t('loop: a short answer is never called a loop', loopy('{"a":1}'), false);
 }
