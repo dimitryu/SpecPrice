@@ -763,7 +763,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.50.0';
+const APP_VER   = '1.51.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -9646,12 +9646,37 @@ function _csEndConnLen(end, spec){
   const v=_csNum(c?.body_length_mm);
   return v!=null ? v : null;
 }
+// A harness whose overall dimension is taken between two terminated ends is
+// dimensioned OVER those connectors: that arrow on the drawing runs from the
+// face of one plug to the face of the other, and the finished article is that
+// figure. It is how every harness drawing of this kind is made, and the shop
+// rule that follows from it is absolute — the cut may never come out longer
+// than the drawn length; the strip is taken out of it, never added to it.
+// So when the analysis did not name the basis, that is what we assume, instead
+// of the jacket-end convention, which would add millimetres at both ends and
+// issue a cable too long to fit where it is going. The jacket-end default
+// survives only where it is right: a run that does not end in connectors.
+function _csRunIsBetweenConnectors(seg, spec){
+  const ends=Array.isArray(seg?.ends) ? seg.ends : [];
+  if(ends.length<2) return false;
+  const conns=_csConnectors(spec)||[];
+  const named=r=>{
+    const k=String(r||'').trim().toUpperCase();
+    if(!k) return false;
+    return conns.some(c=>String(c.ref||'').trim().toUpperCase()===k);
+  };
+  // Every end of the run has to be a connector: one free end and the dimension
+  // is measuring something else again.
+  return ends.every(e=>named(e.ref));
+}
 function _csDatum(seg, spec){
   const declared=String(seg?.length_basis||'').trim();
   const known=[_CS_BASIS_JACKET,_CS_BASIS_CABLE,_CS_BASIS_OVER].includes(declared);
+  const fallback=_csRunIsBetweenConnectors(seg, spec) ? _CS_BASIS_OVER : _CS_BASIS_JACKET;
   return {
-    basis: known ? declared : _CS_BASIS_JACKET,
+    basis: known ? declared : fallback,
     stated: known,                                  // the drawing told us
+    assumed: known ? '' : fallback,                 // what we fell back to, and why it is on the sheet
     label: _CS_BASIS_LABEL[known?declared:'unclear'],
     confirmed: seg?.length_basis_confirmed===true,
   };
@@ -9859,6 +9884,15 @@ function _csMatStock(m, runMm){
   // 2. An explicit length field, counted as many times as the line is ordered.
   const direct=_csNum(m.length_mm);
   if(direct!=null && direct>0){
+    // THE SAME LENGTH WRITTEN TWICE. A BOM row reading QTY 12, UNIT m is twelve
+    // metres of wire; an analysis that also fills in length_mm = 12000 has said
+    // the one thing in both columns, and multiplying them gives 144 metres of
+    // wire for a 3 metre harness — forty-seven pieces instead of four. When the
+    // quantity, read as metres (or as millimetres), IS the length, it is the
+    // same figure restated and it is counted once.
+    if(qtyNum!=null && qtyNum>0 &&
+       (Math.abs(qtyNum*1000-direct)<=1 || Math.abs(qtyNum-direct)<=1))
+      return {mm:direct, qty:1, restated:true};
     // …unless the "length" is just the harness length copied onto a wire line,
     // which is what turns 12 m of wire into "12 pieces of 3 m": 36 metres the
     // BOM never called for, and twelve cuts instead of four. Wire is bought by
@@ -10308,6 +10342,7 @@ const _CS_LABELS={
     "No body length is on file for":"אין אורך גוף רשום עבור",
     "The drawing does not say where the length is measured from":"הסרטוט לא מציין מהיכן נמדד האורך",
     "The shop default was used — to the jacket end at each end, with the connector allowance added. If this drawing dimensions over the connectors instead, the cable is SHORTER than the figure above: set it in Edit before anyone cuts.":"נלקחה ברירת המחדל של המפעל — עד קצה המעטפת בכל צד, עם תוספת המחבר. אם בסרטוט הזה המידה נלקחת כולל המחברים, הכבל קצר מהמספר שלמעלה: יש לשנות בעריכה לפני שחותכים.",
+    "Both ends of this run are connectors, so the dimension was taken to span them — the finished harness, connectors included. The piece is therefore cut to the drawn length and no further: the strip comes out of it. If this drawing measures to the jacket end instead, the cable is LONGER than the figure above: set it in Edit before anyone cuts.":"שני קצוות המקטע הם מחברים, ולכן ההנחה היא שהמידה נמדדת מקצה מחבר אחד לשני — הצמה המוגמרת כולל המחברים. לכן חותכים בדיוק לאורך שבסרטוט ולא יותר, והחשיפה יוצאת מתוך האורך הזה. אם בסרטוט הזה המידה נמדדת עד קצה המעטפת, הכבל ארוך מהמספר שלמעלה: יש לשנות בעריכה לפני שחותכים.",
     "This is not a ready-made cable — it is built from individual wires":"זה לא כבל מוכן — הוא נבנה מחוטים בודדים",
     "The BOM carries more wire than one run needs, so the run is made up from separate wires.":"ב-BOM רשום אורך חוט גדול ממה שדרוש למקטע אחד, ולכן המקטע מורכב מחוטים נפרדים.",
     "Cut pieces":"מספר חתיכות",
@@ -11118,9 +11153,9 @@ function _csPrompt(lang){
 BEFORE YOU WRITE THE JSON, CHECK THIS ONE THING:
 Every human-readable VALUE goes in ${langName}. Everything above is written in English because it is
 instruction to you, not output — do not copy that language into your answer.
-In ${langName}: every step title and body, every "critical", every inspection line, every open_items
-"what"/"why"/"action", every discrepancies "what"/"detail", every engineering_notes "text" and
-"action", every "reason", every "position", every description, every layer name and note.
+In ${langName}: every open_items "what"/"why"/"action", every discrepancies "what"/"detail", every
+engineering_notes "text" and "action", every "reason", every "position", every description, every
+layer name and note, every strip label and "basis" text.
 Notes and text ON THE DRAWING are usually printed in English — translate them into ${langName} as you
 record them. "Copy the note" means keep its meaning and its number, not its language.
 In Latin, untranslated: part numbers, manufacturer names, standards, reference designators (P1, P4),
@@ -11132,9 +11167,9 @@ If you have written an open item or a discrepancy in English, rewrite it in ${la
   const langRule = langName==='English' ? '' :
 `
 OUTPUT LANGUAGE — read this before anything else:
-Write every human-readable string in ${langName}. That means: all step titles and bodies,
-all "critical" warnings, every inspection line, every layer name and note, every strip label and
-"basis" text, every tool name and note, all open_items and discrepancies text, and all descriptions.
+Write every human-readable string in ${langName}. That means: every layer name and note, every strip
+label and "basis" text, all open_items and discrepancies text, all engineering notes, and all
+descriptions.
 
 Keep these in their original Latin form, never translated or transliterated:
   - drawing_number, drawing_name and project — copy these from the title block EXACTLY as printed,
@@ -11164,11 +11199,13 @@ job fails. Return MINIFIED JSON: no indentation, no line breaks between fields, 
 or commas. Omit a key entirely rather than writing an empty string or an empty array. Never restate in
 prose a number that already has its own field.
 
+This sheet is the CUT and the STRIP. It is not the build sequence: there is no "steps", no
+"inspection" and no "tools" key in the schema below, and writing one is how a reply runs out of room
+before it has finished the dimensions. The assembly instructions are produced separately, from this
+specification, on their own sheet.
+
 Hard limits, and they are limits, not targets:
   - every prose string: 120 characters
-  - "steps": at most 8, each body one sentence
-  - "inspection": at most 6 lines
-  - "tools": at most 6
   - "engineering_notes": only notes that change what the operator DOES; at most 6
   - "open_items" and "discrepancies": at most 5 each
   - "materials": one line per BOM row, description copied short — never re-described
@@ -11250,12 +11287,6 @@ supporting text, and supporting text that crowds out a dimension has cost more t
   "materials":[ {"item":1,"part_number":"","manufacturer":"","description":"","qty":"1","ref":"P1",
                  "kind":"wire|cable|connector|contact|label|sleeve|other",
                  "length_mm": <the length this BOM line calls for, in mm, when it gives one (convert m and inches) — else null>} ],
-  "steps":    [ {"n":1,"segment":"S1","title":"short imperative title",
-                 "body":"what to do, in plain language an operator can follow. The FIRST step must be the cut, and must state the cut length together with the sum it came from.",
-                 "critical":"the one thing that ruins the part if they get it wrong, or \\"\\"",
-                 "dimension_ref":"the dimension this step sets, e.g. \\"320 mm\\" or \\"A\\", or \\"\\""} ],
-  "inspection":[ "one check per line, phrased so it can be ticked off" ],
-  "tools":     [ {"tool":"","setting":"","note":""} ],
   "open_items":[ {"what":"","why":"","action":""} ],
   "discrepancies":[ {"what":"","detail":""} ]
 }
@@ -11321,7 +11352,7 @@ RULES — these matter more than completeness:
 3. NOT EVERY BRANCH ENDS IN A CONNECTOR. A branch can finish as OPEN WIRES, a splice, or ring terminals.
    Give it a connectors[] entry with the matching "kind" and a ref like "OPEN", so the run has somewhere
    to end and the operator is told how to finish it. For open wires, say in the segment's
-   "shield_treatment" or the steps what is stripped, tinned and how far the wires are separated.
+   "shield_treatment" what is stripped, tinned and how far the wires are separated.
 
 4. LENGTHS ON A DRAWING ARE END TO END. This is the single most common way to get a harness wrong.
    A dimension arrow runs from one connector to another connector. "200 mm" means: from THAT connector to
@@ -11404,11 +11435,10 @@ RULES — these matter more than completeness:
    length includes the connectors, which item is the lacing cord, where each label goes, where glue may
    and may not reach, what to check afterwards. An operator working only from the dimensions will get a
    part that measures correctly and is still rejected.
-   Put EVERY note in "engineering_notes", keeping its number. Then, for each note that tells the operator
-   to DO something, also write it into "steps" at the point in the sequence where it happens — a note
-   saying "tie all wires together at these points" is a step, not a footnote — and into "inspection" when
-   it is something to check. A note that only gives background (what "##" stands for, "see PIC 1") stays
-   in "engineering_notes" alone with "action":"".
+   Put EVERY note in "engineering_notes", keeping its number, and say in "action" what the operator has
+   to DO about it, in a few words — "tie all wires together at these points". A note that only gives
+   background (what "##" stands for, "see PIC 1") keeps "action":"".
+   Write each note ONCE. This sheet is the cut and the strip; the build sequence is written elsewhere.
    If a note contradicts a dimension or a table, that goes in "discrepancies".
 
 11. CONFIRMED vs DERIVED. Set "confirmed": true ONLY when the value is printed on the drawing, or comes
@@ -13170,7 +13200,9 @@ function renderCutStripSheet(){
           cut.capped?` <b>${esc(T('Allowances were held back to keep the piece within the drawn length.'))}</b>`:''}</p>` : ''}
         ${!d.stated ? `<div class="cs-box cs-warn">
           <b>${esc(T('The drawing does not say where the length is measured from'))}</b>
-          <p>${esc(T('The shop default was used — to the jacket end at each end, with the connector allowance added. If this drawing dimensions over the connectors instead, the cable is SHORTER than the figure above: set it in Edit before anyone cuts.'))}</p>
+          <p>${esc(d.assumed===_CS_BASIS_OVER
+            ? T('Both ends of this run are connectors, so the dimension was taken to span them — the finished harness, connectors included. The piece is therefore cut to the drawn length and no further: the strip comes out of it. If this drawing measures to the jacket end instead, the cable is LONGER than the figure above: set it in Edit before anyone cuts.')
+            : T('The shop default was used — to the jacket end at each end, with the connector allowance added. If this drawing dimensions over the connectors instead, the cable is SHORTER than the figure above: set it in Edit before anyone cuts.'))}</p>
         </div>` : ''}
 
         ${build ? `<div class="cs-box cs-stop">
@@ -13410,6 +13442,91 @@ function _mfgFromSpec(spec){
   d.standard=spec.standard||'';
   return d;
 }
+// ── The build sequence, written separately ──────────────────────────────────
+// The drawing analysis used to be asked for the cut, the strip, the wiring
+// table AND the whole assembly sequence in one reply. That is what kept
+// running the answer out of room: the sequence is the longest part of it by
+// far, and it was crowding out the dimensions the cutting form exists for —
+// so the operator lost the two numbers that mattered in order to gain prose
+// that belongs on a different sheet entirely.
+//
+// So it is written here instead, in its own small request, from the finished
+// specification rather than from the drawing. The specification is a few
+// hundred characters of structured fact, the answer is a short list, and
+// neither end can overflow. It also means re-writing the sequence never risks
+// the dimensions: they are already saved.
+function _mfgSpecDigest(spec){
+  const seg=(_csSegments(spec)||[]).map(s=>{
+    const cut=_csCutLength(s, spec);
+    return `${s.id||'S'}: ${_csSegLabel(s)}, cut ${_csMM(cut.total)}`;
+  });
+  const con=(_csConnectors(spec)||[]).map(c=>
+    `${c.ref||''} ${c.part_number||''} ${c.type||''} ${c.termination||''}`.trim());
+  const strip=(_csSegments(spec)||[]).flatMap(s=>(s.ends||[]).flatMap(e=>
+    (e.strip||[]).filter(x=>_csNum(x.value_mm)!=null)
+      .map(x=>`${s.id||'S'}/${e.ref||''} ${x.code||''}=${x.value_mm} mm`)));
+  const mat=(spec.materials||[]).map(m=>
+    `${m.item??''} ${m.part_number||''} ${m.description||''} qty ${m.qty??''} ${m.unit||''}`.trim());
+  const notes=(spec.engineering_notes||[]).map(n=>String(n.text||n||'')).filter(Boolean);
+  return [
+    `HARNESS ${spec.drawing_number||''} ${spec.drawing_name||''} rev ${spec.revision||''}`,
+    spec.standard ? `STANDARD ${spec.standard}` : '',
+    seg.length    ? 'RUNS\n'+seg.join('\n') : '',
+    con.length    ? 'CONNECTORS\n'+con.join('\n') : '',
+    strip.length  ? 'STRIP\n'+strip.join('\n') : '',
+    mat.length    ? 'BOM\n'+mat.slice(0,40).join('\n') : '',
+    notes.length  ? 'DRAWING NOTES\n'+notes.slice(0,12).join('\n') : '',
+  ].filter(Boolean).join('\n\n').slice(0, 6000);
+}
+const _MFG_STEPS_MAX_TOKENS=6000;
+async function _mfgWriteSteps(spec, lang){
+  if(!anthKey) throw new Error(_AI_NO_KEY);
+  const langName=({he:'Hebrew', ru:'Russian', en:'English'})[lang||spec.lang||_CS_SOURCE_LANG]||'Hebrew';
+  const prompt=`You are a manufacturing engineer writing the assembly instruction for a wire harness that
+has ALREADY been analysed. The cut lengths, strip dimensions and wiring are settled and are given to
+you below — do not recalculate them, do not contradict them, and do not repeat the whole dimension
+list back. Write only how the thing is BUILT.
+
+Return ONE JSON object and nothing else. Minified: no indentation, no line breaks between fields.
+{"steps":[{"n":1,"title":"short imperative title","body":"what to do, one or two sentences an operator can follow","critical":"the one thing that ruins the part if they get it wrong, or omit the key"}],
+ "inspection":["one check per line, phrased so it can be ticked off"],
+ "tools":[{"tool":"","setting":"","note":""}]}
+
+Limits, and they are limits, not targets: at most 12 steps, at most 8 inspection lines, at most 8
+tools, every string at most 160 characters. Omit a key rather than writing an empty string.
+
+The first step is always the cut, and it states the cut length. Then strip, then terminate, then
+assemble, then mark, then test. A drawing note that tells the operator to DO something becomes a step
+at the point in the sequence where it happens; one that says what to CHECK becomes an inspection line.
+
+Write every human-readable value in ${langName}. Part numbers, connector references, standards and
+units stay in their Latin form. Never type a double quote inside a value: in Hebrew write the
+gershayim \u05F4 instead.
+
+SPECIFICATION:
+${_mfgSpecDigest(spec)}`;
+  const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
+             'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
+    body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:_MFG_STEPS_MAX_TOKENS,
+                         temperature:0,messages:[{role:'user',content:prompt}]})
+  }, _CS_ANALYSIS_TIMEOUT);
+  if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}
+    throw new Error(_csProviderHint('Anthropic', m)); }
+  const d=await resp.json();
+  const raw=(d.content&&d.content[0]&&d.content[0].text)||'';
+  const obj=_csSalvageJson(raw) || {};
+  return {
+    steps: (Array.isArray(obj.steps)?obj.steps:[]).map((x,i)=>({n:x.n??(i+1),
+      title:String(x.title||''), body:String(x.body||''), critical:String(x.critical||'')})),
+    inspection: (Array.isArray(obj.inspection)?obj.inspection:[]).map(x=>String(x||'')).filter(Boolean),
+    tools: (Array.isArray(obj.tools)?obj.tools:[]).map(x=>({tool:String(x.tool||''),
+      setting:String(x.setting||''), note:String(x.note||'')})).filter(t=>t.tool),
+  };
+}
+
 function _mfgDocId(d){
   const stem=String(d.doc_no||d.drawing_number||d.title||'doc')
     .replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,60) || 'doc';
@@ -13519,8 +13636,8 @@ async function _mfgImportModal(){
   catch(e){ body.innerHTML=`<p style="color:red">${esc(e.message)}</p>`; return; }
   if(!specs.length){ body.innerHTML=`<p style="color:var(--muted);font-size:13px">There are no cut &amp; strip specifications yet.</p>`; return; }
   body.innerHTML=`<p style="font-size:12px;color:var(--muted);margin-bottom:10px">
-      The material list, operation steps, inspection checks and tooling are copied into a new
-      instruction document. The specification itself is left untouched.</p>
+      The material list is copied into a new instruction document, and the build sequence is written
+      from the specification. The specification itself is left untouched.</p>
     <div class="table-wrap"><table><thead><tr><th>Drawing #</th><th>Name</th>
       <th style="width:60px">Steps</th><th style="width:60px">Tools</th><th style="width:90px"></th></tr></thead>
       <tbody>${specs.map(s=>`<tr>
@@ -13530,15 +13647,35 @@ async function _mfgImportModal(){
         <td style="text-align:center">${(s.tools||[]).length}</td>
         <td><button class="btn btn-blue btn-sm mfg-imp" data-id="${esc(s._id)}">Use</button></td>
       </tr>`).join('')}</tbody></table></div>`;
-  body.querySelectorAll('.mfg-imp').forEach(b=>b.addEventListener('click',()=>{
+  body.querySelectorAll('.mfg-imp').forEach(b=>b.addEventListener('click',async ()=>{
     const spec=specs.find(s=>s._id===b.dataset.id);
     if(!spec) return;
     mfgCurrent=_mfgFromSpec(spec);
     mfgCurrent._id=null;
     _mfgEditing=true; _mfgBackup=null;
+    // A specification analysed since the cutting form stopped asking for the
+    // build sequence has none to copy. Rather than hand over an empty
+    // document, it is written now, from the specification, in its own small
+    // request — and if that request fails the document still opens: an empty
+    // sequence someone types is a nuisance, a lost import is a re-analysis.
+    const needsSteps=!mfgCurrent.steps.length;
     closeModal();
     renderMfgDoc();
-    toast('Content copied — review it and save','success');
+    if(!needsSteps){ toast('Content copied — review it and save','success'); return; }
+    toast('Writing the build sequence…','info');
+    try{
+      const w=await _mfgWriteSteps(spec);
+      if(mfgCurrent && !mfgCurrent._id){
+        mfgCurrent.steps=w.steps; mfgCurrent.inspection=w.inspection; mfgCurrent.tools=w.tools;
+        renderMfgDoc();
+        logAudit('mfg_steps_written',{drawing:spec.drawing_number, steps:w.steps.length},true);
+        toast(w.steps.length ? 'Sequence drafted — review it and save'
+                             : 'Content copied — review it and save','success');
+      }
+    }catch(e){
+      console.warn('[Mfg] build sequence', e.message);
+      toast('Copied, but the build sequence could not be written: '+e.message,'warn');
+    }
   }));
 }
 

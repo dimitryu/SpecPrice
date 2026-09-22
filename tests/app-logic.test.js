@@ -1542,14 +1542,27 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('datum: an unknown body length reads as unknown, not zero',
     connLen({ref:'P1'}, missing), null);
 
-  // Silence means the shop default, and the sheet has to say it was assumed.
+  // Silence on a run that ends in two connectors means the dimension spans
+  // them: that is how a harness drawing is dimensioned, and the cut can never
+  // come out longer than the figure on the arrow. The sheet still says it was
+  // assumed rather than read.
   const u=mk('unclear');
-  t('datum: silence falls back to the shop default', datum(u.segments[0], u).basis, 'to_jacket_end');
+  t('datum: silence between two connectors reads as over the connectors',
+    datum(u.segments[0], u).basis, 'over_connectors');
   t('datum: ...and is marked as not stated', datum(u.segments[0], u).stated, false);
+  t('datum: ...and says what it assumed', datum(u.segments[0], u).assumed, 'over_connectors');
   t('datum: a stated basis is stated', datum(o.segments[0], o).stated, true);
   t('datum: an absent field is the same as unclear',
     datum({}, {}).stated, false);
-  t('datum: the assumed run still cuts to the default', cut(u.segments[0], u).total, 4023);
+  t('datum: the assumed run is never cut longer than the drawing',
+    cut(u.segments[0], u).total <= 4000, true);
+  // A run that does NOT end in connectors is measured some other way, and the
+  // jacket-end default is still the right one there.
+  const free=mk('unclear');
+  free.segments[0].ends[1].ref='OPEN';
+  t('datum: a free end keeps the jacket-end default',
+    datum(free.segments[0], free).basis, 'to_jacket_end');
+  t('datum: ...and that run does add its allowances', cut(free.segments[0], free).total, 4023);
 
   // cable_only: the dimension IS the piece of cable.
   const c=mk('cable_only');
@@ -1881,6 +1894,48 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   const sp5=spec();
   sp5.materials=[]; sp5.segments[0].cable_description='cable';
   t('strip: with no gauge to work from, nothing is proposed', propose(sp5), 0);
+}
+
+// ──────────────────────────── 39. the sheet that came back wrong a second time
+// Printed v1.50.0, and every number on it was wrong in the same direction:
+// cut 3010 instead of 3000, and "144000 mm (12 × 12000 mm)" of wire — 47 pieces
+// for a harness that needs 8. Both came from the same habit of believing two
+// columns that are saying the same thing once each.
+{
+  const stock=G('_csMatStock'), build=G('_csWireBuild'), cut=G('_csCutLength'),
+        datum=G('_csDatum'), MODEL=G('_CS_CUT_MODEL');
+
+  // As printed: the BOM length in millimetres AND the same figure as a
+  // quantity in metres, and no basis named on the run.
+  const sp={cut_model:MODEL,
+    materials:[{item:7, part_number:'55A0111-22-0', description:'Wire 22 AWG Black', qty:12, length_mm:12000},
+               {item:8, part_number:'55A0111-22-2', description:'Wire 22 AWG Red',   qty:12, length_mm:12000}],
+    connectors:[{ref:'P1', part_number:'TV06RW1135PF472A', kind:'connector', termination:'crimp'},
+                {ref:'Terminal Power', part_number:'TV06RW1135SF472A', kind:'connector', termination:'crimp'}],
+    segments:[{id:'S1', finished_length_mm:3000,
+      cable_description:'22 AWG wires, black and red', conductors:[],
+      ends:[{ref:'P1', strip:[{code:'A', value_mm:3.5, confirmed:false}]},
+            {ref:'Terminal Power', strip:[{code:'A', value_mm:3.5, confirmed:false}]}]}]};
+
+  t('v1.50 sheet: 12 m written twice is still 12 m',
+    stock(sp.materials[0], 3000), {mm:12000, qty:1, restated:true});
+
+  const b=build(sp.segments[0], sp);
+  t('v1.50 sheet: four pieces from each reel, not forty-seven', b.lines.map(l=>l.pieces), [4,4]);
+  t('v1.50 sheet: ...eight wires in the bundle', b.pieces, 8);
+  t('v1.50 sheet: ...each of them 3000 mm', b.perWireMm, 3000);
+  t('v1.50 sheet: ...and nothing left over', b.leftoverMm, 0);
+  t('v1.50 sheet: ...24 m of stock, not 288', b.stockMm, 24000);
+
+  // No basis named, but both ends are connectors on this drawing, so the
+  // 3000 spans them and the strip comes out of it.
+  t('v1.50 sheet: an unnamed basis between connectors spans them',
+    datum(sp.segments[0], sp).basis, 'over_connectors');
+  const c=cut(sp.segments[0], sp);
+  t('v1.50 sheet: the cut is 3000, not 3010', c.total, 3000);
+  t('v1.50 sheet: ...because nothing is added at an end the dimension covers', c.added, 0);
+  t('v1.50 sheet: ...the 3.5 mm strip is taken out of the 3000, not onto it',
+    c.endCosts.map(e=>e.mm), [0,0]);
 }
 
 // ─────────────────────────────────────────── report
