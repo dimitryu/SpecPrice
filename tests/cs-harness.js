@@ -364,7 +364,10 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   ctx.__f.p2=()=>'tion":"Wire"}],"segments":[{"id":"S1","ends":[]},{"id":"S2","cable_desc';
   const partial=await M.aiAnalyzeCutStrip('drawing text', false, null, 'en');
   ok('cut off: a sheet is still produced', !!partial && partial.drawing_number==='X1');
-  ok('cut off: ...marked partial so nobody mistakes it for the whole drawing', partial._partial===true);
+  ok('cut off: ...after reading the drawing a second time rather than giving up',
+     calls.filter(c=>c.messages.length===1 && c.temperature>0).length===1);
+  ok('cut off: ...and nothing the first reading had is lost on the way',
+     (partial.materials||[]).length>=1);
   ok('cut off: ...keeping the runs that arrived whole', _csSegCount(partial)>=1);
   ok('cut off: ...after a bounded number of tries', calls.length<=8);
 
@@ -376,6 +379,59 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   try{ await M.aiAnalyzeCutStrip('drawing text', false, null, 'en'); }
   catch(e){ threw=e.message; }
   ok('cut off: an answer with nothing in it still fails', threw.length>0);
+
+  // ── the operator never sees that a reply was cut off ─────────────────
+  // A scripted sequence of replies, one per request, so each recovery path
+  // can be driven exactly.
+  let Q=[]; calls=[];
+  vm.runInContext(`_fetchWithRetry=async(u,o)=>{ const body=JSON.parse(o.body); __f.note(body);
+      const r=__f.next();
+      return {ok:true, json:async()=>({content:[{type:'text',text:r[0]}], stop_reason:r[1]})};
+    };`, ctx);
+  ctx.__f.next=()=>Q.shift()||['{}','end_turn'];
+
+  // 1. The first reading loops and never closes; the retry comes back whole.
+  const LOOP='{"drawing_number":"R1","segments":[{"id":"S1","ends":[{"ref":"P1","strip":[]}]}],"connectors":[{"ref":"P1"},'
+            +'{"ref":"P2"},'.repeat(400);
+  const WHOLE='{"drawing_number":"R1","segments":[{"id":"S1","finished_length_mm":3000,'
+             +'"ends":[{"ref":"P1","strip":[]},{"ref":"P2","strip":[]}]}],'
+             +'"connectors":[{"ref":"P1"},{"ref":"P2"}],'
+             +'"materials":[{"item":7,"part_number":"W-BLK","description":"Wire 22 AWG","qty":"12","unit":"m"}]}';
+  Q=[[LOOP,'max_tokens'], [WHOLE,'end_turn'], ['{}','end_turn']];
+  const rec=await M.aiAnalyzeCutStrip('drawing text', false, null, 'en');
+  ok('recover: a looping first reading is read again', calls.length>=2);
+  ok('recover: ...the retry is sampled warm, to take another path', calls[1].temperature>0);
+  ok('recover: ...and the complete reading is the one kept', (rec.materials||[]).length===1);
+  ok('recover: ...so the sheet is not marked partial', !rec._partial);
+
+  // 2. A reading that is whole but came back without its part list: the BOM
+  //    is asked for on its own and folded in.
+  const NOBOM2='{"drawing_number":"R2","segments":[{"id":"S1","finished_length_mm":3000,'
+             +'"ends":[{"ref":"P1","strip":[]},{"ref":"P2","strip":[]}]}],"connectors":[{"ref":"P1"},{"ref":"P2"}]}';
+  const BOM='{"materials":[{"item":7,"part_number":"55A0111-22-0","description":"Wire 22 AWG Black","qty":"12","unit":"m"},'
+           +'{"item":8,"part_number":"55A0111-22-2","description":"Wire 22 AWG Red","qty":"12","unit":"m"}]}';
+  calls=[]; Q=[[NOBOM2,'end_turn'], [BOM,'end_turn'], ['{}','end_turn']];
+  const rb=await M.aiAnalyzeCutStrip('drawing text', false, null, 'en');
+  ok('bom: a reading with no part list asks for it on its own', calls.length===3);
+  ok('bom: ...in a request that asks for nothing else',
+     /PART LIST/.test(String(calls[1].messages[0].content)) && !/"segments"/.test(String(calls[1].messages[0].content)));
+  ok('bom: ...and every row lands', (rb.materials||[]).length===2);
+
+  // 3. Whatever happened on the way, the sheet never says so.
+  const P=JSON.parse(JSON.stringify(SPEC));
+  P._partial=true;
+  P.segments[0].length_basis='to_jacket_end';           // a reading the sheet overrules
+  vm.runInContext(`_csLang='he'; csCurrent=${JSON.stringify(P)};`, ctx);
+  M.renderCutStripSheet();
+  const ph=g.document.getElementById('content').innerHTML;
+  no('quiet: no "incomplete reply" banner, whatever the flag says', /תשובה חלקית|incomplete reply/.test(ph));
+  no('quiet: no "the analysis read it differently" box', /הניתוח קרא את המידה אחרת|read the dimension differently/.test(ph));
+  ok('quiet: section 6 carries the engineering-approval note, in Hebrew',
+     /cs-ai-note[^>]*>הניתוח מבוסס על הסרטוט המצורף וחושב ע״י בינה מלאכותית, ולכן יש לקבל אישור הנדסי לפני תחילת העבודה/.test(ph));
+  ok('quiet: ...inside the Notes section, before the Approval section',
+     ph.indexOf('cs-ai-note') > ph.indexOf('<span class="cs-n">6</span>')
+     && ph.indexOf('cs-ai-note') < ph.indexOf('<span class="cs-n">7</span>'));
+  vm.runInContext(`_csLang='en';`, ctx);
 
   console.log(`\n  ${pass} passed, ${fail} failed\n`);
   fails.forEach(f=>console.log('  ✗ '+f));

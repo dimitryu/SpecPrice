@@ -200,6 +200,8 @@
     .cs-do { margin:8px 0 2px; padding-inline-start:22px; font-size:14px; line-height:1.75; }
     .cs-do li { margin:2px 0; }
     .cs-do b { font-weight:800; }
+    .cs-ai-note { margin:0 0 10px; padding:9px 12px; border:1px solid #CBD5E1; border-inline-start:4px solid #1E293B;
+                  background:#F8FAFC; font-size:13px; font-weight:700; color:#0F172A; }
     .cs-doc-t { font-size:24px; font-weight:800; letter-spacing:-.01em; }
     .cs-doc-s { font-size:14px; color:#334155; margin-top:3px; }
     .cs-kv { display:grid; grid-template-columns:auto 1fr; gap:5px 14px; font-size:13px; margin:0; }
@@ -768,7 +770,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.53.0';
+const APP_VER   = '1.54.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -10443,7 +10445,10 @@ const _CS_LABELS={
     "The layer names were not captured from the drawing — the cable is drawn generically. The dimensions are as specified.":"שמות השכבות לא נלכדו מהסרטוט — הכבל מצויר באופן כללי. המידות הן כפי שצוינו.",
     "measured inside A — it adds nothing to the cut length":"נמדד בתוך A — לא מוסיף כלום לאורך החיתוך",
     "This end adds to the cut length":"הקצה הזה מוסיף לאורך החיתוך",
+    "This analysis is based on the attached drawing and was calculated by artificial intelligence. Engineering approval is therefore required before work begins.":"הניתוח מבוסס על הסרטוט המצורף וחושב ע״י בינה מלאכותית, ולכן יש לקבל אישור הנדסי לפני תחילת העבודה.",
     "Reading the wiring table, the labels and the notes…":"קורא את טבלת החיווט, הסימונים וההערות…",
+    "Reading the drawing again…":"קורא את הסרטוט שוב…",
+    "Reading the part list…":"קורא את רשימת החומרים…",
     "This end adds nothing — the strip comes out of the drawn length":"הקצה הזה לא מוסיף — החשיפה יוצאת מתוך האורך שבסרטוט",
     "strip":"חשיפה",
     "The length marked on the drawing. It is not the length you cut.":"האורך המסומן בסרטוט. זה לא האורך שחותכים.",
@@ -10701,6 +10706,7 @@ const _CS_LABELS={
     "The layer names were not captured from the drawing — the cable is drawn generically. The dimensions are as specified.":"Названия слоёв с чертежа не извлечены — кабель показан условно. Размеры указаны как заданы.",
     "measured inside A — it adds nothing to the cut length":"измеряется внутри A — к длине реза не добавляет",
     "This end adds to the cut length":"Этот конец добавляет к длине реза",
+    "This analysis is based on the attached drawing and was calculated by artificial intelligence. Engineering approval is therefore required before work begins.":"Анализ основан на приложенном чертеже и выполнен искусственным интеллектом, поэтому до начала работ требуется инженерное утверждение.",
     "The length marked on the drawing. It is not the length you cut.":"Длина, указанная на чертеже. Это не длина реза.",
     "A dimension in the written instructions is not one of this sheet’s numbers":"Размер в текстовых инструкциях не совпадает ни с одним числом этого листа",
     "The tables and the figures are computed from the same fields, so they always agree. Text is written separately and can drift. Correct the text, or add the missing dimension where it belongs.":"Таблицы и рисунки считаются из одних и тех же полей и всегда согласованы. Текст пишется отдельно и может разойтись. Исправьте текст или добавьте недостающий размер.",
@@ -11853,7 +11859,9 @@ function _csParse(raw){
       ? `The reply was damaged near the start — only its header could be read (${Object.keys(obj).length} fields, no cable runs). Try again; if it repeats, use the Copy button and send the reply on.`
       : 'The AI read this drawing but found no cable runs in it — it may not be a cable/harness drawing');
   }
-  if(partial) obj._partial=true;
+  // Repairing a stray Hebrew quote in a reply that DID finish is not the same
+  // as a reply that was cut off: only the second is missing anything.
+  if(partial && !_csComplete(text)) obj._partial=true;
   // Normalise the shapes the renderer indexes into, so a partial response
   // degrades to a thinner sheet rather than throwing halfway through drawing.
   obj.ends       = Array.isArray(obj.ends) ? obj.ends : [];
@@ -11919,6 +11927,31 @@ Write the prose values in ${langName}. Part numbers, reference designators, sign
 units and every JSON key stay in Latin. Never type a double quote inside a value: in Hebrew use the
 gershayim \u05F4 (מק״ט, מ״מ).`;
 }
+// How much of a harness a reading holds — enough to choose between two
+// readings of the same drawing, not a quality score.
+function _csCompleteness(spec){
+  if(!spec) return 0;
+  // Distinct entries only — a repetition loop must not score by repeating.
+  const uniq=(arr,key)=>new Set((Array.isArray(arr)?arr:[]).map(key)).size;
+  const segs=Array.isArray(spec.segments)?spec.segments:[];
+  const ends=segs.reduce((n,sg)=>n+uniq(sg.ends, e=>String(e?.ref||'')),0);
+  return uniq(segs, x=>String(x?.id||''))*10 + ends*3
+       + uniq(spec.materials, m=>`${m?.item??''}|${m?.part_number||''}`)*2
+       + uniq(spec.connectors, c=>String(c?.ref||''))*2;
+}
+// The part list on its own. Small, flat, and the single input the wire count
+// depends on — so it is the one thing worth a request of its own when the
+// main reading came back without it.
+function _csBomPrompt(lang){
+  return `Read the PART LIST / BOM table on this drawing and return it, every row, as ONE minified JSON
+object and nothing else:
+{"materials":[{"item":1,"part_number":"","manufacturer":"","description":"","qty":"12","unit":"m","kind":"wire|cable|connector|contact|label|sleeve|other","length_mm":12000}]}
+
+Copy every row — a table with ten rows gives ten entries. "qty" and "unit" are copied exactly as
+printed: a wire row reading 12 in QTY and m in UNIT is twelve metres, so "length_mm" is 12000 and it is
+the whole length of that line, not the length of one piece. Descriptions are copied short and in their
+original language. Never type a double quote inside a value.`;
+}
 // Folds the second bite into the first. Only ever ADDS: a core value already
 // read from the drawing is never overwritten by the detail pass, because the
 // core pass is the one whose numbers the bench cuts to.
@@ -11955,7 +11988,7 @@ async function _csAnthropic(text, isImage, imgData, lang){
   // temperature 0 for the same reason as the labor estimate: reading dimensions
   // off a drawing is not a creative task, and a spec that comes back different
   // every time it is run cannot be checked against itself.
-  const ask=async msgs=>{
+  const ask=async (msgs, temp)=>{
     const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
@@ -11966,7 +11999,7 @@ async function _csAnthropic(text, isImage, imgData, lang){
       // reply that filled its window at 0 will often walk straight back into
       // the same repetition when continued at 0.
       body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:_CS_MAX_TOKENS,
-                           temperature:(msgs.length>1?0.2:0),messages:msgs})
+                           temperature:(temp!=null ? temp : (msgs.length>1?0.2:0)),messages:msgs})
     }, _CS_ANALYSIS_TIMEOUT);
     if(!resp.ok){let m=`Anthropic error ${resp.status}`;
       try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(_csProviderHint('Anthropic', m));}
@@ -11979,8 +12012,8 @@ async function _csAnthropic(text, isImage, imgData, lang){
   // full analysis and usually ends the same way — the unfinished answer is
   // handed back to the model to carry on from, and the pieces are joined.
   // Each phase gets its own run of this, and therefore its own budget.
-  const run=async msgs=>{
-  let out=await ask(msgs);
+  const run=async (msgs, temp)=>{
+  let out=await ask(msgs, temp);
   let reply=out.text, rounds=0, stopReason='';
   while(out.stop==='max_tokens' && rounds<_CS_MAX_CONTINUATIONS){
     // Three ways a continuation is not worth buying, all of them meaning the
@@ -12016,12 +12049,64 @@ async function _csAnthropic(text, isImage, imgData, lang){
     return {reply, cut, rounds, why:stopReason, stop:out.stop};
   };
 
-  const a=await run(messages);
-  const spec=_csParse(a.reply);
+  let a=await run(messages);
+  let spec=_csParse(a.reply);
   if(a.cut) spec._partial=true;
   logSystemAudit('cut_strip_reply',
     {phase:'core', stop:a.stop, why:a.why, rounds:a.rounds, chars:a.reply.length,
      partial:!!spec._partial}, true);
+
+  // A cut-off core reply is handled here, not reported to the operator. The
+  // usual cause is the model walking into a repetition at temperature 0, and a
+  // fresh sampling slightly warm almost always takes a different path through
+  // the same drawing — so it is asked once more, and whichever reading is the
+  // more complete is kept. Nobody at the bench needs to know it took two tries.
+  if(spec._partial){
+    try{
+      if(_csOnProgress) _csOnProgress(0, 'retry');
+      const b=await run(messages, 0.3);
+      const again=_csParse(b.reply);
+      if(b.cut) again._partial=true;
+      // A reading that finished is preferred to one that did not — unless it
+      // finished by saying much less. (The count is over distinct entries, so a
+      // loop cannot win by repeating the same row.) Whichever is kept, anything
+      // it lacks that the other one has is carried across, so the second try
+      // never costs a table the first one had.
+      const ca=_csCompleteness(again), cs=_csCompleteness(spec);
+      const better = (!again._partial && spec._partial && ca >= cs*0.8)
+                  || (!!again._partial===!!spec._partial && ca > cs);
+      const [keep, other] = better ? [again, spec] : [spec, again];
+      ['materials','connectors','segments'].forEach(k=>{
+        if(!(Array.isArray(keep[k]) && keep[k].length) && Array.isArray(other[k]) && other[k].length)
+          keep[k]=other[k];
+      });
+      ['drawing_number','drawing_name','project','revision','standard','customer'].forEach(k=>{
+        if(!String(keep[k]||'').trim() && String(other[k]||'').trim()) keep[k]=other[k];
+      });
+      if(better){ spec=again; a=b; }
+      logSystemAudit('cut_strip_reply',
+        {phase:'core-retry', stop:b.stop, why:b.why, chars:b.reply.length,
+         partial:!!again._partial, kept:spec===again}, true);
+    }catch(e){ console.warn('[CutStrip] core retry', e.message); }
+  }
+
+  // The part list is what the wire count comes from. If it still did not come
+  // back, it is asked for on its own — one small table, which cannot run out
+  // of room — rather than leaving the sheet without its build instruction.
+  if(!(Array.isArray(spec.materials) && spec.materials.length)){
+    try{
+      if(_csOnProgress) _csOnProgress(0, 'bom');
+      const bp=_csBomPrompt(lang);
+      const bm = isImage
+        ? [{role:'user', content:[...imgBlocks, {type:'text', text:bp}]}]
+        : [{role:'user', content: bp+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,24000)}];
+      const r=await run(bm);
+      const got=(_csSalvageJson(r.reply)||{}).obj;
+      const mats=Array.isArray(got?.materials) ? got.materials : [];
+      if(mats.length){ spec.materials=mats; }
+      logSystemAudit('cut_strip_reply', {phase:'bom', chars:r.reply.length, rows:mats.length}, true);
+    }catch(e){ console.warn('[CutStrip] BOM pass', e.message); }
+  }
 
   // Second bite. Its failure is never the analysis's failure: the sheet the
   // bench cuts from is already complete, and a missing wiring table is a gap
@@ -12891,8 +12976,10 @@ async function handleCSFile(file){
     setM('Analysing cut & strip requirements… a dense drawing can take up to 2 minutes — leave this open',55);
     _csOnProgress=(n,phase)=>setM(
       phase==='detail' ? _csT('Reading the wiring table, the labels and the notes…')
-                       : `The drawing is bigger than one reply — continuing (${n})…`,
-      phase==='detail' ? 72 : 55+n*3);
+      : phase==='retry' ? _csT('Reading the drawing again…')
+      : phase==='bom'   ? _csT('Reading the part list…')
+                        : `The drawing is bigger than one reply — continuing (${n})…`,
+      phase==='detail' ? 72 : phase==='retry' ? 62 : phase==='bom' ? 68 : 55+n*3);
     let spec;
     try{ spec=await aiAnalyzeCutStrip(text, isImage, imgData, _CS_SOURCE_LANG); }
     finally{ _csOnProgress=null; }
@@ -13369,11 +13456,6 @@ function renderCutStripSheet(){
       </div>
     </div>
 
-    ${spec._partial ? `<div class="cs-pad"><div class="cs-box cs-stop">
-      <b>${esc(T('This sheet was built from an incomplete reply'))}</b>
-      <p>${esc(T('The analysis ran out of room before it finished, so part of the drawing is missing from this sheet. Everything shown was read from the drawing and is as good as any other sheet — but check that every run, end and connector you see on the drawing is here before using it, and fill in what is not.'))}</p>
-    </div></div>` : ''}
-
     <h2 class="cs-h2"><span class="cs-n">1</span>${esc(T('Planning'))}</h2>
     <div class="cs-pad"><table class="cs-tbl cs-form-tbl">
       <thead><tr>
@@ -13476,12 +13558,7 @@ function renderCutStripSheet(){
           cut.missingConn?` <b style="color:#B91C1C">${esc(T('No body length is on file for'))} ${cut.missingConn} ${
           esc(T('connector(s) — nothing was subtracted for them, so the piece is cut to the full drawn length.'))}</b>`:''}${
           cut.capped?` <b>${esc(T('Allowances were held back to keep the piece within the drawn length.'))}</b>`:''}</p>` : ''}
-        ${d.overrode ? `<div class="cs-box cs-warn">
-          <b>${esc(T('The analysis read the dimension differently'))}</b>
-          <p>${_csSay('The analysis took the length as “{read}”. Both ends of this run are connectors, so the sheet reads the dimension as spanning them and cuts to the drawn length: cutting longer makes a harness that will not fit, and costs a whole piece out of every reel.',
-              {read:T(_CS_BASIS_LABEL[d.overrode]||d.overrode)})}
-            ${esc(T('If the drawing really is measured the other way, set it in Edit and tick Confirmed — your answer then stands.'))}</p>
-        </div>` : ''}
+        ${''/* the override itself stays; the sheet no longer argues about it */}
         ${!d.stated ? `<div class="cs-box cs-warn">
           <b>${esc(T('The drawing does not say where the length is measured from'))}</b>
           <p>${esc(d.assumed===_CS_BASIS_OVER
@@ -13587,10 +13664,15 @@ function renderCutStripSheet(){
 
     <h2 class="cs-h2"><span class="cs-n">6</span>${esc(T('Notes'))}</h2>
     <div class="cs-pad">
+      <!-- Fixed, on every sheet, and not editable: the one thing about this
+           document that must never be quietly dropped. It replaces the old
+           "generated by AI" banner at the top of the page — same fact, said
+           where a form puts its conditions, and said as what to DO. -->
+      <p class="cs-ai-note">${esc(T('This analysis is based on the attached drawing and was calculated by artificial intelligence. Engineering approval is therefore required before work begins.'))}</p>
       ${_csEditing
         ? `<textarea class="cs-in" data-cs-path="form_notes" data-cs-type="text" rows="3"
              style="width:100%">${esc(spec.form_notes||'')}</textarea>`
-        : `<div class="cs-notes-box">${spec.form_notes?esc(spec.form_notes):'&nbsp;'}</div>`}
+        : (spec.form_notes ? `<div class="cs-notes-box">${esc(spec.form_notes)}</div>` : '')}
     </div>
 
     <h2 class="cs-h2"><span class="cs-n">7</span>${esc(T('Approval'))}</h2>
