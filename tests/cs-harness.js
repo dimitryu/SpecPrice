@@ -116,6 +116,7 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   ok('form: ...pointing at the manufacturer own site', /amphenol\.com/.test(html));
   ok('form: ...and says it is a search, not the document',
      /this is a search, not the document/.test(html));
+
   // A sheet with no links tries once to fill them in, with no button to press.
   ok('form: opening a sheet asks for the datasheets it is missing',
      /cut_strip_datasheets|datasheets_checked/.test(M._csBackfillDatasheets.toString()));
@@ -166,6 +167,33 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   ok('wires: ...and says what the reel is cut into', /Cut into/.test(wh));
   ok('wires: ...and what the harness then is', /The harness is/.test(wh));
   ok('wires: ...naming the wire', /M22759\/16-22-9/.test(wh));
+  // The instruction the bench actually reads, in words, ahead of the table
+  // that justifies it. This is what was missing from the printed sheet: the
+  // numbers were right and nobody could see what to DO with them.
+  ok('build: the sheet says in words what to cut',
+     /Cut <span[^>]*>[\d.]+ mm<\/span> of/.test(wh));
+  ok('build: ...how many pieces, and how long each',
+     /into <span[^>]*>\d+<\/span> pieces of <span[^>]*>[\d.]+ mm<\/span>/.test(wh));
+  ok('build: ...and what to do with them then',
+     /pieces together — that bundle is the harness/.test(wh));
+  ok('build: ...out of that length, never longer', /do not cut any piece longer/.test(wh));
+  ok('build: ...ahead of the arithmetic that backs it',
+     wh.indexOf('pieces together') < wh.indexOf('Left over'));
+  // .cs-box b is display:block, so an emphasised value inside one of these
+  // sentences must never be a <b> — it stacks the sentence down the page.
+  no('build: the emphasis inside a sentence is inline, not a block <b>',
+     /<b[^>]*>[\d.]+ mm<\/b> of/.test(wh));
+
+  // A drawing whose part list never came back must say so, not quietly drop
+  // the whole instruction — which is exactly how it went missing before.
+  const NOBOM=JSON.parse(JSON.stringify(WIRES));
+  NOBOM.materials=[];
+  vm.runInContext(`csCurrent=${JSON.stringify(NOBOM)};`, ctx);
+  M.renderCutStripSheet();
+  const nb=g.document.getElementById('content').innerHTML;
+  ok('build: a missing part list is said out loud', /No part list came back/.test(nb));
+  no('build: ...and no build instruction is invented from nothing',
+     /that bundle is the harness/.test(nb));
 
   // The shop's own BOM shape: the quantity column IS the length.
   const SHOP=JSON.parse(JSON.stringify(SPEC));
@@ -275,42 +303,70 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   // ── an analysis too long for one reply ───────────────────────────────
   // The real failure the operator saw: the model filled its reply and the whole
   // analysis was thrown away. It must now carry on instead.
-  const PART1='{"drawing_number":"X1","steps":[{"n":1,"title":"Cut","body":"Cut to len';
-  const PART2='gth"}],"segments":[{"id":"S1","ends":[]}],"connectors":[]}';
+  // The core pass is asked for first and carries on when it overflows; the
+  // wiring table, the labels and the notes are a second request of their own,
+  // so they can never eat the room the part list needs.
+  const PART1='{"drawing_number":"X1","materials":[{"item":1,"part_number":"W1","descrip';
+  const PART2='tion":"Wire 22 AWG"}],"segments":[{"id":"S1","ends":[]}],"connectors":[]}';
+  const DETAIL='{"segments":[{"id":"S1","conductors":[{"name":"PWR","color":"RED","from_pin":"1","to_pin":"1"}]}],'
+             +'"markers":[{"label":"A","segment":"S1","text_lines":["TAG"]}],'
+             +'"engineering_notes":[{"n":"1","text":"note one","action":""}]}';
   let calls=[];
   vm.runInContext(`anthKey='sk-test'; _csDeadProviders={};
     _fetchWithRetry=async(u,o)=>{ const body=JSON.parse(o.body); __f.note(body);
       const n=__f.count();
       return {ok:true, json:async()=>n===1
         ? {content:[{type:'text',text:__f.p1()}], stop_reason:'max_tokens'}
-        : {content:[{type:'text',text:__f.p2()}], stop_reason:'end_turn'}};
+        : n===2
+        ? {content:[{type:'text',text:__f.p2()}], stop_reason:'end_turn'}
+        : {content:[{type:'text',text:__f.d()}], stop_reason:'end_turn'}};
     };`, ctx);
   ctx.__f.note=b=>calls.push(b);
   ctx.__f.count=()=>calls.length;
   ctx.__f.p1=()=>PART1;
   ctx.__f.p2=()=>PART2;
+  ctx.__f.d=()=>DETAIL;
   const spec=await M.aiAnalyzeCutStrip('drawing text', false, null, 'en');
   ok('continuation: a cut-off reply is carried on, not thrown away', !!spec);
   ok('continuation: ...and the stitched answer is the real spec', spec.drawing_number==='X1');
-  ok('continuation: it took exactly two requests', calls.length===2);
+  ok('continuation: ...with the part list the wire count is worked out from',
+     (spec.materials||[]).length===1);
+  ok('continuation: two requests for the core, one for the rest', calls.length===3);
   ok('continuation: the second one prefills the first answer',
      calls[1].messages[calls[1].messages.length-1].role==='assistant'
-     && calls[1].messages[calls[1].messages.length-1].content.endsWith('Cut to len'));
+     && calls[1].messages[calls[1].messages.length-1].content.endsWith('descrip'));
   ok('continuation: ...asking in bites, not one long mouthful', calls[0].max_tokens<=20000);
   ok('continuation: the first pass is deterministic', calls[0].temperature===0);
   ok('continuation: ...and the continuation runs slightly warm, to break a loop',
      calls[1].temperature>0);
 
+  // The core pass must not even be offered the row-heavy keys, and the second
+  // pass must be told which runs and connectors the first one found.
+  const corePrompt=String(calls[0].messages[0].content);
+  no('phases: the core pass is not asked for the wiring table', /"conductors":\[ \{"name"/.test(corePrompt));
+  no('phases: ...nor for the markers', /"markers":  \[/.test(corePrompt));
+  ok('phases: ...but it is asked for the part list', /"materials":\[/.test(corePrompt));
+  ok('phases: ...and told the part list is what must not be missed',
+     /COMPLETE\s+part list/.test(corePrompt));
+  const detailPrompt=String(calls[2].messages[0].content);
+  ok('phases: the second pass asks for the wiring table', /"conductors"/.test(detailPrompt));
+  ok('phases: ...using the run ids the first pass found', /S1/.test(detailPrompt));
+
+  // …and what comes back is folded in.
+  ok('phases: the wiring table lands on its run', (spec.segments[0].conductors||[]).length===1);
+  ok('phases: the markers land', (spec.markers||[]).length===1);
+  ok('phases: the notes land', (spec.engineering_notes||[]).length===1);
+
   // Still overflowing after the retries: the operator gets the sheet anyway,
   // built from what did arrive and marked as partial. Two minutes of analysis
   // is never thrown away again.
   calls=[];
-  ctx.__f.p2=()=>'gth"}],"segments":[{"id":"S1","ends":[]},{"id":"S2","cable_desc';
+  ctx.__f.p2=()=>'tion":"Wire"}],"segments":[{"id":"S1","ends":[]},{"id":"S2","cable_desc';
   const partial=await M.aiAnalyzeCutStrip('drawing text', false, null, 'en');
   ok('cut off: a sheet is still produced', !!partial && partial.drawing_number==='X1');
   ok('cut off: ...marked partial so nobody mistakes it for the whole drawing', partial._partial===true);
   ok('cut off: ...keeping the runs that arrived whole', _csSegCount(partial)>=1);
-  ok('cut off: ...after a bounded number of tries', calls.length<=5);
+  ok('cut off: ...after a bounded number of tries', calls.length<=8);
 
   // Nothing usable at all is still a failure, and says so.
   calls=[];

@@ -195,6 +195,11 @@
     .cs-tb-r { padding:18px 26px; background:#F8FAFC; }
     .cs-sheet[dir="ltr"] .cs-tb-r { border-left:1px solid #E4E5E7; }
     .cs-sheet[dir="rtl"] .cs-tb-r { border-right:1px solid #E4E5E7; }
+    /* The do-this list at the head of the wire-build box: bigger than the
+       surrounding prose on purpose — it is the instruction, not commentary. */
+    .cs-do { margin:8px 0 2px; padding-inline-start:22px; font-size:14px; line-height:1.75; }
+    .cs-do li { margin:2px 0; }
+    .cs-do b { font-weight:800; }
     .cs-doc-t { font-size:24px; font-weight:800; letter-spacing:-.01em; }
     .cs-doc-s { font-size:14px; color:#334155; margin-top:3px; }
     .cs-kv { display:grid; grid-template-columns:auto 1fr; gap:5px 14px; font-size:13px; margin:0; }
@@ -763,7 +768,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.52.0';
+const APP_VER   = '1.53.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -10373,10 +10378,14 @@ const _CS_LABELS={
     "Search at":"חיפוש אצל",
     "Search for the datasheet":"חיפוש דף הנתונים",
     "No distributor holds a datasheet for this part — this is a search, not the document":"לאף ספק אין דף נתונים למק״ט הזה — זהו חיפוש, לא המסמך עצמו",
-    "It took the length as":"הוא לקח את האורך כ־",
-    "Both ends of this run are connectors, so the sheet reads the dimension as spanning them and cuts to the drawn length — cutting longer makes a harness that will not fit, and costs a whole piece out of every reel. If the drawing really is measured the other way, set it in Edit and tick Confirmed; your answer then stands.":"שני קצוות המקטע הם מחברים, ולכן הטופס קורא את המידה ככוללת אותם וחותך בדיוק לאורך שבסרטוט — חיתוך ארוך יותר נותן צמה שלא נכנסת, ועולה חתיכה שלמה מכל גליל. אם בסרטוט המידה באמת נמדדת אחרת, יש לקבוע זאת בעריכה ולסמן לאימות; מאותו רגע התשובה שלכם היא הקובעת.",
+    "The analysis took the length as “{read}”. Both ends of this run are connectors, so the sheet reads the dimension as spanning them and cuts to the drawn length: cutting longer makes a harness that will not fit, and costs a whole piece out of every reel.":"הניתוח לקח את האורך כ־„{read}”. שני קצוות המקטע הם מחברים, ולכן הטופס קורא את המידה ככוללת אותם וחותך בדיוק לאורך שבסרטוט: חיתוך ארוך יותר נותן צמה שלא נכנסת, ועולה חתיכה שלמה מכל גליל.",
+    "If the drawing really is measured the other way, set it in Edit and tick Confirmed — your answer then stands.":"אם בסרטוט המידה באמת נמדדת אחרת, יש לקבוע זאת בעריכה ולסמן לאימות — מאותו רגע התשובה שלכם היא הקובעת.",
     "Both ends of this run are connectors, so the dimension was taken to span them — the finished harness, connectors included. The piece is therefore cut to the drawn length and no further: the strip comes out of it. If this drawing measures to the jacket end instead, the cable is LONGER than the figure above: set it in Edit before anyone cuts.":"שני קצוות המקטע הם מחברים, ולכן ההנחה היא שהמידה נמדדת מקצה מחבר אחד לשני — הצמה המוגמרת כולל המחברים. לכן חותכים בדיוק לאורך שבסרטוט ולא יותר, והחשיפה יוצאת מתוך האורך הזה. אם בסרטוט הזה המידה נמדדת עד קצה המעטפת, הכבל ארוך מהמספר שלמעלה: יש לשנות בעריכה לפני שחותכים.",
     "This is not a ready-made cable — it is built from individual wires":"זה לא כבל מוכן — הוא נבנה מחוטים בודדים",
+    "Cut {stock} of {pn} into {n} pieces of {each}.":"לחתוך {stock} מהמק״ט {pn} ל־{n} חתיכות של {each}.",
+    "Lay the {n} pieces together — that bundle is the harness. Strip and terminate each end out of this length; do not cut any piece longer.":"להניח את {n} החתיכות יחד — הצרור הזה הוא הצמה. החשיפה והחיבור בכל קצה נעשים מתוך האורך הזה; אין לחתוך אף חתיכה ארוכה יותר.",
+    "No part list came back for this drawing":"לא חזרה רשימת חומרים עבור הסרטוט הזה",
+    "Without the BOM the sheet cannot say whether this run is a ready-made cable or a bundle built from separate wires, and it cannot work out how many pieces to cut from each reel. Re-run the analysis, or type the wire lines into the materials list in Edit.":"בלי ה־BOM הטופס לא יכול לדעת אם המקטע הזה הוא כבל מוכן או צרור שמורכב מחוטים נפרדים, ולא יכול לחשב כמה חתיכות לחתוך מכל גליל. יש להריץ ניתוח מחדש, או להקליד את שורות החוטים ברשימת החומרים דרך עריכה.",
     "The BOM carries more wire than one run needs, so the run is made up from separate wires.":"ב-BOM רשום אורך חוט גדול ממה שדרוש למקטע אחד, ולכן המקטע מורכב מחוטים נפרדים.",
     "Cut pieces":"מספר חתיכות",
     "Each [mm]":"כל אחת [מ\"מ]",
@@ -10434,6 +10443,9 @@ const _CS_LABELS={
     "The layer names were not captured from the drawing — the cable is drawn generically. The dimensions are as specified.":"שמות השכבות לא נלכדו מהסרטוט — הכבל מצויר באופן כללי. המידות הן כפי שצוינו.",
     "measured inside A — it adds nothing to the cut length":"נמדד בתוך A — לא מוסיף כלום לאורך החיתוך",
     "This end adds to the cut length":"הקצה הזה מוסיף לאורך החיתוך",
+    "Reading the wiring table, the labels and the notes…":"קורא את טבלת החיווט, הסימונים וההערות…",
+    "This end adds nothing — the strip comes out of the drawn length":"הקצה הזה לא מוסיף — החשיפה יוצאת מתוך האורך שבסרטוט",
+    "strip":"חשיפה",
     "The length marked on the drawing. It is not the length you cut.":"האורך המסומן בסרטוט. זה לא האורך שחותכים.",
     "A dimension in the written instructions is not one of this sheet’s numbers":"מידה בהוראות המילוליות אינה אחד המספרים של הדף הזה",
     "The tables and the figures are computed from the same fields, so they always agree. Text is written separately and can drift. Correct the text, or add the missing dimension where it belongs.":"הטבלאות והסרטוטים מחושבים מאותם שדות, ולכן הם תמיד מסכימים. הטקסט נכתב בנפרד ויכול לסטות. לתקן את הטקסט, או להוסיף את המידה החסרה במקום שלה.",
@@ -11173,7 +11185,21 @@ async function _csRefImage(b64){
 // hundred sentences, and translating them all was enough to hit the request
 // timeout. Writing them in Hebrew the first time costs nothing extra, because
 // the model is composing those sentences either way.
-function _csPrompt(lang){
+// The analysis is asked for in two bites, and the split is not an optimisation
+// — it is what makes the cutting form reliable. Everything the bench cuts from
+// (the dimensions, the ends, the strip, and the BOM the wire count is worked
+// out of) is asked for FIRST, on its own. The row-heavy parts — the wiring
+// table, the markers, the sleeves, the drawing notes — come second, in their
+// own request with their own window.
+//
+// Before this, one reply had to carry all of it, and on a real drawing it ran
+// out of room somewhere in the middle: the operator lost the part list, and
+// with it the instruction to cut four 3 m pieces out of each 12 m reel. A
+// wiring table that arrives half-finished costs a re-run; a part list that
+// never arrives costs the whole point of the sheet.
+const _CS_PHASE_CORE='core', _CS_PHASE_DETAIL='detail';
+function _csPrompt(lang, phase){
+  const core = phase!==_CS_PHASE_DETAIL;
   const LANGS={he:'Hebrew', ru:'Russian', en:'English'};
   const langName=LANGS[lang]||'Hebrew';
   // Deliberately repeated at the end of the prompt as well. Everything between
@@ -11236,7 +11262,14 @@ This sheet is the CUT and the STRIP. It is not the build sequence: there is no "
 "inspection" and no "tools" key in the schema below, and writing one is how a reply runs out of room
 before it has finished the dimensions. The assembly instructions are produced separately, from this
 specification, on their own sheet.
-
+${core ? `
+THIS PASS IS THE CUTTING DATA ONLY. Do NOT write "conductors", "markers", "sleeves" or
+"engineering_notes": they are not in the schema below and they are asked for in a second request of
+their own, so writing them here only takes room from the numbers. What this pass must not miss, in
+this order: every cable run with its length and its ends, every strip dimension, and the COMPLETE
+part list in "materials" — every row of the BOM, because how many wires to cut is worked out from
+it. A reply that skips the part list is a reply the bench cannot work from.
+` : ''}
 Hard limits, and they are limits, not targets:
   - every prose string: 120 characters
   - "engineering_notes": only notes that change what the operator DOES; at most 6
@@ -11264,9 +11297,10 @@ supporting text, and supporting text that crowds out a dimension has cost more t
              "method":"lacing cord | spiral wrap | tape | braided sleeve", "part_number":"",
              "note":"what the drawing says about tying them together"},
 
-  "engineering_notes": [ {"n":"1","text":"the note restated for the operator, in the output language — its number is kept, its wording is yours",
+${core ? '' : `  "engineering_notes": [ {"n":"1","text":"the note restated for the operator, in the output language — its number is kept, its wording is yours",
                           "applies_to":"P1 | S1 | labels | glue | whole harness",
                           "action":"what the operator must actually DO because of it, or \"\" if it is background"} ],
+`}
 
   "connectors": [
     { "ref":"J1", "kind":"connector | open_wires | splice | ring_terminal",
@@ -11306,17 +11340,18 @@ supporting text, and supporting text that crowds out a dimension has cost more t
       ],
 
       "conductor_strip_mm": <number>, "conductor_strip_confirmed": <true|false>,
-      "shield_treatment":"what happens to the shield/drain at each end, in plain language, or \\"\\"",
+      "shield_treatment":"what happens to the shield/drain at each end, in plain language, or \\"\\""${core ? '' : `,
       "conductors":[ {"name":"PWSERVO_R1","color":"GRN","awg":28,
-                      "from_pin":"1","to_pin":"1","note":""} ]
+                      "from_pin":"1","to_pin":"1","note":""} ]`}
     }
   ],
 
-  "sleeves":  [ {"part_number":"","kind":"heatshrink","segment":"S1","from_end":"P1","distance_mm":0,
+${core ? '' : `  "sleeves":  [ {"part_number":"","kind":"heatshrink","segment":"S1","from_end":"P1","distance_mm":0,
                  "length_mm":5,"qty":2,"position":"plain-language position","confirmed":true} ],
   "markers":  [ {"part_number":"","label":"A","segment":"S1","from_end":"P1","distance_mm":50,
                  "position":"where the drawing says to put it, in words, when it gives no dimension",
                  "confirmed":false,"text_lines":["DB9 FEMALE","RS422"]} ],
+`}
   "materials":[ {"item":1,"part_number":"","manufacturer":"","description":"","qty":"1","ref":"P1",
                  "kind":"wire|cable|connector|contact|label|sleeve|other",
                  "length_mm": <the length this BOM line calls for, in mm, when it gives one (convert m and inches) — else null>} ],
@@ -11845,8 +11880,68 @@ function _csParse(raw){
 // continuation takes as long as the first request, and a progress bar that
 // sits still for four minutes reads as a hang.
 let _csOnProgress=null;
+// The second bite: the wiring table, the markers, the sleeves and the drawing
+// notes, asked for on their own once the cutting data is safely in hand. The
+// model sees the same drawing plus the skeleton it already produced, so the
+// segment ids and connector refs line up without being guessed at twice.
+function _csDetailPrompt(lang, core){
+  const LANGS={he:'Hebrew', ru:'Russian', en:'English'};
+  const langName=LANGS[lang]||'Hebrew';
+  const segs=(core?.segments||[]).map(sg=>
+    `${sg.id||'S1'}: ${sg.from||''} → ${sg.to||''}${sg.cable_description?` (${sg.cable_description})`:''}`);
+  const refs=(core?.connectors||[]).map(c=>
+    `${c.ref||''}${c.positions?` (${c.positions} pos)`:''} ${c.part_number||''}`.trim());
+  return `The cut and strip data for this drawing has already been read. What is missing is the
+wiring, the markings and the drawing notes. Read them off the SAME drawing and return them.
+
+Return ONE JSON object, minified, and nothing else:
+{"segments":[{"id":"S1","conductors":[{"name":"","color":"","awg":22,"from_pin":"1","to_pin":"1","note":""}]}],
+ "markers":[{"part_number":"","label":"A","segment":"S1","from_end":"P1","distance_mm":50,"position":"","confirmed":false,"text_lines":[""]}],
+ "sleeves":[{"part_number":"","kind":"heatshrink","segment":"S1","from_end":"P1","distance_mm":0,"length_mm":5,"qty":2,"position":"","confirmed":true}],
+ "engineering_notes":[{"n":"1","text":"","applies_to":"","action":""}]}
+
+Use ONLY these segment ids — they are the runs already read from this drawing:
+${segs.length?segs.join('\n'):'S1'}
+And only these connector references:
+${refs.length?refs.join('\n'):'(none read)'}
+
+EVERY ROW of the wiring table becomes one entry in that segment's "conductors" — a table with 13
+rows produces thirteen, not the ones that were easy. EVERY ROW of the label or marking table becomes
+one "markers" entry, with its printed text in "text_lines"; a label whose place is described in words
+rather than dimensioned still becomes a marker, with the words in "position" and "distance_mm" null.
+EVERY numbered note on the drawing becomes one "engineering_notes" entry, keeping its number, with
+"action" saying what the operator must DO about it — or "" when it is only background.
+
+Limits: each string at most 140 characters; at most 10 notes. Omit a key rather than writing an
+empty array.
+
+Write the prose values in ${langName}. Part numbers, reference designators, signal names, colours,
+units and every JSON key stay in Latin. Never type a double quote inside a value: in Hebrew use the
+gershayim \u05F4 (מק״ט, מ״מ).`;
+}
+// Folds the second bite into the first. Only ever ADDS: a core value already
+// read from the drawing is never overwritten by the detail pass, because the
+// core pass is the one whose numbers the bench cuts to.
+function _csMergeDetail(spec, det){
+  if(!spec || !det || typeof det!=='object') return 0;
+  let n=0;
+  const segs=Array.isArray(spec.segments)?spec.segments:[];
+  (Array.isArray(det.segments)?det.segments:[]).forEach(d=>{
+    const id=String(d.id||'').trim().toUpperCase();
+    const tgt=segs.find(sg=>String(sg.id||'').trim().toUpperCase()===id) || (segs.length===1?segs[0]:null);
+    if(!tgt) return;
+    const cs=Array.isArray(d.conductors)?d.conductors:[];
+    if(cs.length && !(tgt.conductors||[]).length){ tgt.conductors=cs; n+=cs.length; }
+  });
+  ['markers','sleeves','engineering_notes'].forEach(k=>{
+    const v=Array.isArray(det[k])?det[k]:[];
+    if(v.length && !(Array.isArray(spec[k])?spec[k]:[]).length){ spec[k]=v; n+=v.length; }
+  });
+  return n;
+}
+
 async function _csAnthropic(text, isImage, imgData, lang){
-  const prompt=_csPrompt(lang);
+  const prompt=_csPrompt(lang, _CS_PHASE_CORE);
   // Each sheet is announced before its image. Without the labels the model sees
   // a pile of pictures; with them it can say "the pin list on sheet 2" and mean it.
   const sheets = (imgData && imgData.pages && imgData.pages.length) ? imgData.pages
@@ -11879,14 +11974,13 @@ async function _csAnthropic(text, isImage, imgData, lang){
     return {text:(d.content&&d.content[0]&&d.content[0].text)||'', stop:d.stop_reason};
   };
 
-  // A drawing with a full wiring table can outrun even a 64k reply. Rather than
-  // throwing the work away and telling the operator to "try again" — which
-  // costs another full analysis and usually ends the same way — the unfinished
-  // answer is handed back to the model to carry on from, and the pieces are
-  // joined. This is the ordinary way to get one long answer out of a model with
-  // a per-reply ceiling, and it is why the old truncation error had become the
-  // most common way this screen failed.
-  let out=await ask(messages);
+  // A long structured answer can outrun one reply. Rather than throwing the
+  // work away and telling the operator to "try again" — which costs another
+  // full analysis and usually ends the same way — the unfinished answer is
+  // handed back to the model to carry on from, and the pieces are joined.
+  // Each phase gets its own run of this, and therefore its own budget.
+  const run=async msgs=>{
+  let out=await ask(msgs);
   let reply=out.text, rounds=0, stopReason='';
   while(out.stop==='max_tokens' && rounds<_CS_MAX_CONTINUATIONS){
     // Three ways a continuation is not worth buying, all of them meaning the
@@ -11902,7 +11996,7 @@ async function _csAnthropic(text, isImage, imgData, lang){
     // the rest of it. Trailing whitespace in a prefill is rejected by the API.
     const partial=_csTrimPrefill(reply);
     const before=partial.length;
-    out=await ask([...messages, {role:'assistant', content:partial}]);
+    out=await ask([...msgs, {role:'assistant', content:partial}]);
     reply=_csStitch(partial, out.text);
     // A continuation that adds almost nothing, or that only repeats what it
     // was handed, will do the same again next round.
@@ -11913,16 +12007,43 @@ async function _csAnthropic(text, isImage, imgData, lang){
   // contains becomes the sheet — marked partial, so nobody mistakes it for a
   // complete reading of the drawing. _csParse only throws now when there is
   // genuinely nothing usable in the answer.
-  const spec=_csParse(reply);
-  // Partial means the answer really was cut off mid-thought. A reply that the
-  // salvage could close, or that we stopped because it had said everything it
-  // was going to say, is a whole reading of the drawing even if the API's last
-  // stop_reason was max_tokens — flagging those taught the operator to ignore
-  // the banner, which is worse than not having one.
-  if(out.stop==='max_tokens' && stopReason!=='complete' && !_csComplete(reply))
-    spec._partial=true;
+    // Partial means the answer really was cut off mid-thought. A reply that the
+    // salvage could close, or that we stopped because it had said everything it
+    // was going to say, is a whole reading even if the API's last stop_reason
+    // was max_tokens — flagging those taught the operator to ignore the banner,
+    // which is worse than not having one.
+    const cut = out.stop==='max_tokens' && stopReason!=='complete' && !_csComplete(reply);
+    return {reply, cut, rounds, why:stopReason, stop:out.stop};
+  };
+
+  const a=await run(messages);
+  const spec=_csParse(a.reply);
+  if(a.cut) spec._partial=true;
   logSystemAudit('cut_strip_reply',
-    {stop:out.stop, why:stopReason, rounds, chars:reply.length, partial:!!spec._partial}, true);
+    {phase:'core', stop:a.stop, why:a.why, rounds:a.rounds, chars:a.reply.length,
+     partial:!!spec._partial}, true);
+
+  // Second bite. Its failure is never the analysis's failure: the sheet the
+  // bench cuts from is already complete, and a missing wiring table is a gap
+  // the engineer can see and fill, not a reason to make them run the whole
+  // drawing again.
+  try{
+    if(_csOnProgress) _csOnProgress(0, 'detail');
+    const dprompt=_csDetailPrompt(lang, spec);
+    const dmsgs = isImage
+      ? [{role:'user', content:[...imgBlocks, {type:'text', text:dprompt}]}]
+      : [{role:'user', content: dprompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,24000)}];
+    const b=await run(dmsgs);
+    const det=(_csSalvageJson(b.reply)||{}).obj;
+    const added=_csMergeDetail(spec, det);
+    if(!added) spec._detail_thin=true;
+    logSystemAudit('cut_strip_reply',
+      {phase:'detail', stop:b.stop, why:b.why, rounds:b.rounds, chars:b.reply.length, added}, true);
+  }catch(e){
+    spec._detail_thin=true;
+    console.warn('[CutStrip] detail pass', e.message);
+  }
+  _csNormalize(spec);
   return spec;
 }
 // A model writing a long structured answer at temperature 0 can fall into a
@@ -12470,11 +12591,20 @@ function _csStripSVG(seg, end, spec){
   const ec=(_csCutLength(seg, spec).endCosts||[])
     .find(e=>String(e.ref||'').toUpperCase()===String(end?.ref||'').toUpperCase());
   if(ec){
+    // Under the over-the-connectors convention this end costs the cut nothing:
+    // the strip is taken OUT of the drawn length. Printing "5 + 0 = 0 mm"
+    // there was arithmetic nobody could follow, so the box says what is
+    // actually true of that end instead of forcing it into the same sum.
+    const adds = _csNum(ec.mm)!==0 || _csNum(ec.conn)>0;
+    const head = adds ? T('This end adds to the cut length')
+                      : T('This end adds nothing — the strip comes out of the drawn length');
+    const sum  = adds ? `${ec.strip} + ${ec.margin}${ec.conn?` − ${ec.conn}`:''} = ${ec.mm} mm`
+                      : `${_csT('strip')} ${ec.strip} mm ⊂ ${_csMM(_csCutLength(seg, spec).total)}`;
     g+=`<rect x="330" y="${y-4}" width="440" height="44" fill="#FEF3C7" stroke="#B45309" stroke-width="1"/>
         <text x="550" y="${y+14}" text-anchor="middle" font-size="12" font-weight="700" fill="#7C2D12">${
-          _csSvgTxt(T('This end adds to the cut length'))}</text>
+          _csSvgTxt(head)}</text>
         <text x="550" y="${y+33}" text-anchor="middle" font-size="15" font-weight="800" fill="#7C2D12" font-family="monospace">${
-          ec.strip} + ${ec.margin}${ec.conn?` − ${ec.conn}`:''} = ${ec.mm} mm</text>`;
+          _csSvgTxt(sum)}</text>`;
     y+=54;
   }
 
@@ -12759,7 +12889,10 @@ async function handleCSFile(file){
     // Russian are translations of it, produced on demand by the language
     // buttons, exactly like each other.
     setM('Analysing cut & strip requirements… a dense drawing can take up to 2 minutes — leave this open',55);
-    _csOnProgress=n=>setM(`The drawing is bigger than one reply — continuing (${n})…`, 55+n*3);
+    _csOnProgress=(n,phase)=>setM(
+      phase==='detail' ? _csT('Reading the wiring table, the labels and the notes…')
+                       : `The drawing is bigger than one reply — continuing (${n})…`,
+      phase==='detail' ? 72 : 55+n*3);
     let spec;
     try{ spec=await aiAnalyzeCutStrip(text, isImage, imgData, _CS_SOURCE_LANG); }
     finally{ _csOnProgress=null; }
@@ -13012,6 +13145,23 @@ async function _csAttachDatasheets(spec, onProgress){
 }
 
 // ── Rendering: the sheet ──────────────────────────────────────────────────────
+// A whole sentence, translated whole, with its numbers dropped in afterwards.
+// Stitching a line out of "Cut" + "of" + "into" gives a phrasebook, not a
+// sentence: in Hebrew those words each want a different form depending on what
+// follows them, and the result read like an instruction manual translated by a
+// machine. The placeholders are escaped; the sentence is not, so a translation
+// can put a number in bold where that language wants the emphasis.
+// The emphasis is a span, not a <b>: inside .cs-box a <b> is display:block,
+// which took "Cut 12000 mm of 55A0111-22-0" and stacked it down the page one
+// value per line. And it is bidi-isolated rather than forced LTR, so a number
+// or a part number keeps its own direction inside a Hebrew sentence without
+// dragging the words after it across the page.
+function _csSay(tpl, vars){
+  const txt=esc(_csT(tpl));
+  return txt.replace(/\{(\w+)\}/g, (m,k)=>
+    Object.prototype.hasOwnProperty.call(vars||{}, k)
+      ? `<span style="font-weight:800;unicode-bidi:isolate">${esc(String(vars[k]))}</span>` : m);
+}
 function _csTBC(){ return `<span class="cs-tag cs-tbc">${esc(_csT('TO BE CONFIRMED'))}</span>`; }
 function _csDim(value, confirmed){
   const v=_csNum(value);
@@ -13328,8 +13478,9 @@ function renderCutStripSheet(){
           cut.capped?` <b>${esc(T('Allowances were held back to keep the piece within the drawn length.'))}</b>`:''}</p>` : ''}
         ${d.overrode ? `<div class="cs-box cs-warn">
           <b>${esc(T('The analysis read the dimension differently'))}</b>
-          <p>${esc(T('It took the length as'))} <b>${esc(T(_CS_BASIS_LABEL[d.overrode]||d.overrode))}</b>.
-            ${esc(T('Both ends of this run are connectors, so the sheet reads the dimension as spanning them and cuts to the drawn length — cutting longer makes a harness that will not fit, and costs a whole piece out of every reel. If the drawing really is measured the other way, set it in Edit and tick Confirmed; your answer then stands.'))}</p>
+          <p>${_csSay('The analysis took the length as “{read}”. Both ends of this run are connectors, so the sheet reads the dimension as spanning them and cuts to the drawn length: cutting longer makes a harness that will not fit, and costs a whole piece out of every reel.',
+              {read:T(_CS_BASIS_LABEL[d.overrode]||d.overrode)})}
+            ${esc(T('If the drawing really is measured the other way, set it in Edit and tick Confirmed — your answer then stands.'))}</p>
         </div>` : ''}
         ${!d.stated ? `<div class="cs-box cs-warn">
           <b>${esc(T('The drawing does not say where the length is measured from'))}</b>
@@ -13338,9 +13489,24 @@ function renderCutStripSheet(){
             : T('The shop default was used — to the jacket end at each end, with the connector allowance added. If this drawing dimensions over the connectors instead, the cable is SHORTER than the figure above: set it in Edit before anyone cuts.'))}</p>
         </div>` : ''}
 
+        ${!build && !(spec.materials||[]).length ? `<div class="cs-box cs-stop">
+          <b>${esc(T('No part list came back for this drawing'))}</b>
+          <p>${esc(T('Without the BOM the sheet cannot say whether this run is a ready-made cable or a bundle built from separate wires, and it cannot work out how many pieces to cut from each reel. Re-run the analysis, or type the wire lines into the materials list in Edit.'))}</p>
+        </div>` : ''}
         ${build ? `<div class="cs-box cs-stop">
           <b>${esc(T('This is not a ready-made cable — it is built from individual wires'))}</b>
           <p>${esc(T('Cut the stock below into pieces, then lay the pieces together into the harness.'))}</p>
+          <!-- The instruction in the words the bench uses, before any table.
+               An operator reading this sheet should not have to derive "cut
+               four pieces" from a column headed "Cut into": the sentence that
+               tells them what to do at the reel comes first, and the table
+               underneath is the checkable arithmetic behind it. -->
+          <ol class="cs-do">
+            ${build.byPn.map(b=>`<li>${_csSay('Cut {stock} of {pn} into {n} pieces of {each}.', {
+              stock:_csMM(b.totalMm), pn:b.pn||'—', n:b.pieces, each:_csMM(build.perWireMm)})}</li>`).join('')}
+            <li>${_csSay('Lay the {n} pieces together — that bundle is the harness. Strip and terminate each end out of this length; do not cut any piece longer.',
+              {n:build.pieces})}</li>
+          </ol>
           <table class="cs-tbl cs-form-tbl" style="margin-top:8px">
             <thead><tr><th style="width:30%">${esc(T('Part number'))}</th>
               <th style="width:20%">${esc(T('On the BOM'))}</th>
