@@ -1494,17 +1494,35 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   const cut=G('_csCutLength'), datum=G('_csDatum'), connLen=G('_csEndConnLen'),
         formula=G('_csCutFormula'), MODEL=G('_CS_CUT_MODEL');
 
-  const mk=basis=>({
+  const mk=(basis,confirmed)=>({
     cut_model:MODEL,
     connectors:[{ref:'P1', part_number:'A', body_length_mm:30},
                 {ref:'P2', part_number:'B', body_length_mm:20}],
     segments:[{id:'S1', finished_length_mm:4000, length_basis:basis,
+      length_basis_confirmed:confirmed===true,
       ends:[{ref:'P1', strip:[{code:'A', value_mm:10, confirmed:true}]},
             {ref:'P2', strip:[{code:'A', value_mm:10, confirmed:true}]}]}]});
 
-  // To the jacket end: the cable inside each connector is EXTRA.
-  const j=mk('to_jacket_end');
+  // To the jacket end: the cable inside each connector is EXTRA. On a run that
+  // ends in two connectors this only stands once a person has confirmed it —
+  // see the override below.
+  const j=mk('to_jacket_end', true);
   t('datum: to the jacket end adds both ends', cut(j.segments[0], j).total, 4023);   // 4000 + (10+1.5)*2
+  t('datum: ...and a confirmed basis is left alone', datum(j.segments[0], j).overrode, '');
+
+  // Unconfirmed, the analysis's jacket-end guess loses to the geometry: two
+  // connector ends means the dimension spans them, and a cut past the drawn
+  // length is the one mistake that cannot be recovered at the bench.
+  const g=mk('to_jacket_end');
+  t('datum: an unconfirmed jacket-end guess between connectors is overruled',
+    datum(g.segments[0], g).basis, 'over_connectors');
+  t('datum: ...and the sheet says what it overrode',
+    datum(g.segments[0], g).overrode, 'to_jacket_end');
+  t('datum: ...so the cut does not exceed the drawing', cut(g.segments[0], g).total, 3950);
+  // "The bare cable" is a different claim, not a guess about the ends, and it
+  // never overruns the dimension — so it stands as given.
+  const cb=mk('cable_only');
+  t('datum: the bare cable reading is not overruled', datum(cb.segments[0], cb).basis, 'cable_only');
 
   // Over the connectors the dimension is the FINISHED harness: the cable inside
   // each connector is already inside the figure, so nothing is added for an
@@ -1936,6 +1954,74 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('v1.50 sheet: ...because nothing is added at an end the dimension covers', c.added, 0);
   t('v1.50 sheet: ...the 3.5 mm strip is taken out of the 3000, not onto it',
     c.endCosts.map(e=>e.mm), [0,0]);
+}
+
+// ──────────────────────────── 40. the v1.51.0 sheet: 3010 and three pieces
+// The BOM arithmetic was right this time — 12000 mm, not 144000 — but the
+// analysis declared the length "to the jacket end" on a run that goes plug
+// face to plug face. 3.5 + 1.5 at each end made the cut 3010, and 12000 / 3010
+// is three pieces with 2970 mm wasted, on a harness that needs four.
+{
+  const build=G('_csWireBuild'), cut=G('_csCutLength'), datum=G('_csDatum'), MODEL=G('_CS_CUT_MODEL');
+  const sp={cut_model:MODEL,
+    materials:[{item:7, part_number:'55A0111-22-0', description:'Wire 22 AWG Black', qty:12, length_mm:12000},
+               {item:8, part_number:'55A0111-22-2', description:'Wire 22 AWG Red',   qty:12, length_mm:12000}],
+    connectors:[{ref:'P1', part_number:'TV06RW1135PF472A', kind:'connector', termination:'crimp'},
+                {ref:'Terminal Power', part_number:'TV06RW1135SF472A', kind:'connector', termination:'crimp'}],
+    segments:[{id:'S1', finished_length_mm:3000, length_basis:'to_jacket_end',
+      cable_description:'22 AWG wires, black and red', conductors:[],
+      ends:[{ref:'P1', strip:[{code:'A', value_mm:3.5, confirmed:false}]},
+            {ref:'Terminal Power', strip:[{code:'A', value_mm:3.5, confirmed:false}]}]}]};
+
+  const d=datum(sp.segments[0], sp);
+  t('v1.51 sheet: the jacket-end reading is overruled', d.basis, 'over_connectors');
+  t('v1.51 sheet: ...and the sheet can say what it overrode', d.overrode, 'to_jacket_end');
+  t('v1.51 sheet: the cut is 3000, not 3010', cut(sp.segments[0], sp).total, 3000);
+
+  const b=build(sp.segments[0], sp);
+  t('v1.51 sheet: four pieces per reel, not three', b.lines.map(l=>l.pieces), [4,4]);
+  t('v1.51 sheet: ...eight wires in one harness', b.pieces, 8);
+  t('v1.51 sheet: ...and no 2970 mm offcut', b.leftoverMm, 0);
+
+  // An engineer who knows the drawing really is dimensioned to the jacket end
+  // says so once, and from then on the sheet does it their way.
+  const conf=JSON.parse(JSON.stringify(sp));
+  conf.segments[0].length_basis_confirmed=true;
+  t('v1.51 sheet: a confirmed basis stands', cut(conf.segments[0], conf).total, 3010);
+}
+
+// ──────────────────────────── 41. an analysis that finishes
+{
+  const done=G('_csComplete'), loopy=G('_csLoopy'), search=G('_csMfrSearch');
+
+  t('finish: a closed object is finished', done('{"a":1,"b":[2,3]}'), true);
+  t('finish: a truncated one is not', done('{"a":1,"b":[2,'), false);
+  t('finish: a brace inside a string does not close it', done('{"a":"}"'), false);
+  t('finish: ...and one that is closed after it does', done('{"a":"}"}'), true);
+  t('finish: an escaped quote does not open a string', done('{"a":"x\\""}'), true);
+  t('finish: prose before the object is ignored', done('here you go:\n{"a":1}'), true);
+  t('finish: no object at all is not finished', done('sorry, I cannot read this'), false);
+
+  // The stutter that was eating whole windows: the same row again and again
+  // with one field changing, which the exact-tail test slid straight past.
+  const row=i=>`{"name":"NET_${i}","color":"BLK","awg":22,"from_pin":"1","to_pin":"1","note":""},`;
+  let stutter='{"conductors":[';
+  for(let i=0;i<120;i++) stutter+=row(1);
+  t('finish: a repeating row is a loop', loopy(stutter), true);
+  let real='{"conductors":[';
+  for(let i=0;i<120;i++) real+=row(i);
+  t('finish: ...but a table of different rows is not', loopy(real), false);
+
+  // Supplier documents: a real datasheet wins, and a part no distributor
+  // carries still gets the engineer to the manufacturer.
+  const a=search('TV06RW1135PF472A','Amphenol');
+  t('links: an Amphenol part searches Amphenol', a.name, 'Amphenol');
+  ok('links: ...at the manufacturer own site', a.url.startsWith('https://www.amphenol.com/'));
+  ok('links: ...carrying the part number', a.url.includes('TV06RW1135PF472A'));
+  t('links: the series alone is enough to place it', search('TV06RW1135SF472A','').name, 'Amphenol');
+  ok('links: an unknown manufacturer still gets a search',
+     search('55A0111-22-0','Radion').url.includes('datasheet'));
+  t('links: no part number, no link', search('', 'Amphenol'), null);
 }
 
 // ─────────────────────────────────────────── report

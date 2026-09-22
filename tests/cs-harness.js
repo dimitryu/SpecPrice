@@ -107,8 +107,15 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   ok('form: one figure per end ('+figs+' for 2 ends)', figs===2);
   ok('form: ...carrying both dimensions', /A = 170 mm/.test(html) && /W = 45 mm/.test(html));
   no('form: no inches on the drawings', / in\)/.test(html));
-  // datasheets: only a real one, and no button to press
-  no('form: a connector with no datasheet on file gets no link', /class="cs-link/.test(html));
+  // datasheets: a document link ONLY when a distributor actually returned one.
+  // A part nobody carries — which on these drawings is most of them — gets a
+  // search at the manufacturer instead, plainly labelled as a search.
+  no('form: a connector with no datasheet on file gets no document link',
+     /\uD83D\uDCC4/.test(html));
+  ok('form: ...it gets a manufacturer search instead', /Search at/.test(html));
+  ok('form: ...pointing at the manufacturer own site', /amphenol\.com/.test(html));
+  ok('form: ...and says it is a search, not the document',
+     /this is a search, not the document/.test(html));
   // A sheet with no links tries once to fill them in, with no button to press.
   ok('form: opening a sheet asks for the datasheets it is missing',
      /cut_strip_datasheets|datasheets_checked/.test(M._csBackfillDatasheets.toString()));

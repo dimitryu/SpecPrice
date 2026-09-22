@@ -763,7 +763,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.51.0';
+const APP_VER   = '1.52.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -9656,29 +9656,61 @@ function _csEndConnLen(end, spec){
 // of the jacket-end convention, which would add millimetres at both ends and
 // issue a cable too long to fit where it is going. The jacket-end default
 // survives only where it is right: a run that does not end in connectors.
+const _CS_FREE_END_RE=/\b(open|free|blunt|pigtail|flying|tinned|unterminated|bare|stripped|splice)\b/i;
 function _csRunIsBetweenConnectors(seg, spec){
   const ends=Array.isArray(seg?.ends) ? seg.ends : [];
   if(ends.length<2) return false;
   const conns=_csConnectors(spec)||[];
+  // A free end is listed among the connectors too — as OPEN, a pigtail, a
+  // blunt cut — so that the run has somewhere to finish. Those are not
+  // connector bodies and a dimension does not span them, so they do not count.
+  const bodied=c=>{
+    const txt=`${c.kind||''} ${c.type||''} ${c.ref||''} ${c.part_number||''} ${c.description||''}`;
+    return !_CS_FREE_END_RE.test(txt);
+  };
   const named=r=>{
     const k=String(r||'').trim().toUpperCase();
     if(!k) return false;
-    return conns.some(c=>String(c.ref||'').trim().toUpperCase()===k);
+    return conns.some(c=>String(c.ref||'').trim().toUpperCase()===k && bodied(c));
   };
   // Every end of the run has to be a connector: one free end and the dimension
   // is measuring something else again.
   return ends.every(e=>named(e.ref));
 }
+// Almost no drawing prints where its overall dimension is taken from, so the
+// analysis's answer here is inference, not a reading — and on this family of
+// drawings it guessed "to the jacket end" on a run that plainly goes connector
+// face to connector face, which added 10 mm and turned four 3000 mm pieces out
+// of a 12 m reel into three. The consequence of being wrong in that direction
+// is a harness too long to fit and a reel short by a whole piece, so the
+// geometry wins over the guess: two connector ends means the dimension spans
+// them. A person who knows better says so in Edit and ticks Confirmed, and
+// from then on their answer is the one that counts.
 function _csDatum(seg, spec){
   const declared=String(seg?.length_basis||'').trim();
   const known=[_CS_BASIS_JACKET,_CS_BASIS_CABLE,_CS_BASIS_OVER].includes(declared);
-  const fallback=_csRunIsBetweenConnectors(seg, spec) ? _CS_BASIS_OVER : _CS_BASIS_JACKET;
+  const human=seg?.length_basis_confirmed===true;
+  const between=_csRunIsBetweenConnectors(seg, spec);
+  if(human && known)
+    return {basis:declared, stated:true, assumed:'', overrode:'',
+            label:_CS_BASIS_LABEL[declared], confirmed:true};
+  // Only the jacket-end reading is overruled, and only because it is the one
+  // that makes the piece LONGER than the drawing. "The bare cable" is a
+  // different claim, not a guess about connector geometry, and it never
+  // produces a cut past the dimension — so it is left alone.
+  const unsafe = !known || declared===_CS_BASIS_JACKET;
+  if(between && unsafe)
+    return {basis:_CS_BASIS_OVER, stated:known, assumed:known?'':_CS_BASIS_OVER,
+            // what the analysis had said, when we are not taking its word for it
+            overrode:known ? declared : '',
+            label:_CS_BASIS_LABEL[_CS_BASIS_OVER], confirmed:false};
   return {
-    basis: known ? declared : fallback,
+    basis: known ? declared : _CS_BASIS_JACKET,
     stated: known,                                  // the drawing told us
-    assumed: known ? '' : fallback,                 // what we fell back to, and why it is on the sheet
+    assumed: known ? '' : _CS_BASIS_JACKET,         // what we fell back to, and why it is on the sheet
+    overrode: '',
     label: _CS_BASIS_LABEL[known?declared:'unclear'],
-    confirmed: seg?.length_basis_confirmed===true,
+    confirmed: false,
   };
 }
 
@@ -9765,18 +9797,13 @@ function _csCutLength(seg, spec){
     .filter(a=>a.mm!==0 || a.reason);
   const trim=_csNum(seg?.trim_allowance_mm)||0;
 
-  // Under the jacket-end convention the per-end cost is derived here rather than
-  // taken from the analysis. Specs saved under the old basis keep their stored
-  // allowances so their numbers do not move under anyone's feet.
-  // What the dimension measures decides the arithmetic (see _csDatum above).
-  // An unstamped spec — saved before this convention existed — keeps its own
-  // stored allowances untouched, because numbers on a shop-floor sheet must not
-  // move under someone who has already read them.
-  const stamped = String(spec?.cut_model||'')===_CS_CUT_MODEL;
+  // What the dimension measures decides the arithmetic, and _csDatum above is
+  // the single place that decides it — from the drawing when it says, from the
+  // run's own geometry when it does not, and from the engineer once they have
+  // confirmed it. The per-end cost is then derived here rather than taken from
+  // the analysis, so the sum on the sheet is always the sum that was used.
   const datum=_csDatum(seg, spec);
-  const declared=String(seg?.length_basis||'');
-  const basis = stamped || datum.stated ? datum.basis
-              : ((declared==='' || declared==='unclear') ? _CS_BASIS_JACKET : declared);
+  const basis = datum.basis;
   if((basis===_CS_BASIS_JACKET || basis===_CS_BASIS_OVER) && finished!=null){
     const margin=_csEndMargin(seg, spec);
     const ends=[];
@@ -10342,6 +10369,12 @@ const _CS_LABELS={
     "No body length is on file for":"אין אורך גוף רשום עבור",
     "The drawing does not say where the length is measured from":"הסרטוט לא מציין מהיכן נמדד האורך",
     "The shop default was used — to the jacket end at each end, with the connector allowance added. If this drawing dimensions over the connectors instead, the cable is SHORTER than the figure above: set it in Edit before anyone cuts.":"נלקחה ברירת המחדל של המפעל — עד קצה המעטפת בכל צד, עם תוספת המחבר. אם בסרטוט הזה המידה נלקחת כולל המחברים, הכבל קצר מהמספר שלמעלה: יש לשנות בעריכה לפני שחותכים.",
+    "The analysis read the dimension differently":"הניתוח קרא את המידה אחרת",
+    "Search at":"חיפוש אצל",
+    "Search for the datasheet":"חיפוש דף הנתונים",
+    "No distributor holds a datasheet for this part — this is a search, not the document":"לאף ספק אין דף נתונים למק״ט הזה — זהו חיפוש, לא המסמך עצמו",
+    "It took the length as":"הוא לקח את האורך כ־",
+    "Both ends of this run are connectors, so the sheet reads the dimension as spanning them and cuts to the drawn length — cutting longer makes a harness that will not fit, and costs a whole piece out of every reel. If the drawing really is measured the other way, set it in Edit and tick Confirmed; your answer then stands.":"שני קצוות המקטע הם מחברים, ולכן הטופס קורא את המידה ככוללת אותם וחותך בדיוק לאורך שבסרטוט — חיתוך ארוך יותר נותן צמה שלא נכנסת, ועולה חתיכה שלמה מכל גליל. אם בסרטוט המידה באמת נמדדת אחרת, יש לקבוע זאת בעריכה ולסמן לאימות; מאותו רגע התשובה שלכם היא הקובעת.",
     "Both ends of this run are connectors, so the dimension was taken to span them — the finished harness, connectors included. The piece is therefore cut to the drawn length and no further: the strip comes out of it. If this drawing measures to the jacket end instead, the cable is LONGER than the figure above: set it in Edit before anyone cuts.":"שני קצוות המקטע הם מחברים, ולכן ההנחה היא שהמידה נמדדת מקצה מחבר אחד לשני — הצמה המוגמרת כולל המחברים. לכן חותכים בדיוק לאורך שבסרטוט ולא יותר, והחשיפה יוצאת מתוך האורך הזה. אם בסרטוט הזה המידה נמדדת עד קצה המעטפת, הכבל ארוך מהמספר שלמעלה: יש לשנות בעריכה לפני שחותכים.",
     "This is not a ready-made cable — it is built from individual wires":"זה לא כבל מוכן — הוא נבנה מחוטים בודדים",
     "The BOM carries more wire than one run needs, so the run is made up from separate wires.":"ב-BOM רשום אורך חוט גדול ממה שדרוש למקטע אחד, ולכן המקטע מורכב מחוטים נפרדים.",
@@ -11854,15 +11887,26 @@ async function _csAnthropic(text, isImage, imgData, lang){
   // a per-reply ceiling, and it is why the old truncation error had become the
   // most common way this screen failed.
   let out=await ask(messages);
-  let reply=out.text, rounds=0;
-  while(out.stop==='max_tokens' && rounds<_CS_MAX_CONTINUATIONS && !_csLoopy(reply)){
+  let reply=out.text, rounds=0, stopReason='';
+  while(out.stop==='max_tokens' && rounds<_CS_MAX_CONTINUATIONS){
+    // Three ways a continuation is not worth buying, all of them meaning the
+    // model is no longer making progress towards a closing brace. Spotting
+    // them matters more than the ceiling does: a run that spends its whole
+    // budget on a stutter hands over a partial sheet after four minutes.
+    if(_csLoopy(reply)){ stopReason='loop'; break; }
+    if(reply.length>=_CS_MAX_REPLY_CHARS){ stopReason='budget'; break; }
+    if(_csComplete(reply)){ stopReason='complete'; break; }
     rounds++;
     if(_csOnProgress) _csOnProgress(rounds);
     // The partial answer becomes a prefilled assistant turn; the model writes
     // the rest of it. Trailing whitespace in a prefill is rejected by the API.
     const partial=_csTrimPrefill(reply);
+    const before=partial.length;
     out=await ask([...messages, {role:'assistant', content:partial}]);
     reply=_csStitch(partial, out.text);
+    // A continuation that adds almost nothing, or that only repeats what it
+    // was handed, will do the same again next round.
+    if(reply.length-before<40){ stopReason='stalled'; break; }
   }
   // Out of continuations and still unfinished: rather than throwing away
   // everything the model did write, the reply is repaired and whatever it
@@ -11870,9 +11914,15 @@ async function _csAnthropic(text, isImage, imgData, lang){
   // complete reading of the drawing. _csParse only throws now when there is
   // genuinely nothing usable in the answer.
   const spec=_csParse(reply);
-  if(out.stop==='max_tokens') spec._partial=true;
+  // Partial means the answer really was cut off mid-thought. A reply that the
+  // salvage could close, or that we stopped because it had said everything it
+  // was going to say, is a whole reading of the drawing even if the API's last
+  // stop_reason was max_tokens — flagging those taught the operator to ignore
+  // the banner, which is worse than not having one.
+  if(out.stop==='max_tokens' && stopReason!=='complete' && !_csComplete(reply))
+    spec._partial=true;
   logSystemAudit('cut_strip_reply',
-    {stop:out.stop, rounds, chars:reply.length, partial:!!spec._partial}, true);
+    {stop:out.stop, why:stopReason, rounds, chars:reply.length, partial:!!spec._partial}, true);
   return spec;
 }
 // A model writing a long structured answer at temperature 0 can fall into a
@@ -11886,7 +11936,44 @@ function _csLoopy(text){
   const tail=t.slice(-_CS_LOOP_TAIL);
   let n=0, i=0;
   while((i=t.indexOf(tail,i))!==-1){ n++; i+=_CS_LOOP_TAIL; if(n>=_CS_LOOP_HITS) return true; }
+  // The exact-tail test above only catches a stutter that repeats on a clean
+  // boundary. A model going round the same table with one field changing each
+  // time slips past it, and that is the shape that was eating whole windows —
+  // so the end of the answer is also checked for a short phrase that keeps
+  // coming back within it.
+  const tl=t.slice(-_CS_LOOP_WINDOW);
+  if(tl.length>=_CS_LOOP_WINDOW){
+    const probe=tl.slice(-_CS_LOOP_PROBE);
+    let m=0, j=0;
+    while((j=tl.indexOf(probe,j))!==-1){ m++; j+=_CS_LOOP_PROBE; if(m>=_CS_LOOP_PROBE_HITS) return true; }
+  }
   return false;
+}
+const _CS_LOOP_WINDOW=4000, _CS_LOOP_PROBE=90, _CS_LOOP_PROBE_HITS=5;
+// Roughly the largest sensible reading of a harness drawing, in characters.
+// Past this the model is padding, not describing: the answer is taken as it
+// stands and the salvage closes it, which is a complete sheet minus the tail
+// rather than four more minutes ending in the same place.
+const _CS_MAX_REPLY_CHARS=120000;
+// Whether the answer has actually finished — every bracket it opened is
+// closed, outside of strings. The API says "max_tokens" whenever it hits the
+// ceiling, including on the very token after the final brace, so this is what
+// distinguishes a finished answer from a truncated one.
+function _csComplete(text){
+  const t=String(text||'');
+  const a=t.indexOf('{');
+  if(a<0) return false;
+  let depth=0, inStr=false, esc=false, closed=false;
+  for(let i=a;i<t.length;i++){
+    const c=t[i];
+    if(esc){ esc=false; continue; }
+    if(c==='\\'){ esc=true; continue; }
+    if(c==='"'){ inStr=!inStr; continue; }
+    if(inStr) continue;
+    if(c==='{'||c==='[') depth++;
+    else if(c==='}'||c===']'){ depth--; if(depth===0){ closed=true; break; } }
+  }
+  return closed;
 }
 // The API rejects a prefilled assistant turn that ends in whitespace, and a
 // continuation must not repeat the character it stopped on.
@@ -12831,6 +12918,47 @@ function _csDatasheetLink(url, vendor){
   return `<a class="cs-link" href="${esc(u)}" target="_blank" rel="noopener noreferrer"
      title="${esc(_csT('Datasheet'))}${vendor?` — ${esc(vendor)}`:''}">\uD83D\uDCC4 ${esc(_csT('Datasheet'))}</a>`;
 }
+// When no distributor holds a datasheet for the part, the operator still needs
+// the manufacturer's document — and on this shop's drawings that is the usual
+// case, because military circular connectors are not catalogue stock at Mouser
+// or DigiKey. What is offered then is a SEARCH at the manufacturer, never a
+// guessed document URL: a search always resolves, says plainly that it is a
+// search, and puts the engineer one click from the real specification instead
+// of one click from a 404.
+const _CS_MFR_SEARCH=[
+  [/amphenol|\bTV0\d|\bD38999\b/i, 'Amphenol',    'https://www.amphenol.com/search?q='],
+  [/\bTE\b|te connectivity|raychem|deutsch/i, 'TE Connectivity', 'https://www.te.com/en/search.html?q='],
+  [/molex/i,    'Molex',    'https://www.molex.com/en-us/search/products?query='],
+  [/glenair/i,  'Glenair',  'https://www.glenair.com/search/?q='],
+  [/souriau|sunbank/i, 'Souriau', 'https://www.souriau.com/en/search?search_api_fulltext='],
+  [/itt cannon|\bcannon\b/i, 'ITT Cannon', 'https://www.ittcannon.com/search?q='],
+  [/hirose/i,   'Hirose',   'https://www.hirose.com/en/search/?q='],
+  [/\bJAE\b/i,  'JAE',      'https://www.jae.com/en/search/?q='],
+  [/harting/i,  'HARTING',  'https://www.harting.com/en/search?q='],
+  [/smiths|hypertac/i, 'Smiths Interconnect', 'https://www.smithsinterconnect.com/search/?q='],
+  [/lemo/i,     'LEMO',     'https://www.lemo.com/en/search?q='],
+];
+function _csMfrSearch(pn, manufacturer){
+  const key=String(pn||'').trim();
+  if(!key) return null;
+  const hay=`${manufacturer||''} ${key}`;
+  const hit=_CS_MFR_SEARCH.find(r=>r[0].test(hay));
+  if(hit) return {name:hit[1], url:hit[2]+encodeURIComponent(key)};
+  // No manufacturer we have a site for: a plain web search for the part number
+  // and the word datasheet is still the fastest honest route to the document.
+  return {name:String(manufacturer||'').trim(),
+          url:'https://duckduckgo.com/?q='+encodeURIComponent(`"${key}" ${manufacturer||''} datasheet`.trim())};
+}
+function _csPartDocLink(url, vendor, pn, manufacturer){
+  const real=_csDatasheetLink(url, vendor);
+  if(real) return real;
+  const s=_csMfrSearch(pn, manufacturer);
+  if(!s) return '';
+  const label=s.name ? `${_csT('Search at')} ${s.name}` : _csT('Search for the datasheet');
+  return `<a class="cs-link cs-link-s" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"
+     title="${esc(_csT('No distributor holds a datasheet for this part — this is a search, not the document'))}"
+     >\uD83D\uDD0D ${esc(label)}</a>`;
+}
 // A specification made before this existed — or one whose parts the
 // distributors had nothing on that day — has no links. Opening it fills them
 // in, once, in the background: no button to remember, and no repeat of a
@@ -13198,6 +13326,11 @@ function renderCutStripSheet(){
           cut.missingConn?` <b style="color:#B91C1C">${esc(T('No body length is on file for'))} ${cut.missingConn} ${
           esc(T('connector(s) — nothing was subtracted for them, so the piece is cut to the full drawn length.'))}</b>`:''}${
           cut.capped?` <b>${esc(T('Allowances were held back to keep the piece within the drawn length.'))}</b>`:''}</p>` : ''}
+        ${d.overrode ? `<div class="cs-box cs-warn">
+          <b>${esc(T('The analysis read the dimension differently'))}</b>
+          <p>${esc(T('It took the length as'))} <b>${esc(T(_CS_BASIS_LABEL[d.overrode]||d.overrode))}</b>.
+            ${esc(T('Both ends of this run are connectors, so the sheet reads the dimension as spanning them and cuts to the drawn length — cutting longer makes a harness that will not fit, and costs a whole piece out of every reel. If the drawing really is measured the other way, set it in Edit and tick Confirmed; your answer then stands.'))}</p>
+        </div>` : ''}
         ${!d.stated ? `<div class="cs-box cs-warn">
           <b>${esc(T('The drawing does not say where the length is measured from'))}</b>
           <p>${esc(d.assumed===_CS_BASIS_OVER
@@ -13263,9 +13396,9 @@ function renderCutStripSheet(){
         <td>${_csFRaw(`connectors.${i}.contact_pn`, c.contact_pn)}</td>
         <td>${_csFText(`connectors.${i}.description`, c.description)}
           ${c._inferred?`<span class="cs-tag cs-tbc">${esc(T('not described on the sheet'))}</span>`:''}</td>
-        <td>${_csDatasheetLink(c.datasheet_url, c.datasheet_url_vendor)}
-          ${_csSafeUrl(c.contact_datasheet_url)?`<div class="cs-links-sub">${esc(T('Contact'))}:</div>
-            ${_csDatasheetLink(c.contact_datasheet_url, c.contact_datasheet_url_vendor)}`:''}</td></tr>`).join('')}
+        <td>${_csPartDocLink(c.datasheet_url, c.datasheet_url_vendor, c.part_number, c.manufacturer)}
+          ${String(c.contact_pn||'').trim()?`<div class="cs-links-sub">${esc(T('Contact'))}:</div>
+            ${_csPartDocLink(c.contact_datasheet_url, c.contact_datasheet_url_vendor, c.contact_pn, c.manufacturer)}`:''}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
 
     <h2 class="cs-h2"><span class="cs-n">5</span>${esc(T('Schematic — cut & strip'))}</h2>
