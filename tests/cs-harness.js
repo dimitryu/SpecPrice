@@ -417,7 +417,28 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
      /PART LIST/.test(String(calls[1].messages[0].content)) && !/"segments"/.test(String(calls[1].messages[0].content)));
   ok('bom: ...and every row lands', (rb.materials||[]).length===2);
 
-  // 3. Whatever happened on the way, the sheet never says so.
+  // 3. The drawing is read by the stronger model; an account without it falls
+  //    back once to the small one instead of failing.
+  calls=[];
+  ok('model: the drawing is read by the stronger model', /sonnet/.test(String(vm.runInContext('_csModel()', ctx))));
+  let first=true;
+  vm.runInContext(`_csModelDown=false; _fetchWithRetry=async(u,o)=>{ const body=JSON.parse(o.body); __f.note(body);
+      if(__f.first()) return {ok:false, status:404, json:async()=>({error:{message:'model: claude-sonnet-5 not_found'}})};
+      const r=__f.next();
+      return {ok:true, json:async()=>({content:[{type:'text',text:r[0]}], stop_reason:r[1]})};
+    };`, ctx);
+  ctx.__f.first=()=>{ const f=first; first=false; return f; };
+  Q=[[WHOLE,'end_turn'], ['{}','end_turn']];
+  const fb=await M.aiAnalyzeCutStrip('drawing text', false, null, 'en');
+  ok('model: a rejected model falls back instead of failing', !!fb && fb.drawing_number==='R1');
+  ok('model: ...to the small one', calls.length>=2 && /haiku/.test(calls[1].model) && /sonnet/.test(calls[0].model));
+  const cp=String(calls[1].messages[0].content);
+  ok('prompt: a dimension chain is not a list of cables', /DIMENSION CHAIN ALONG ONE CABLE IS NOT A LIST OF CABLES/.test(cp));
+  ok('prompt: labels along the cable are markers', /LABELS ALONG THE CABLE are markers/.test(cp));
+  ok('prompt: a fan-out end has legs', /"legs":\[/.test(cp) && /ONE END CAN FAN OUT/.test(cp));
+  vm.runInContext(`_csModelDown=false;`, ctx);
+
+  // 4. Whatever happened on the way, the sheet never says so.
   const P=JSON.parse(JSON.stringify(SPEC));
   P._partial=true;
   P.segments[0].length_basis='to_jacket_end';           // a reading the sheet overrules

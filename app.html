@@ -202,6 +202,11 @@
     .cs-do b { font-weight:800; }
     .cs-ai-note { margin:0 0 10px; padding:9px 12px; border:1px solid #CBD5E1; border-inline-start:4px solid #1E293B;
                   background:#F8FAFC; font-size:13px; font-weight:700; color:#0F172A; }
+    .cs-steps { margin:6px 0 14px; padding-inline-start:22px; }
+    .cs-steps > li { margin:0 0 10px; font-size:14px; }
+    .cs-step-t { font-weight:800; font-size:14.5px; margin-bottom:2px; }
+    .cs-step-sub { font-weight:500; color:#475569; font-size:12.5px; margin-inline-start:6px; }
+    .cs-step-why { display:block; color:#64748B; font-size:12.5px; }
     .cs-doc-t { font-size:24px; font-weight:800; letter-spacing:-.01em; }
     .cs-doc-s { font-size:14px; color:#334155; margin-top:3px; }
     .cs-kv { display:grid; grid-template-columns:auto 1fr; gap:5px 14px; font-size:13px; margin:0; }
@@ -770,7 +775,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.54.0';
+const APP_VER   = '1.55.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -9663,6 +9668,10 @@ function _csEndConnLen(end, spec){
 // of the jacket-end convention, which would add millimetres at both ends and
 // issue a cable too long to fit where it is going. The jacket-end default
 // survives only where it is right: a run that does not end in connectors.
+// The individually terminated conductors of a fan-out end, cleaned up.
+function _csEndLegs(end){
+  return (Array.isArray(end?.legs)?end.legs:[]).filter(l=>l && (l.to||l.conductor||_csNum(l.length_mm)!=null));
+}
 const _CS_FREE_END_RE=/\b(open|free|blunt|pigtail|flying|tinned|unterminated|bare|stripped|splice)\b/i;
 function _csRunIsBetweenConnectors(seg, spec){
   const ends=Array.isArray(seg?.ends) ? seg.ends : [];
@@ -9680,9 +9689,14 @@ function _csRunIsBetweenConnectors(seg, spec){
     if(!k) return false;
     return conns.some(c=>String(c.ref||'').trim().toUpperCase()===k && bodied(c));
   };
-  // Every end of the run has to be a connector: one free end and the dimension
+  // An end that fans out into individually terminated conductors — ferrules,
+  // lugs — is a finished end just as a connector is: the drawing's overall
+  // length runs to the tips of those terminals, not to some point short of
+  // them.
+  const finished=e=>named(e.ref) || _csEndLegs(e).length>0;
+  // Every end of the run has to be finished: one free end and the dimension
   // is measuring something else again.
-  return ends.every(e=>named(e.ref));
+  return ends.every(finished);
 }
 // Almost no drawing prints where its overall dimension is taken from, so the
 // analysis's answer here is inference, not a reading — and on this family of
@@ -9825,7 +9839,7 @@ function _csCutLength(seg, spec){
         // the connector body, which is not cable at all, comes off. A body
         // length nobody supplied is counted as zero and reported, never
         // guessed: an invented 30 mm is 30 mm of scrap wearing a confident face.
-        const c=_csEndConnLen(e, spec);
+        const c=_csEndLegs(e).length ? 0 : _csEndConnLen(e, spec);
         let conn=0;
         if(c==null) missingConn++; else conn=c;
         ends.push({ref:e.ref||'', mm:_csR(-conn), strip:js.mm, margin:0, conn,
@@ -9894,6 +9908,9 @@ function _csSyncCutLength(spec){
 // because that is a fact rather than an inference from a rounded number.
 const _CS_WIRE_RE=/\b(wire|hook[- ]?up|lead|conductor)\b/i;
 const _CS_CABLE_RE=/\b(cable|jacket|sheath|multi-?conductor|coax)\b/i;
+const _CS_TERMINAL_RE=/\b(terminal|ferrule|lug|contact|pin|socket|splice|crimp|boot|backshell|label|tubing|shrink)\b/i;
+// "3 Cond", "4C", "3x1.5", "2 core", "shielded pair": several conductors in one part.
+const _CS_MULTICORE_RE=/\b(\d+\s*(cond|conductors?|cores?|c)\b|\d+\s*[x×]\s*\d|(un)?shielded|twisted\s+pair|pairs?\b)/i;
 // A length written anywhere the BOM puts it: its own field, the quantity column
 // with a unit, or the description.
 // How much wire one BOM line actually calls for, in millimetres.
@@ -9955,9 +9972,18 @@ function _csMatStock(m, runMm){
 function _csMatLenMm(m){ return _csMatStock(m).mm; }
 function _csIsWireMaterial(m){
   if(!m) return false;
-  if(String(m.kind||'').toLowerCase()==='wire') return true;
   const d=String(m.description||'')+' '+String(m.part_number||'');
-  return _CS_WIRE_RE.test(d) && !_CS_CABLE_RE.test(d);
+  // What the part IS outranks what the analysis called it. "Power Cable 14AWG,
+  // 3 Cond" is a ready-made cable even when the reading filed it under wire —
+  // and treating it as wire is what turned one 1 m cable into "4 pieces of
+  // 20 mm". A single conductor is a wire; several under one jacket never are.
+  if(_CS_CABLE_RE.test(d) || _CS_MULTICORE_RE.test(d)) return false;
+  // A terminal "for wire 14 AWG" mentions wire; it is still a terminal.
+  if(_CS_TERMINAL_RE.test(d)) return false;
+  const k=String(m.kind||'').toLowerCase();
+  if(k==='wire') return true;
+  if(k && k!=='other') return false;      // contact, connector, label, sleeve …
+  return _CS_WIRE_RE.test(d);
 }
 // How many pieces come off each BOM line, and what the bundle then contains.
 //
@@ -9971,6 +9997,15 @@ function _csWireBuild(seg, spec){
   if(perWire==null || perWire<=0) return null;
 
   const segPn=String(seg?.cable_part_number||'').trim().toUpperCase();
+  // The run names its own cable and the part list says that part is a cable:
+  // it is bought ready-made and cut to length, full stop. Nothing on the BOM
+  // is then "stock to build it from".
+  const own=(spec?.materials||[]).find(m=>segPn && String(m.part_number||'').trim().toUpperCase()===segPn);
+  if(own){
+    const od=`${own.description||''} ${own.part_number||''}`;
+    if(_CS_CABLE_RE.test(od) || _CS_MULTICORE_RE.test(od) || String(seg?.type||'')==='multi_conductor'
+       || String(seg?.type||'')==='coax') return null;
+  }
   const all=(spec?.materials||[]).map(m=>({m, mm:_csMatLenMm(m)})).filter(x=>x.mm!=null && x.mm>0);
   if(!all.length) return null;
 
@@ -9981,7 +10016,7 @@ function _csWireBuild(seg, spec){
   // missed.
   const wires=all.filter(x=>_csIsWireMaterial(x.m));
   const named=all.filter(x=>segPn && String(x.m.part_number||'').trim().toUpperCase()===segPn
-                            && !wires.includes(x));
+                            && !wires.includes(x) && !_CS_TERMINAL_RE.test(`${x.m.description||''}`));
   const chosen=wires.concat(named).sort((a,b)=>b.mm-a.mm);
   if(!chosen.length) return null;
 
@@ -10445,6 +10480,22 @@ const _CS_LABELS={
     "The layer names were not captured from the drawing — the cable is drawn generically. The dimensions are as specified.":"שמות השכבות לא נלכדו מהסרטוט — הכבל מצויר באופן כללי. המידות הן כפי שצוינו.",
     "measured inside A — it adds nothing to the cut length":"נמדד בתוך A — לא מוסיף כלום לאורך החיתוך",
     "This end adds to the cut length":"הקצה הזה מוסיף לאורך החיתוך",
+    "Cutting and stripping, step by step":"הוראות חיתוך וחשיפה שלב אחר שלב",
+    "Cut the cable":"חיתוך הכבל",
+    "Cut {cable} to {len}.":"לחתוך את {cable} לאורך {len}.",
+    "The length includes the connectors; nothing is added for the ends.":"האורך כולל את המחברים; לא מוסיפים דבר עבור הקצוות.",
+    "Prepare end {ref}":"הכנת קצה {ref}",
+    "Strip {mm} of the outer jacket.":"לחשוף {mm} מהמעטה החיצוני.",
+    "{label}: {mm}.":"{label}: {mm}.",
+    "Trim the conductors, measured from the jacket end:":"לקצר את הגידים, נמדד מקצה המעטה:",
+    "Strip {mm} at the tip of each conductor and crimp terminal {pn}.":"לחשוף {mm} בקצה כל גיד וללחוץ נעל {pn}.",
+    "Strip {mm} at the tip of each conductor.":"לחשוף {mm} בקצה כל גיד.",
+    "Strip {mm} from each conductor for the contacts of {pn}.":"לחשוף {mm} מכל גיד עבור המגעים של {pn}.",
+    "Strip {mm} from each conductor.":"לחשוף {mm} מכל גיד.",
+    "Pin":"פין",
+    "Colour":"צבע",
+    "To":"אל",
+    "To be confirmed against the contact or terminal datasheet before cutting.":"לאימות מול דף הנתונים של המגע או הנעל לפני החיתוך.",
     "This analysis is based on the attached drawing and was calculated by artificial intelligence. Engineering approval is therefore required before work begins.":"הניתוח מבוסס על הסרטוט המצורף וחושב ע״י בינה מלאכותית, ולכן יש לקבל אישור הנדסי לפני תחילת העבודה.",
     "Reading the wiring table, the labels and the notes…":"קורא את טבלת החיווט, הסימונים וההערות…",
     "Reading the drawing again…":"קורא את הסרטוט שוב…",
@@ -10706,6 +10757,21 @@ const _CS_LABELS={
     "The layer names were not captured from the drawing — the cable is drawn generically. The dimensions are as specified.":"Названия слоёв с чертежа не извлечены — кабель показан условно. Размеры указаны как заданы.",
     "measured inside A — it adds nothing to the cut length":"измеряется внутри A — к длине реза не добавляет",
     "This end adds to the cut length":"Этот конец добавляет к длине реза",
+    "Cutting and stripping, step by step":"Резка и зачистка — по шагам",
+    "Cut the cable":"Резка кабеля",
+    "Cut {cable} to {len}.":"Отрезать {cable} длиной {len}.",
+    "The length includes the connectors; nothing is added for the ends.":"Длина включает разъёмы; на концы ничего не добавляется.",
+    "Prepare end {ref}":"Подготовка конца {ref}",
+    "Strip {mm} of the outer jacket.":"Снять {mm} внешней оболочки.",
+    "Trim the conductors, measured from the jacket end:":"Укоротить жилы, от края оболочки:",
+    "Strip {mm} at the tip of each conductor and crimp terminal {pn}.":"Зачистить {mm} на конце каждой жилы и обжать наконечник {pn}.",
+    "Strip {mm} at the tip of each conductor.":"Зачистить {mm} на конце каждой жилы.",
+    "Strip {mm} from each conductor for the contacts of {pn}.":"Зачистить {mm} каждой жилы под контакты {pn}.",
+    "Strip {mm} from each conductor.":"Зачистить {mm} каждой жилы.",
+    "Pin":"Контакт",
+    "Colour":"Цвет",
+    "To":"Куда",
+    "To be confirmed against the contact or terminal datasheet before cutting.":"Уточнить по документации на контакт или наконечник до резки.",
     "This analysis is based on the attached drawing and was calculated by artificial intelligence. Engineering approval is therefore required before work begins.":"Анализ основан на приложенном чертеже и выполнен искусственным интеллектом, поэтому до начала работ требуется инженерное утверждение.",
     "The length marked on the drawing. It is not the length you cut.":"Длина, указанная на чертеже. Это не длина реза.",
     "A dimension in the written instructions is not one of this sheet’s numbers":"Размер в текстовых инструкциях не совпадает ни с одним числом этого листа",
@@ -11342,7 +11408,9 @@ ${core ? '' : `  "engineering_notes": [ {"n":"1","text":"the note restated for t
         { "ref":"P1",
           "strip":[ {"code":"A","label":"Jacket removed from the cable end","value_mm":25,"derived":false,
                      "confirmed":false,"basis":"where this number came from"} ],
-          "strip_tolerance_mm":0.5 }
+          "strip_tolerance_mm":0.5,
+          "legs":[ {"conductor":"Brown","to":"T1","length_mm":50,"strip_mm":8,"terminal_pn":"3200522",
+                    "confirmed":true} ] }
       ],
 
       "conductor_strip_mm": <number>, "conductor_strip_confirmed": <true|false>,
@@ -11366,6 +11434,37 @@ ${core ? '' : `  "sleeves":  [ {"part_number":"","kind":"heatshrink","segment":"
 }
 
 RULES — these matter more than completeness:
+
+0. HOW MANY CABLES THERE ARE comes from the PART LIST, not from the number of dimensions.
+   Read the BOM first. A line that is a CABLE — several conductors under one jacket, e.g. "Power Cable
+   14AWG, 3 Cond, Unshielded", with a quantity like "1m" — is ONE ready-made cable, and that is ONE
+   segment, with that part number, cut to the overall length. Only a harness built from separate wires,
+   or one with several separate cables, has more than one segment.
+   A DIMENSION CHAIN ALONG ONE CABLE IS NOT A LIST OF CABLES. On a single cable the drawing dimensions
+   many things — 70 at one end, 20 to a label, 1000 overall, 30 and 50 at the other end. Those are the
+   jacket strip, the label positions and the breakout lengths OF THAT ONE CABLE. Never turn a dimension
+   into a segment of its own. A segment always runs between two ENDS of cable — a connector, a set of
+   terminals, or free wires — never between a label and a connector.
+   LABELS ALONG THE CABLE are markers. A box or rectangle drawn on the cable with text in it ("Elec.
+   Cabinet W2", "601-1201-022 REV 3", "Main Switch") is a printed label or heat-shrink marker — it goes in
+   "markers", with its distance from the nearer end. It is never a connector and never an end. The BOM
+   usually confirms it with a LABEL or TUBING line whose quantity is the number of labels.
+   HEAT-SHRINK TUBING, SLEEVES AND LABELS are never a cable and never a segment.
+   ONE END CAN FAN OUT. When a cable end splits into its individual conductors, each finished with its
+   own terminal, ferrule or lug (T1, T2, T3 …), that is ONE end of the cable — not one segment per wire.
+   Put the jacket strip on that end ("strip" code A = how far the jacket is removed), and one entry per
+   conductor in "legs": its colour, where it goes ("to": T1), its length measured from the jacket end
+   ("length_mm" — when the drawing staggers them, T1 50 and T2/T3 30, copy each), the insulation strip at
+   its tip ("strip_mm"), and the terminal's part number ("terminal_pn"). For a ferrule, the strip is the
+   ferrule's sleeve length — the "8" in AI 2.5-8 is 8 mm — confirmed:false unless printed. The terminals
+   themselves are contacts on that end, not connectors: do not list T1, T2, T3 in "connectors".
+   A NOTE THAT GIVES A STRIP ("on side A strip 70 mm from the cable insulation so the wires will bend in
+   the 90 deg connector") is the jacket strip at that end: code A = 70, confirmed:true, and the reason
+   goes in its "basis".
+   THE OVERALL LENGTH of a ready-made cable with connectors fitted is measured over the connectors unless
+   the drawing says otherwise: length_basis "over_connectors".
+   THE ENDS ARE NAMED BY SIDE when the drawing does — "SIDE A", "SIDE B". Use the connector's own
+   reference for a connector end, and for a fan-out end use the side name ("SIDE B").
 
 1. A LABEL TABLE IS NOT A CONNECTOR LIST. Read this before anything else.
    Many drawings carry a LABEL TABLE / MARKING TABLE: single letters A, B, C … each with the TEXT to
@@ -11973,6 +12072,20 @@ function _csMergeDetail(spec, det){
   return n;
 }
 
+// Which model reads the drawing. This is the one task in the app where the
+// model's eye matters more than its price: a drawing is a picture of a cable
+// with a dimension chain, labels, a pinout and a part list, and the small
+// model kept reading the chain as separate cables and the labels as
+// connectors. The larger model reads it as one cable, which is what it is.
+// If the account cannot use it, the small one takes over for the session.
+const _CS_MODEL='claude-sonnet-5', _CS_MODEL_FALLBACK='claude-haiku-4-5-20251001';
+let _csModelDown=false;
+function _csModel(){ return _csModelDown ? _CS_MODEL_FALLBACK : _CS_MODEL; }
+function _csModelRejected(status, msg){
+  if(_csModelDown) return false;
+  if(!(status===400 || status===403 || status===404)) return false;
+  return /model|not[_ ]found|not available|does not have access|permission|temperature/i.test(String(msg||''));
+}
 async function _csAnthropic(text, isImage, imgData, lang){
   const prompt=_csPrompt(lang, _CS_PHASE_CORE);
   // Each sheet is announced before its image. Without the labels the model sees
@@ -11998,11 +12111,16 @@ async function _csAnthropic(text, isImage, imgData, lang){
       // checked against itself. A continuation runs slightly warm, because a
       // reply that filled its window at 0 will often walk straight back into
       // the same repetition when continued at 0.
-      body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:_CS_MAX_TOKENS,
+      body:JSON.stringify({model:_csModel(),max_tokens:_CS_MAX_TOKENS,
                            temperature:(temp!=null ? temp : (msgs.length>1?0.2:0)),messages:msgs})
     }, _CS_ANALYSIS_TIMEOUT);
     if(!resp.ok){let m=`Anthropic error ${resp.status}`;
-      try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(_csProviderHint('Anthropic', m));}
+      try{const e=await resp.json();m=e.error?.message||m;}catch{}
+      // The stronger model is not available on every account. That is a
+      // reason to fall back, once, to the one that is — not to fail the
+      // analysis. Anything else is a real error and is reported as before.
+      if(_csModelRejected(resp.status, m)){ _csModelDown=true; return ask(msgs, temp); }
+      throw new Error(_csProviderHint('Anthropic', m));}
     const d=await resp.json();
     return {text:(d.content&&d.content[0]&&d.content[0].text)||'', stop:d.stop_reason};
   };
@@ -12196,6 +12314,31 @@ function _csIsKeyError(msg){
   return /service account is deleted or disabled|API key not valid|API_KEY_INVALID|invalid x-api-key|authentication_error|401|403/i.test(String(msg||''));
 }
 
+// A few readings are wrong in ways that can be recognised from the reading
+// itself, and are cheaper to put right than to explain on the sheet:
+//  - a "cable run" whose cable is really heat-shrink, a sleeve or a label;
+//  - terminals at the tips of a fan-out end listed as if they were connectors.
+// Nothing here invents data. It only removes what the part list itself says
+// is not a cable, or what already appears as a leg of an end.
+const _CS_NOT_CABLE_RE=/\b(tubing|heat[- ]?shrink|shrink|sleeve|label|marker|boot|tape|tie|lacing)\b/i;
+function _csTidyStructure(spec){
+  if(!spec) return;
+  const mats=Array.isArray(spec.materials)?spec.materials:[];
+  const byPn=pn=>mats.find(m=>String(m.part_number||'').trim().toUpperCase()===String(pn||'').trim().toUpperCase());
+  if(Array.isArray(spec.segments) && spec.segments.length>1){
+    const keep=spec.segments.filter(sg=>{
+      const m=byPn(sg.cable_part_number);
+      const txt=`${m?.description||''} ${m?.kind||''} ${sg.cable_description||''}`;
+      return !(_CS_NOT_CABLE_RE.test(txt) && !_CS_CABLE_RE.test(`${m?.description||''}`));
+    });
+    if(keep.length && keep.length<spec.segments.length) spec.segments=keep;
+  }
+  const legTargets=new Set();
+  (spec.segments||[]).forEach(sg=>(sg.ends||[]).forEach(e=>_csEndLegs(e).forEach(l=>{
+    if(l.to) legTargets.add(String(l.to).trim().toUpperCase()); })));
+  if(legTargets.size && Array.isArray(spec.connectors))
+    spec.connectors=spec.connectors.filter(c=>!legTargets.has(String(c.ref||'').trim().toUpperCase()));
+}
 async function aiAnalyzeCutStrip(text, isImage, imgData, lang){
   if(!anthKey) throw new Error(_AI_NO_KEY);
   if(_csDeadProviders.anthropic) throw new Error(_csDeadProviders.anthropic);
@@ -12210,6 +12353,7 @@ async function aiAnalyzeCutStrip(text, isImage, imgData, lang){
   // guessing.
   spec.lang = lang || _CS_SOURCE_LANG;
   spec.cut_model = _CS_CUT_MODEL;
+  try{ _csTidyStructure(spec); }catch(e){ console.warn('[CutStrip] tidy', e.message); }
   // A drawing rarely dimensions the strip — it belongs to the contact. Rather
   // than hand the bench a blank, propose the ordinary length for the gauge and
   // mark it TBC (see _csProposeStrips).
@@ -13070,6 +13214,97 @@ function _csToday(){
   const d=new Date(), p=n=>String(n).padStart(2,'0');
   return `${p(d.getDate())}.${p(d.getMonth()+1)}.${d.getFullYear()}`;
 }
+// ── Step by step ──────────────────────────────────────────────────────────────
+// The same facts as the tables, told in the order the bench does them: cut the
+// cable, then side A, then side B, each end in its own words — jacket, then
+// the conductors, then what goes on their tips. This is the part of the sheet
+// an operator actually reads while working; the tables are there to check it
+// against. Everything here is DERIVED from the specification, never written
+// separately, so the two can never say different things.
+function _csStepsFor(spec){
+  const T=_csT, steps=[];
+  const tbc=v=>v===false ? ' *' : '';
+  _csSegments(spec).forEach(seg=>{
+    const cut=_csCutLength(seg, spec);
+    const build=_csWireBuild(seg, spec);
+    const cable=[seg.cable_part_number, seg.cable_description].map(x=>String(x||'').trim()).filter(Boolean).join(' — ');
+    if(!build && cut && _csNum(cut.total)!=null)
+      steps.push({title:_csSay('Cut the cable'), items:[
+        _csSay('Cut {cable} to {len}.', {cable:cable||seg.id||'', len:_csMM(cut.total)})
+        + (cut.basis===_CS_BASIS_OVER ? ` <span class="cs-step-why">${esc(T('The length includes the connectors; nothing is added for the ends.'))}</span>` : '')]});
+    (_csSegEnds(seg, spec)||[]).forEach(e=>{
+      if(e._breakout) return;
+      const conn=_csConnectors(spec).find(c=>String(c.ref||'').toUpperCase()===String(e.ref||'').toUpperCase());
+      const what=conn ? [conn.description, conn.part_number].map(x=>String(x||'').trim()).filter(Boolean).join(' · ') : '';
+      const items=[];
+      (e.strip||[]).filter(x=>!x.derived && _csNum(x.value_mm)!=null).forEach((x,i)=>{
+        const txt = i===0
+          ? _csSay('Strip {mm} of the outer jacket.', {mm:_csMM(x.value_mm)+tbc(x.confirmed)})
+          : _csSay('{label}: {mm}.', {label:_csP(x.label||x.code||''), mm:_csMM(x.value_mm)+tbc(x.confirmed)});
+        const why = x.confirmed!==false && String(x.basis||'').trim() && !x.proposed
+          ? ` <span class="cs-step-why">${esc(_csP(x.basis))}</span>` : '';
+        items.push(txt+why);
+      });
+      const legs=_csEndLegs(e);
+      if(legs.length){
+        // A Map, not an object: numeric keys on an object come back sorted,
+        // which listed T2/T3 before T1 — not the order the drawing gives them.
+        const byLen=new Map();
+        legs.forEach(l=>{ const k=String(_csNum(l.length_mm)??'?'); if(!byLen.has(k)) byLen.set(k,[]); byLen.get(k).push(l); });
+        const keys=[...byLen.keys()];
+        if(keys.length>1 || keys[0]!=='?')
+          items.push(_csSay('Trim the conductors, measured from the jacket end:')
+            + ' ' + keys.map(k=>`<span style="unicode-bidi:isolate;white-space:nowrap"><b>${
+                byLen.get(k).map(l=>esc([l.to, l.conductor&&`(${l.conductor})`].filter(Boolean).join(' '))).join(', ')
+              }</b> — ${esc(k==='?'?'—':_csMM(k))}${tbc(byLen.get(k)[0].confirmed)}</span>`).join(' · '));
+        const byStrip={};
+        legs.filter(l=>_csNum(l.strip_mm)!=null).forEach(l=>{
+          const k=`${_csNum(l.strip_mm)}|${l.terminal_pn||''}`; (byStrip[k]=byStrip[k]||[]).push(l); });
+        Object.keys(byStrip).forEach(k=>{
+          const [mm, pn]=k.split('|'); const g=byStrip[k];
+          items.push(pn
+            ? _csSay('Strip {mm} at the tip of each conductor and crimp terminal {pn}.', {mm:_csMM(mm)+tbc(g[0].confirmed), pn})
+            : _csSay('Strip {mm} at the tip of each conductor.', {mm:_csMM(mm)+tbc(g[0].confirmed)}));
+        });
+      } else if(_csNum(seg.conductor_strip_mm)!=null){
+        const pn=conn && (conn.contact_pn || conn.part_number);
+        items.push(pn
+          ? _csSay('Strip {mm} from each conductor for the contacts of {pn}.', {mm:_csMM(seg.conductor_strip_mm)+tbc(seg.conductor_strip_confirmed), pn})
+          : _csSay('Strip {mm} from each conductor.', {mm:_csMM(seg.conductor_strip_mm)+tbc(seg.conductor_strip_confirmed)}));
+      }
+      if(items.length)
+        steps.push({title:_csSay('Prepare end {ref}', {ref:e.ref||''}) + (what?` <span class="cs-step-sub">${esc(what)}</span>`:''), items});
+    });
+  });
+  return steps;
+}
+// The pinout as the drawing gives it: which pin, which colour, where it goes.
+function _csPinout(spec){
+  const rows=[];
+  _csSegments(spec).forEach(seg=>{
+    (Array.isArray(seg.conductors)?seg.conductors:[]).forEach(c=>{
+      if(c && (c.from_pin||c.to_pin||c.color)) rows.push({from:c.from_pin||'', color:c.color||c.name||'', to:c.to_pin||''});
+    });
+    if(!rows.length) (_csSegEnds(seg, spec)||[]).forEach(e=>_csEndLegs(e).forEach(l=>
+      rows.push({from:'', color:l.conductor||'', to:l.to||''})));
+  });
+  return rows;
+}
+function _csStepsHtml(spec){
+  const T=_csT, steps=_csStepsFor(spec), pins=_csPinout(spec);
+  if(!steps.length) return '';
+  const anyTbc=/\s\*<\/span>|\s\*</.test(steps.map(s=>s.items.join('')).join(''));
+  return `
+      <h3 class="cs-h3">${esc(T('Cutting and stripping, step by step'))}</h3>
+      ${pins.length ? `<table class="cs-tbl cs-form-tbl" style="max-width:520px;margin-bottom:12px">
+        <thead><tr><th>${esc(T('Pin'))}</th><th>${esc(T('Colour'))}</th><th>${esc(T('To'))}</th></tr></thead>
+        <tbody>${pins.map(r=>`<tr><td class="cs-ctr cs-ltr">${esc(r.from||'—')}</td>
+          <td class="cs-ctr cs-ltr">${esc(r.color||'—')}</td><td class="cs-ctr cs-ltr">${esc(r.to||'—')}</td></tr>`).join('')}</tbody>
+      </table>` : ''}
+      <ol class="cs-steps">${steps.map(st=>`<li><div class="cs-step-t">${st.title}</div>
+        <ol class="cs-do">${st.items.map(i=>`<li>${i}</li>`).join('')}</ol></li>`).join('')}</ol>
+      ${anyTbc ? `<p class="cs-note">* ${esc(T('To be confirmed against the contact or terminal datasheet before cutting.'))}</p>` : ''}`;
+}
 function _csStripRows(spec){
   const out=[];
   _csSegments(spec).forEach(seg=>{
@@ -13077,6 +13312,12 @@ function _csStripRows(spec){
       (e.strip||[]).filter(x=>!x.derived && _csNum(x.value_mm)!=null).forEach(x=>
         out.push({seg:seg.id, ref:e.ref, code:x.code, label:x.label, mm:x.value_mm,
                   ok:x.confirmed!==false, proposed:x.proposed===true, basis:x.basis||''}));
+    });
+    (_csSegEnds(seg, spec)||[]).forEach(e=>{
+      _csEndLegs(e).filter(l=>_csNum(l.strip_mm)!=null).forEach(l=>
+        out.push({seg:seg.id, ref:`${e.ref||''} → ${l.to||l.conductor||''}`, code:'W',
+                  label:[l.conductor, l.terminal_pn].filter(Boolean).join(' · '),
+                  mm:l.strip_mm, ok:l.confirmed!==false, proposed:false, basis:''}));
     });
     if(_csNum(seg.conductor_strip_mm)!=null)
       out.push({seg:seg.id, ref:_csT('each conductor'), code:'W', label:_csT('Insulation removed from each individual conductor for its contact'),
@@ -13555,8 +13796,7 @@ function renderCutStripSheet(){
         </div>
         ${d.basis===_CS_BASIS_OVER ? `<p class="cs-note">${
           esc(T('The dimension is the finished harness, connectors included — so nothing is added for the ends, each connector body comes OFF, and the piece is never cut longer than the drawn length. The strip is taken OUT of this length, not added to it.'))}${
-          cut.missingConn?` <b style="color:#B91C1C">${esc(T('No body length is on file for'))} ${cut.missingConn} ${
-          esc(T('connector(s) — nothing was subtracted for them, so the piece is cut to the full drawn length.'))}</b>`:''}${
+          ''}${
           cut.capped?` <b>${esc(T('Allowances were held back to keep the piece within the drawn length.'))}</b>`:''}</p>` : ''}
         ${''/* the override itself stays; the sheet no longer argues about it */}
         ${!d.stated ? `<div class="cs-box cs-warn">
@@ -13604,6 +13844,8 @@ function renderCutStripSheet(){
             esc(T('The BOM gives'))} ${build.pieces} ${esc(T('pieces but the wiring table lists'))} ${build.conductorMismatch} —
             ${esc(T('one of the two is wrong. Resolve it before cutting.'))}</p>`:''}
         </div>` : ''}`;}).join('')}
+
+      ${_csStepsHtml(spec)}
 
       ${(()=>{ const strips=_csStripRows(spec); return strips.length ? `
       <h3 class="cs-h3">${esc(T('Strip detail'))}</h3>

@@ -2024,6 +2024,49 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('links: no part number, no link', search('', 'Amphenol'), null);
 }
 
+// ──────────────────────────── 42. one ready-made cable with a fan-out end
+// 601-1201-022: ONE cable, CABL-0037, 1000 mm over the connectors; side A a
+// 90° plug with 70 mm of jacket off, side B fanned out to three ferrules
+// T1/T2/T3 staggered 50/30/30. The earlier reading made five "cable runs" out
+// of the dimension chain and then "cut the cable into 4 × 20 mm".
+{
+  const isWire=G('_csIsWireMaterial'), build=G('_csWireBuild'), cut=G('_csCutLength'),
+        datum=G('_csDatum'), steps=G('_csStepsFor'), tidy=G('_csTidyStructure'), MODEL=G('_CS_CUT_MODEL');
+  const sp=()=>{ const o=JSON.parse(JSON.stringify({"drawing_number": "601-1201-022", "drawing_name": "Main Switch to Elec. Cabinet Cable", "revision": "3", "standard": "IPC/WHMA-A-620", "lang": "he", "cut_model": "jacket_end_v1", "materials": [{"item": 1, "part_number": "3200522", "description": "AI 2.5-8 BU-TERMINAL,WIRE 14#BLU", "qty": "3", "kind": "contact"}, {"item": 2, "part_number": "CABL-0037", "description": "Power Cable 14AWG, 3 Cond, Unshielded, 1943/3", "qty": "1", "unit": "m", "kind": "wire", "length_mm": 1000}, {"item": 3, "part_number": "PLF-100-1_2-0", "description": "TUBING SHRINK 1/2\" BLK", "qty": "0.03", "unit": "m", "kind": "sleeve"}, {"item": 4, "part_number": "74071736A25D", "description": "LABEL", "qty": "7", "kind": "label"}, {"item": 5, "part_number": "ELEC-0221", "description": "Male plug with pins, 4 contacts, 14-12AWG, 35A/600V", "qty": "1", "kind": "connector"}, {"item": 6, "part_number": "ELEC-0213", "description": "Backshell (90°), Shell Size 14, 9.0-12.5mm", "qty": "1", "kind": "other"}], "connectors": [{"ref": "SIDE A", "part_number": "ELEC-0221", "description": "תקע זכר 90°, 4 מגעים", "kind": "connector", "termination": "crimp", "positions": 4}], "segments": [{"id": "S1", "from": "SIDE A", "to": "SIDE B", "cable_part_number": "CABL-0037", "cable_description": "כבל כוח 14AWG, 3 גידים, לא מסוכך", "type": "multi_conductor", "finished_length_mm": 1000, "length_basis": "over_connectors", "conductor_strip_mm": 6, "conductor_strip_confirmed": false, "conductors": [{"color": "Brown", "from_pin": "A", "to_pin": "T1"}, {"color": "Blue", "from_pin": "B", "to_pin": "T2"}, {"color": "Yellow-Green", "from_pin": "C", "to_pin": "T3"}], "ends": [{"ref": "SIDE A", "strip": [{"code": "A", "label": "מעטה חיצוני", "value_mm": 70, "confirmed": true, "basis": "Note 1 — כדי שהגידים יתכופפו במחבר 90°"}]}, {"ref": "SIDE B", "strip": [{"code": "A", "label": "מעטה חיצוני", "value_mm": 50, "confirmed": true, "basis": "מידה בסרטוט"}], "legs": [{"conductor": "Brown", "to": "T1", "length_mm": 50, "strip_mm": 8, "terminal_pn": "3200522", "confirmed": false}, {"conductor": "Blue", "to": "T2", "length_mm": 30, "strip_mm": 8, "terminal_pn": "3200522", "confirmed": false}, {"conductor": "Yellow-Green", "to": "T3", "length_mm": 30, "strip_mm": 8, "terminal_pn": "3200522", "confirmed": false}]}]}], "markers": [{"label": "Elec. Cabinet W2", "segment": "S1", "from_end": "SIDE A", "distance_mm": 20}, {"label": "Main Switch", "segment": "S1", "from_end": "SIDE B", "distance_mm": 20}], "engineering_notes": [], "open_items": [], "discrepancies": []})); o.cut_model=MODEL; return o; };
+
+  t('601: a 3-conductor power cable is not wire, whatever it was filed under',
+    isWire({description:'Power Cable 14AWG, 3 Cond, Unshielded', kind:'wire'}), false);
+  t('601: ...nor is a ferrule "for wire 14"',
+    isWire({description:'AI 2.5-8 BU-TERMINAL,WIRE 14#BLU', kind:'contact'}), false);
+  t('601: ...while a single wire still is', isWire({description:'Wire 22 AWG Black'}), true);
+
+  const a=sp();
+  t('601: a ready-made cable is never "built from wires"', build(a.segments[0], a), null);
+  t('601: a fan-out end counts as a finished end', datum(a.segments[0], a).basis, 'over_connectors');
+  t('601: the cable is cut to 1000, connectors included', cut(a.segments[0], a).total, 1000);
+  const u=sp(); delete u.segments[0].length_basis;
+  t('601: ...even when the reading did not say where it was measured', cut(u.segments[0], u).total, 1000);
+
+  const st=steps(a).map(x=>x.title.replace(/<[^>]+>/g,'')+' :: '+x.items.join(' ').replace(/<[^>]+>/g,''));
+  t('601: three steps — the cable, side A, side B', st.length, 3);
+  ok('601: step 1 cuts the cable to 1000 mm', /Cut CABL-0037.*1000 mm/.test(st[0]));
+  ok('601: side A strips 70 mm of jacket, with the drawing note as its reason',
+     /SIDE A/.test(st[1]) && /Strip 70 mm of the outer jacket/.test(st[1]) && /Note 1/.test(st[1]));
+  ok('601: side B strips 50 mm of jacket', /SIDE B/.test(st[2]) && /Strip 50 mm of the outer jacket/.test(st[2]));
+  ok('601: ...trims T1 to 50 and T2, T3 to 30, T1 first as drawn',
+     /T1 \(Brown\) — 50 mm.*T2 \(Blue\), T3 \(Yellow-Green\) — 30 mm/.test(st[2]));
+  ok('601: ...and strips 8 mm for the 3200522 ferrules', /Strip 8 mm.*3200522/.test(st[2]));
+
+  // the reading that went wrong, tidied: tubing is not a cable run, and the
+  // ferrule targets are not connectors
+  const bad=sp();
+  bad.segments.push({id:'S3', from:'Main Switch', to:'T1', cable_part_number:'PLF-100-1_2-0', finished_length_mm:50, ends:[]});
+  bad.connectors.push({ref:'T1', kind:'open_wires'},{ref:'T2', kind:'open_wires'});
+  tidy(bad);
+  t('601: heat-shrink tubing is not kept as a cable run', bad.segments.length, 1);
+  t('601: ...and the ferrule targets are not listed as connectors', bad.connectors.map(c=>c.ref), ['SIDE A']);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }
