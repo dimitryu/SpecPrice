@@ -596,6 +596,11 @@ let companyName = '';
 let companyLogoB64 = '';
 let currentUserEmail = '';
 let allParts    = [];
+// Recycle bin of the Database screen: parts that were deleted but not yet
+// purged. Loaded with the same snapshot as allParts, kept apart from it so
+// no other screen ever sees a deleted part.
+let trashParts   = [];
+let _psTrashDays = 30;    // per company, companies/{cid}.trash_days
 // Seeded from localStorage, which is where the Admin page saves them.
 // This read did not exist: the keys were written on save and then only ever
 // re-read from the company document, so a key typed into Admin worked until
@@ -775,7 +780,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.55.0';
+const APP_VER   = '1.56.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -946,6 +951,7 @@ async function initCompany(user) {
       anthKey   = anthKey   || cData.anthropic_key || '';
       _sdLaborRateMin = parseFloat(cData.labor_rate_min) || 0.5;
       companyLogoB64 = cData.logo_b64 || '';
+      _psTrashDays = _psTrashDaysOf(cData.trash_days);
     }
   } catch(e) { console.error('initCompany', e); if (e.isDisabled) throw e; }
 }
@@ -2180,7 +2186,180 @@ function parseBoolQuery(query){
 async function loadParts(){
   if(allParts.length>0) return;
   const snap=await getDocs(collection(db,'companies',companyId,'parts_cache'));
-  allParts=snap.docs.map(d=>({_id:d.id,...d.data()}));
+  const docs=snap.docs.map(d=>({_id:d.id,...d.data()}));
+  // A deleted part is only marked, never removed at once (see the recycle
+  // bin below). Every screen reads allParts, so splitting here is the one
+  // place that keeps a deleted part out of searches, quotes and exports.
+  allParts=docs.filter(p=>!_psIsDeleted(p));
+  trashParts=docs.filter(_psIsDeleted);
+}
+
+// ── Recycle bin ───────────────────────────────────────────────────────────────
+// Deleting from the Database used to be a deleteDoc: gone on the spot, with
+// nothing kept but a count in the audit log. Now a delete only MARKS the part
+// (deleted:true + who and when). It disappears from every screen, an admin can
+// see it under "Deleted items" and put it back in one click, and it is purged
+// for good only after the company's retention period. All of it is ordinary
+// updates to documents the company already owns, so the Firestore rules do
+// not have to change for it to work.
+const _PS_TRASH_DAY_OPTIONS=[7,14,30,60,90];
+const _PS_DAY_MS=86400000;
+function _psTrashDaysOf(v){
+  const n=parseInt(v,10);
+  return _PS_TRASH_DAY_OPTIONS.includes(n) ? n : 30;
+}
+function _psIsDeleted(p){ return !!p && p.deleted===true; }
+// When the part was deleted, in ms. deletedAtMs is written by the client at
+// delete time so the age is known even before the server timestamp resolves.
+function _psDeletedMs(p){
+  const n=Number(p?.deletedAtMs);
+  if(Number.isFinite(n) && n>0) return n;
+  const t=p?.deletedAt;
+  if(t && typeof t.toMillis==='function') return t.toMillis();
+  return 0;
+}
+// Whole days the part has left in the bin; 0 means it is due for purging.
+function _psDaysLeft(p, days, now){
+  const at=_psDeletedMs(p);
+  if(!at) return days;
+  return Math.max(0, Math.ceil((at + days*_PS_DAY_MS - (now??Date.now())) / _PS_DAY_MS));
+}
+function _psIsAdmin(){ return currentUserRole===PROTECTED_ROLE; }
+// What the audit log keeps of a part: every field, with Firestore timestamps
+// written as ISO strings so the record reads the same anywhere it is shown.
+function _psAuditCopy(p){
+  const out={};
+  Object.keys(p||{}).forEach(k=>{
+    const v=p[k];
+    if(v && typeof v.toDate==='function'){ try{ out[k]=v.toDate().toISOString(); }catch{ out[k]=String(v); } }
+    else if(v!==undefined && typeof v!=='function') out[k]=v;
+  });
+  out.id=p?._id||out.id||''; delete out._id;
+  return out;
+}
+// The audit trail of a delete, restore or purge, with the parts themselves in
+// it. Written in chunks: one audit document is capped at 1 MiB, and a delete
+// of a few hundred parts with long descriptions would pass that in one go.
+const _PS_AUDIT_CHUNK=100;
+async function _psAuditParts(action, parts, extra){
+  const copies=(parts||[]).map(_psAuditCopy);
+  const chunks=Math.max(1, Math.ceil(copies.length/_PS_AUDIT_CHUNK));
+  for(let i=0;i<chunks;i++){
+    const items=copies.slice(i*_PS_AUDIT_CHUNK, (i+1)*_PS_AUDIT_CHUNK);
+    await logAudit(action, {count:copies.length, part:chunks>1?`${i+1}/${chunks}`:'',
+      ...(extra||{}), items}, true);
+  }
+}
+// Firestore allows 500 writes in a batch; 400 leaves room.
+async function _psBatchWrite(ids, fn){
+  for(let i=0;i<ids.length;i+=400){
+    const batch=writeBatch(db);
+    ids.slice(i,i+400).forEach(id=>fn(batch, doc(db,'companies',companyId,'parts_cache',id)));
+    await batch.commit();
+  }
+}
+async function _psSoftDelete(ids){
+  const now=Date.now();
+  const gone=allParts.filter(p=>ids.includes(p._id));
+  await _psBatchWrite(ids, (b,ref)=>b.update(ref,{
+    deleted:true, deletedAt:serverTimestamp(), deletedAtMs:now, deletedBy:currentUserEmail||''}));
+  allParts=allParts.filter(p=>!ids.includes(p._id));
+  gone.forEach(p=>{ p.deleted=true; p.deletedAtMs=now; p.deletedBy=currentUserEmail||''; });
+  trashParts=[...gone, ...trashParts];
+  await _psAuditParts('database_delete_parts', gone, {to:'recycle_bin', keep_days:_psTrashDays});
+  return gone.length;
+}
+async function _psRestore(ids){
+  const back=trashParts.filter(p=>ids.includes(p._id));
+  await _psBatchWrite(ids, (b,ref)=>b.update(ref,{
+    deleted:false, deletedAt:deleteField(), deletedAtMs:deleteField(), deletedBy:deleteField(),
+    updatedAt:serverTimestamp()}));
+  trashParts=trashParts.filter(p=>!ids.includes(p._id));
+  back.forEach(p=>{ delete p.deleted; delete p.deletedAt; delete p.deletedAtMs; delete p.deletedBy; });
+  allParts=[...back, ...allParts];
+  await _psAuditParts('database_restore_parts', back);
+  return back.length;
+}
+async function _psPurge(ids, why){
+  const gone=trashParts.filter(p=>ids.includes(p._id));
+  // The audit copy is written FIRST: once the documents are gone it is the
+  // only record of what they held.
+  await _psAuditParts('database_purge_parts', gone, {reason:why||'manual'});
+  await _psBatchWrite(ids, (b,ref)=>b.delete(ref));
+  trashParts=trashParts.filter(p=>!ids.includes(p._id));
+  return gone.length;
+}
+// Parts whose retention ran out are purged when an admin opens the Database —
+// the only role allowed to remove them for good. Quiet, and never in the way
+// of the screen loading.
+async function _psAutoPurge(){
+  if(!_psIsAdmin() || !trashParts.length) return 0;
+  const due=trashParts.filter(p=>_psDaysLeft(p, _psTrashDays)===0).map(p=>p._id);
+  if(!due.length) return 0;
+  try{ return await _psPurge(due, `retention ${_psTrashDays} days`); }
+  catch(e){ console.warn('[RecycleBin] auto purge', e.message); return 0; }
+}
+async function _psSetTrashDays(n){
+  _psTrashDays=_psTrashDaysOf(n);
+  await setDoc(doc(db,'companies',companyId),{trash_days:_psTrashDays},{merge:true});
+  logAudit('database_trash_days',{days:_psTrashDays},true);
+}
+function openTrashModal(onChange){
+  const render=()=>{
+    const now=Date.now();
+    const rows=[...trashParts].sort((a,b)=>_psDeletedMs(b)-_psDeletedMs(a));
+    const fmt=ms=>ms?new Date(ms).toLocaleString('he-IL',{dateStyle:'short',timeStyle:'short'}):'—';
+    const body=document.getElementById('trash-body');
+    if(!body) return;
+    body.innerHTML=`
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <span style="font-size:13px">Deleted parts are kept for</span>
+        <select id="trash-days" class="search-box" style="width:auto;flex:0 0 auto;padding:5px 8px">
+          ${_PS_TRASH_DAY_OPTIONS.map(d=>`<option value="${d}" ${d===_psTrashDays?'selected':''}>${d} days</option>`).join('')}
+        </select>
+        <span style="font-size:12px;color:var(--muted)">then removed for good. The audit log keeps a copy of every deleted part.</span>
+        <span style="flex:1"></span>
+        <button class="btn btn-green btn-sm" id="trash-restore" ${rows.length?'':'disabled'}>↩ Restore selected</button>
+        <button class="btn btn-red btn-sm" id="trash-purge" ${rows.length?'':'disabled'}>✕ Delete permanently</button>
+      </div>
+      <div class="table-wrap" style="max-height:60vh"><table>
+        <thead><tr><th style="width:28px"><input type="checkbox" id="trash-all"></th>
+          <th>MNF P/N</th><th>Description</th><th>Manufacturer</th><th>Deleted by</th><th>Deleted</th>
+          <th style="width:80px">Days left</th></tr></thead>
+        <tbody>${rows.length ? rows.map(p=>`<tr>
+          <td style="text-align:center"><input type="checkbox" class="trash-check" data-id="${esc(p._id)}"></td>
+          <td>${esc(p.part_number||p._id)}</td>
+          <td class="wrap">${esc(p.description||'')}</td>
+          <td>${esc(p.manufacturer||'')}</td>
+          <td>${esc(p.deletedBy||'')}</td>
+          <td style="white-space:nowrap">${esc(fmt(_psDeletedMs(p)))}</td>
+          <td style="text-align:center">${_psDaysLeft(p,_psTrashDays,now)}</td>
+        </tr>`).join('') : `<tr class="empty-row"><td colspan="7">The recycle bin is empty</td></tr>`}</tbody>
+      </table></div>`;
+    const sel=()=>[...body.querySelectorAll('.trash-check:checked')].map(c=>c.dataset.id);
+    body.querySelector('#trash-all')?.addEventListener('change',e=>
+      body.querySelectorAll('.trash-check').forEach(c=>{ c.checked=e.target.checked; }));
+    body.querySelector('#trash-days')?.addEventListener('change',async e=>{
+      try{ await _psSetTrashDays(e.target.value); toast(`Deleted parts are now kept for ${_psTrashDays} days`,'success'); render(); }
+      catch(err){ toast('Error: '+err.message,'error'); }
+    });
+    body.querySelector('#trash-restore')?.addEventListener('click',async()=>{
+      const ids=sel(); if(!ids.length){ toast('No rows selected','error'); return; }
+      try{ const n=await _psRestore(ids); toast(`Restored ${n} part(s)`,'success'); render(); onChange&&onChange(); }
+      catch(err){ toast('Error: '+err.message,'error'); logAudit('database_restore_parts',{error:err.message},false); }
+    });
+    body.querySelector('#trash-purge')?.addEventListener('click',async()=>{
+      const ids=sel(); if(!ids.length){ toast('No rows selected','error'); return; }
+      if(!confirm(`Delete ${ids.length} part(s) permanently? They cannot be restored from the app afterwards.`)) return;
+      try{ const n=await _psPurge(ids,'manual'); toast(`Permanently deleted ${n} part(s)`,'success'); render(); onChange&&onChange(); }
+      catch(err){ toast('Error: '+err.message,'error'); logAudit('database_purge_parts',{error:err.message},false); }
+    });
+  };
+  showModal(`<div class="modal" style="max-width:1000px;width:96vw">
+    <div class="modal-head"><h3>🗑 Deleted items</h3><button class="btn btn-ghost btn-sm" id="trash-close">✕</button></div>
+    <div class="modal-body" id="trash-body"></div></div>`);
+  document.getElementById('trash-close')?.addEventListener('click',()=>{ closeModal(); onChange&&onChange(); });
+  render();
 }
 
 const _PS_DEFAULT_COLS=[
@@ -2429,6 +2608,7 @@ async function renderPartStock(filter=''){
   setActions('');
   try { await loadParts(); } catch(e){ setContent(`<p style="color:red;padding:20px">${e.message}</p>`); return; }
   purgeLegacyFindChipsFields();  // fire-and-forget; never blocks the render
+  await _psAutoPurge();          // admins only; removes parts past their retention
 
   const predicate=parseBoolQuery(filter);
   const filtered=(filter||'').trim()
@@ -2478,7 +2658,8 @@ async function renderPartStock(filter=''){
       <button class="btn btn-blue" id="btn-ps-fc" style="white-space:nowrap;flex-shrink:0">🔍 Check Price</button>
       <button class="btn btn-purple" id="btn-ps-import" style="white-space:nowrap;flex-shrink:0">📥 Import Data</button>
       <button class="btn btn-green" id="btn-ps-export" style="white-space:nowrap;flex-shrink:0">📊 Export to Excel</button>
-      <button class="btn btn-red" id="btn-ps-delsel" style="white-space:nowrap;flex-shrink:0">🗑 Delete Selected</button>
+      ${_psIsAdmin() ? `<button class="btn btn-red" id="btn-ps-delsel" style="white-space:nowrap;flex-shrink:0">🗑 Delete Selected</button>
+      <button class="btn btn-ghost" id="btn-ps-trash" style="white-space:nowrap;flex-shrink:0" title="Deleted parts — restore or remove for good">♻ Deleted items${trashParts.length?` (${trashParts.length})`:''}</button>` : ''}
       <span class="count-badge">${totalItems} parts — page ${psPage}/${totalPages}</span>
     </div>
     <div class="table-wrap" id="ps-table-wrap"><table id="ps-table">
@@ -2546,7 +2727,7 @@ async function renderPartStock(filter=''){
 
   // Refresh — force a fresh read from Firestore (bypasses the in-memory allParts cache)
   document.getElementById('btn-ps-refresh')?.addEventListener('click',()=>{
-    allParts=[];
+    allParts=[]; trashParts=[];
     renderPartStock(inp.value);
   });
 
@@ -2577,18 +2758,23 @@ async function renderPartStock(filter=''){
     exportPartStockExcel(targets, sorted.length, COLS);
   });
 
-  // Delete Selected — removes checked rows from Part Stock (parts_cache) in Firestore
+  // Delete Selected — admins only, and only into the recycle bin: the parts
+  // are marked deleted and vanish from every screen, but stay restorable for
+  // the company's retention period. The audit log keeps their full content.
   document.getElementById('btn-ps-delsel')?.addEventListener('click', async()=>{
+    if(!_psIsAdmin()){ toast('Only an admin can delete from the Database','error'); return; }
     const checked=[...document.querySelectorAll('.ps-check:checked')].map(cb=>cb.dataset.id);
     if(!checked.length){ toast('No rows selected','error'); return; }
-    if(!confirm(`Delete ${checked.length} selected part(s) from Database? This cannot be undone.`)) return;
+    if(!confirm(`Move ${checked.length} selected part(s) to Deleted items?\nThey can be restored for ${_psTrashDays} days.`)) return;
     try{
-      await Promise.all(checked.map(id=>deleteDoc(doc(db,'companies',companyId,'parts_cache',id))));
-      allParts=allParts.filter(p=>!checked.includes(p._id));
-      toast(`Deleted ${checked.length} part(s)`,'success');
-      logAudit('database_delete_parts',{count:checked.length},true);
+      const n=await _psSoftDelete(checked);
+      toast(`${n} part(s) moved to Deleted items`,'success');
       renderPartStock(inp.value);
     }catch(e){ toast('Error: '+e.message,'error'); logAudit('database_delete_parts',{error:e.message},false); }
+  });
+  document.getElementById('btn-ps-trash')?.addEventListener('click',()=>{
+    if(!_psIsAdmin()) return;
+    openTrashModal(()=>renderPartStock(inp.value));
   });
 }
 
@@ -3425,7 +3611,7 @@ function _dbNormalizeUnit(rawUnit){
 // — a part_number can be referenced by more than one RFQ, so this is a set, not a
 // single value, and existing entries are always preserved (arrayUnion).
 async function saveBOMToPartStock(rows, rfqName=''){
-  let created=0, skipped=0;
+  let created=0, skipped=0, revived=0;
   for(const r of rows){
     const pn=(r.part_number||'').trim();
     // The Database is keyed on the part number, so a row without one has
@@ -3444,6 +3630,12 @@ async function saveBOMToPartStock(rows, rfqName=''){
         // not a per-order tally), so every save re-pins it regardless.
         const d=snap.data();
         const patch={updatedAt:serverTimestamp(), qty:1};
+        // Saving a part that sits in the recycle bin brings it back: the user
+        // has just asked for it to be in the Database again.
+        if(d.deleted===true){
+          Object.assign(patch,{deleted:false, deletedAt:deleteField(), deletedAtMs:deleteField(), deletedBy:deleteField()});
+          revived++;
+        }
         if(r.description && !d.description) patch.description=r.description;
         if(r.drawing_number && !d.drawing_number) patch.drawing_number=r.drawing_number;
         if(r.drawing_name && !d.drawing_name) patch.drawing_name=r.drawing_name;
@@ -3481,7 +3673,9 @@ async function saveBOMToPartStock(rows, rfqName=''){
   if(skipped){
     toast(`${skipped} of ${rows.length} row(s) had no part number and were NOT saved to the Database — fill MNF P/N and import again`,'error');
   }
-  // Refresh in-memory parts list so SD search sees new entries
+  // Refresh in-memory parts list so SD search sees new entries. A revived
+  // part was out of allParts, so that case reloads both lists from scratch.
+  if(revived){ allParts=[]; trashParts=[]; }
   await loadParts();
   return created;
 }
@@ -5239,7 +5433,7 @@ async function runFCCheckModal(items, mode){
                 part_number:pn, description:'', drawing_number:'', manufacturer:newMfr||'',
                 unit:'', atlantium_pn:'', qty:1, stock, ...matchFields, ...stockFields,
                 mouser_price:moNum, digikey_price:dkNum,
-                price_description:'', updatedAt:serverTimestamp()
+                price_description:'', updatedAt:serverTimestamp(), deleted:false
               },{merge:true});
               allParts.push({_id:key, part_number:pn, qty:1, stock, ...matchFields, ...stockFields,
                 mouser_price:moNum, digikey_price:dkNum, manufacturer:newMfr||''});
@@ -5620,7 +5814,7 @@ async function savePriorityImport(rows){
         await setDoc(doc(db,'companies',companyId,'parts_cache',key),{
           part_number:pn, description:'', drawing_number:'', manufacturer:'',
           unit, atlantium_pn:'', price:'', distributor:'', stock:'', price_description:'', qty:1,
-          priority_price:r.priority_price, updatedAt:serverTimestamp()
+          priority_price:r.priority_price, updatedAt:serverTimestamp(), deleted:false
         },{merge:true});
         allParts.push({_id:key, part_number:pn, priority_price:r.priority_price, unit, qty:1});
         created++;
@@ -5848,7 +6042,7 @@ async function saveToolsImport(rows){
         await setDoc(doc(db,'companies',companyId,'parts_cache',key),{
           part_number:pn, description:r.description||'', drawing_number:'', manufacturer:'',
           unit:'', atlantium_pn:'', price:'', priority_price:'', distributor:'', stock:'', price_description:'', qty:1,
-          own_stock:true, updatedAt:serverTimestamp()
+          own_stock:true, updatedAt:serverTimestamp(), deleted:false
         },{merge:true});
         allParts.push({_id:key, part_number:pn, description:r.description||'', own_stock:true, qty:1});
         created++;
