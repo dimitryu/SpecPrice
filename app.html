@@ -780,7 +780,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.57.1';
+const APP_VER   = '1.58.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -3441,6 +3441,9 @@ function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
       // here would silently reduce the part to whichever alternative happened
       // to be listed first — the exact behaviour we're replacing.
       if(rows[origIdx] && (rows[origIdx].alt_mpns||[]).length) row.alt_mpns=rows[origIdx].alt_mpns;
+      // So do the manufacturing minutes the process analysis attributed to
+      // this exact row (see handleSDFiles) — by position, never by part number.
+      if(rows[origIdx] && rows[origIdx]._labor_min!=null) row._labor_min=rows[origIdx]._labor_min;
       if(Object.values(row).some(v=>v)) updatedRows.push(row);
     });
     if(!updatedRows.length){ toast('No rows to save','error'); return; }
@@ -6276,7 +6279,12 @@ const _SD_DEFAULT_COLS=[
   {k:'digikey_stock',  l:'DigiKey Stock',   w:'85px'},
   {k:'priority_price', l:'Priority Cost',  w:'95px'},
   {k:'total',          l:'Part Cost',       w:'85px'},
-  {k:'labor_time',     l:'Labor Time',      w:'85px'},
+  // No per-row Labor Time column. The minutes are still worked out per row and
+  // summed into each drawing's Labor Time (min / cable); the 📋 button beside
+  // that number shows every step behind it. A per-row column invited summing
+  // it by eye — and that sum never included the general assembly and test
+  // steps, which belong to no single part — so it read as a contradiction of
+  // the total even when both were right.
 ];
 // Length constants for "mm"-unit (length) rows — Priority lists cable/wire
 // pricing per METER, while Mouser and DigiKey quote it per FOOT (see
@@ -6669,6 +6677,7 @@ const _LB_LABELS={
     'min':'דק׳',
     'Row-tied operations':'פעולות המשויכות לשורה',
     '+ General assembly/inspection (not tied to one part)':'+ הרכבה/בדיקה כללית (לא משויך לפריט מסוים)',
+    '+ Rows without a step analysis':'+ שורות ללא ניתוח שלבים',
     '= Total (series, per unit)':'= סה"כ (סדרה, ליחידה)',
     'Reference: single stand-alone cable':'להשוואה: כבל בודד עצמאי',
     'Total Labor Time (auto)':'סה"כ זמן עבודה (אוטומטי)',
@@ -6684,6 +6693,7 @@ const _LB_LABELS={
     'min':'мин',
     'Row-tied operations':'Операции, привязанные к строке',
     '+ General assembly/inspection (not tied to one part)':'+ Общая сборка/контроль (не привязано к детали)',
+    '+ Rows without a step analysis':'+ Строки без анализа операций',
     '= Total (series, per unit)':'= Итого (серия, на единицу)',
     'Reference: single stand-alone cable':'Для сравнения: одиночный кабель',
     'Total Labor Time (auto)':'Общее время работы (авто)',
@@ -6742,6 +6752,19 @@ async function _lbTranslateOperations(texts, lang){
   return true;
 }
 
+// Per cable: what this drawing's rows add up to, less what the analysed steps
+// tied to rows already explain. Zero when every row's minutes came from the
+// process analysis.
+function _sdLaborExtraPerUnit(b){
+  const dwg=String(b?.drawingName||'');
+  const rows=sdItems.filter(r=>String(r.drawing_number||'')===dwg);
+  if(!rows.length) return 0;
+  const units=_sdDwgUnits(_sdDwgKey(rows[0]))||1;
+  const rowsPerUnit=rows.reduce((t,r)=>t+(parseFloat(r.labor_total)||0),0)/units;
+  const tied=b.rowTiedMinutes!=null ? b.rowTiedMinutes : (b.seriesTotal-(b.generalMinutes||0));
+  const extra=rowsPerUnit-tied;
+  return Math.abs(extra)<1e-9 ? 0 : extra;
+}
 function openLaborBreakdownModal(onlyDwg){
   const {autoLaborMinutes}=_sdComputeSummary();
   // Only show drawings that still have at least one row in Sales Desk —
@@ -6806,8 +6829,18 @@ function openLaborBreakdownModal(onlyDwg){
           <div style="display:flex;justify-content:space-between"><span>${_lbTr('+ General assembly/inspection (not tied to one part)')}</span><span>${b.generalMinutes.toFixed(1)} ${_lbTr('min')}</span></div>
         </div>`;
       })() : ''}
+      ${(()=>{
+        // Minutes in the drawing's total that no analysed step accounts for:
+        // rows added by hand or from the Database (a length row gets a flat
+        // minute), or a time typed on a row in an older quote. Without the
+        // per-row column they would otherwise be invisible, and the total
+        // here would not match the Labor Time on the summary.
+        const extra=_sdLaborExtraPerUnit(b);
+        return Math.abs(extra)>=0.05 ? `<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted)">
+          <span>${_lbTr('+ Rows without a step analysis')}</span><span>${extra.toFixed(1)} ${_lbTr('min')}</span></div>` : '';
+      })()}
       <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:12px">
-        <strong>${_lbTr('= Total (series, per unit)')}</strong><strong>${b.seriesTotal.toFixed(1)} ${_lbTr('min')}</strong>
+        <strong>${_lbTr('= Total (series, per unit)')}</strong><strong>${(b.seriesTotal+_sdLaborExtraPerUnit(b)).toFixed(1)} ${_lbTr('min')}</strong>
       </div>
       <div style="display:flex;justify-content:space-between;color:var(--muted);font-size:12px">
         <span>${_lbTr('Reference: single stand-alone cable')}</span><span>≈ ${b.singleUnitMinutes.toFixed(1)} ${_lbTr('min')}</span>
@@ -7268,7 +7301,7 @@ async function renderSalesDesk(){
               style="width:70px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:right"></span>
           </div>
           <div class="summary-row">
-            <span title="Minutes to build ONE cable — the sum of this drawing's row Labor Totals divided by the order quantity. Type your own number to override; it is also per cable." style="display:flex;align-items:center;gap:5px">
+            <span title="Minutes to build ONE cable, worked out from the drawing's manufacturing steps. Click 📋 to see every step behind it. Type your own number to override; it is also per cable." style="display:flex;align-items:center;gap:5px">
               Labor Time (min / cable)
               <button type="button" class="btn btn-ghost btn-sm sd-btn-breakdown" data-dwg="${esc(g.dwg)}" title="Manufacturing-step breakdown behind this number" style="padding:1px 6px;font-size:11px">📋</button>
             </span>
@@ -7889,30 +7922,17 @@ async function handleSDFiles(files){
               const totalMins=unitMins*qtyInDrawing;
               const row = (step.row_idx!=null) ? extractedRows[step.row_idx] : null;
               if(row){
-                // _sdPendingLaborByKey now stores an ALREADY-COMPUTED TOTAL
-                // (unit_minutes × qty_in_drawing) for this row, not a rate to
-                // be multiplied again — the save callback below marks the
-                // resulting item with _laborFixedTotal so _sdRecalcLaborTotal
-                // uses it as-is instead of re-multiplying by the Sales-Desk
-                // table's own (possibly unrelated) qty column.
-                // IMPORTANT: key on row.drawing_number (what item.drawing_number
-                // will actually be set to below), NOT effectiveDwgName (the
-                // filename-derived guess) — if the AI extracted its own
-                // drawing_number from the drawing itself (e.g. "WLS - 122 - 011")
-                // that differs from the filename's formatting, using
-                // effectiveDwgName here would silently never match the lookup
-                // key built from item.drawing_number in the save callback below,
-                // so the total would be silently lost and the breakdown modal
-                // would never find this drawing's rows either.
-                const key=`${row.drawing_number||effectiveDwgName}|${row.part_number||row.description||step.row_idx}`;
-                _sdPendingLaborByKey[key]=(_sdPendingLaborByKey[key]||0)+totalMins;
-                // Since v1.8.42, a row's _laborFixedTotal (this AI-computed
-                // total) always wins over the mm/gr flat-1-minute floor in
-                // _sdRecalcLaborTotal — so the real, uncapped totalMins is
-                // what Cost Summary will actually add up for this row too.
-                // Capping it here to 1 for mm/gr rows (as an earlier version
-                // of this did) would make the modal UNDER-report compared to
-                // the real applied total — the two must show the same number.
+                // The minutes go onto THIS row — the one the AI named by its
+                // index — and nowhere else. They used to be filed under the
+                // row's part number and handed back by part number, so every
+                // line sharing a number collected the whole pile: one parts
+                // list with the same wire on five lines (or five lines misread
+                // as one number) counted the same 12.4 minutes five times, and
+                // the Labor Time on the summary came out far above the sum of
+                // what the steps actually add up to. The figure is already a
+                // total for one cable (unit_minutes × qty_in_drawing), so the
+                // row keeps it as a fixed total — see _sdRecalcLaborTotal.
+                row._labor_min=(parseFloat(row._labor_min)||0)+totalMins;
                 rowTiedMinutes+=totalMins;
                 displaySteps.push({operation:step.operation, unitMinutes:unitMins, qty:qtyInDrawing, minutes:totalMins});
               } else {
@@ -8039,9 +8059,8 @@ async function handleSDFiles(files){
         // dropped the AI-computed fixed total for exactly those rows: plain
         // cable/wire and generic hardware. That fallback is gone now, but keep
         // both sides reading from `r` so they cannot drift apart again.
-        const dwgKey=`${item.drawing_number}|${r.part_number||r.description||_sdRowIdx}`;
-        if(_sdPendingLaborByKey[dwgKey]!=null){
-          item.labor_time = String(_sdPendingLaborByKey[dwgKey]);
+        if(r._labor_min!=null && (parseFloat(r._labor_min)||0)>0){
+          item.labor_time = String(+parseFloat(r._labor_min).toFixed(2));
           item._laborFixedTotal = true;
         }
         _sdRecalcRow(item);
