@@ -2067,6 +2067,64 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('601: ...and the ferrule targets are not listed as connectors', bad.connectors.map(c=>c.ref), ['SIDE A']);
 }
 
+// ──────────────────────────── 43. a parts list that is a picture
+// EL-004695-AC: the BOM is an image pasted into the bottom-left corner of an
+// A3 sheet. The text layer is a full Altium schematic — net names, wire
+// colours, part numbers on the symbols — and has no table in it at all. Sent
+// whole, the sheet reached the model at 1568 px wide and the table at ~670 px,
+// letters four pixels high.
+{
+  const hdr=G('_textHasBomHeader'), plan=G('_bomBandPlan'), clamp=G('_bomClampBox'),
+        loc=G('_bomParseLocate'), merge=G('_bomMergeBands');
+
+  const schematic=['ThunderB External connector - 4 way selector harness',
+    '1 CAN_H 26AWG White', 'J4 COJ4 EL-000481 EL-000486', 'XT60- male EL-006078-M',
+    '20 AWG Red EXT28V 1 PIJ101', 'DESCRIPTION.: TBV EXT connector 4 way selector harness',
+    'NAME SIGN DATE: Title:'].join('\n');
+  t('bom: a schematic text layer is not a parts list', hdr([schematic]), false);
+  t('bom: ...even with one column word in its title block', hdr(['DESCRIPTION.: harness']), false);
+  t('bom: a real header line is', hdr(['ITEM  B.B PART No.  DESCRIPTION  MANUFACTURER  U/M  QTY']), true);
+  t('bom: ...in other spellings too', hdr(['# | P/N | Desc | Qty']), true);
+  t('bom: ...and on any page', hdr(['title block only', 'POS  PART NUMBER  QUANTITY']), true);
+
+  // The table on the sheet: ~0.03–0.42 across, ~0.71–0.97 down an 842 × 595 pt page.
+  const p=plan(842,595,[0.029,0.714,0.416,0.973]);
+  t('bom: the region is drawn to fill the model\'s view', p.pxW, 1568);
+  ok('bom: ...at about 4× — a 4 pt letter becomes ~17 px', p.scale>4 && p.scale<4.6);
+  t('bom: ...in one band, being wider than tall', p.bands.length, 1);
+  ok('bom: ...that is not shrunk again on the way in', p.pxH<=1568);
+
+  // A full-page parts list sheet in portrait: tall, so it is cut into bands —
+  // across, never down, so no row is ever split.
+  const tall=plan(595,842,[0,0,1,1]);
+  ok('bom: a tall table is cut into several bands', tall.bands.length>=2);
+  ok('bom: ...each within the model\'s view', tall.bands.every(b=>b.height<=1568));
+  t('bom: ...each the full width of the table', tall.pxW, 1568);
+  ok('bom: ...overlapping, so a row on the cut is seen whole',
+     tall.bands.slice(1).every((b,i)=>b.top < tall.bands[i].top+tall.bands[i].height));
+  t('bom: ...and covering the table to its last line',
+    tall.bands[tall.bands.length-1].top+tall.bands[tall.bands.length-1].height, tall.pxH);
+  ok('bom: a tiny box is not blown up past 8×', plan(842,595,[0.5,0.5,0.52,0.52]).scale<=8);
+
+  const c=clamp([0.03,0.72,0.42,0.97]);
+  ok('bom: the located box is padded so a header or last row is not clipped',
+     c[0]<0.03 && c[1]<0.72 && c[2]>0.42 && c[3]>0.97);
+  t('bom: ...and kept on the page', clamp([-0.2,0.9,1.3,1.4]).every(v=>v>=0 && v<=1), true);
+  t('bom: a box given corner-first either way round is the same box', clamp([0.4,0.9,0.1,0.6]), clamp([0.1,0.6,0.4,0.9]));
+
+  t('bom: locate — fractions', loc('{"found":true,"box":[0.03,0.71,0.42,0.97],"rows":25}').rows, 25);
+  ok('bom: locate — percent is read as percent', Math.abs(loc('{"found":true,"box":[3,71,42,97]}').box[1]-0.71)<1e-9);
+  t('bom: locate — nothing there', loc('{"found":false}'), null);
+  t('bom: locate — prose around the answer is fine', !!loc('Here: {"found":true,"box":[0,0,0.5,0.5]} done'), true);
+  t('bom: locate — garbage is no box', loc('I cannot tell'), null);
+
+  const r=(item,pn,d='')=>({item, part_number:pn, description:d});
+  const m=merge([[r(1,'A'),r(2,'B'),r(3,'C')],[r(3,'C'),r(4,'D')]]);
+  t('bom: rows seen twice where bands overlap are kept once', m.map(x=>x.part_number), ['A','B','C','D']);
+  const twice=merge([[r(1,'X','left side'),r(2,'X','right side')]]);
+  t('bom: ...but the same part on two lines of the list stays two lines', twice.length, 2);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

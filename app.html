@@ -780,7 +780,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.56.0';
+const APP_VER   = '1.57.0';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -3312,43 +3312,10 @@ async function handleFiles(files, projectId, projectName, drawingNameOverride=''
           extractedRows = await aiExtractBOM(sheetText, false, null, file.name, 'excel');
         }
       } else if(isPDF){
-        setMsg('Reading PDF pages…', 15);
-        const {pageTexts, pageImages} = await extractPDFPages(file);
-        _pdfImages = pageImages;
-        _pdfText = pageTexts.map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
-        _pdfTextLen = pageTexts.join('').trim().length;
-
-        // See _findBOMPageIndex — a detected BOM-header page whose OWN text
-        // is still very short (just the header, no real rows) is a strong
-        // sign this table's cells are graphics, not text: trust vision over
-        // the whole-document text blob even if it returned SOME rows, since
-        // those are almost certainly pulled from boilerplate elsewhere, not
-        // the real table.
-        const _bomPageIdx=_findBOMPageIndex(pageTexts);
-        const _bomPageSparse=_bomPageIdx>=0 && (pageTexts[_bomPageIdx]||'').trim().length<400;
-
-        if(_pdfTextLen > 50){
-          setMsg('Sending text to AI…', 45);
-          extractedRows = await aiExtractBOM(_pdfText, false, null, file.name);
-        }
-        if((!extractedRows.length || _bomPageSparse) && anthKey){
-          setMsg('Text extraction found nothing — trying page vision…', 60);
-          // Try the detected BOM sheet FIRST, then fall back to the rest of
-          // the pages in order.
-          const pageOrder=_pdfImages.map((_,idx)=>idx);
-          if(_bomPageIdx>=0){
-            const pos=pageOrder.indexOf(_bomPageIdx);
-            if(pos>0){ pageOrder.splice(pos,1); pageOrder.unshift(_bomPageIdx); }
-          }
-          for(let k=0;k<pageOrder.length;k++){
-            const pi=pageOrder[k];
-            const b64=_pdfImages[pi];
-            if(!b64) continue;
-            setMsg(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`, 60+Math.round(35*k/pageOrder.length));
-            const rows=await aiExtractBOM('',true,{b64,mimeType:'image/jpeg'},file.name);
-            if(rows.length){ extractedRows=rows; break; }
-          }
-        }
+        // See _bomFromPDF: the text layer when it holds a parts list, and
+        // otherwise the table located on the sheet and read at full sharpness.
+        const r=await _bomFromPDF(file, setMsg);
+        extractedRows=r.rows; _pdfImages=r.pageImages; _pdfText=r.pdfText; _pdfTextLen=r.textLen;
       } else {
         setMsg('Encoding image…', 20);
         const {b64, mimeType} = await encodeImage(file);
@@ -3731,7 +3698,197 @@ async function extractPDFPages(file){
       pageImages.push(b64);
     }catch(e){ pageImages.push(null); }
   }
-  return {pageTexts, pageImages};
+  // A region of a page, rendered sharp. The whole sheet is sent at 2400px, but
+  // the API scales any image down to about 1568px on its long edge before the
+  // model sees it — so a parts list printed in a corner of an A3 sheet arrives
+  // with letters two or three pixels high. Rendering just that region, at a
+  // scale where it fills the model's view, is what makes it readable.
+  // box = [x0,y0,x1,y1] as fractions of the page; returns JPEG base64 bands,
+  // top to bottom, each at most _BOM_VIS_MAX px on either side.
+  const crop=async(pageIdx, box)=>{
+    const page=await pdf.getPage(pageIdx+1);
+    return _bomRenderBands(page, box);
+  };
+  return {pageTexts, pageImages, crop, numPages:pdf.numPages};
+}
+
+// ── Reading a parts list that is a picture ─────────────────────────────────────
+// What the Anthropic API actually shows the model: an image is scaled so its
+// long edge is at most ~1568px. Anything sent bigger is shrunk, not read sharper.
+const _BOM_VIS_MAX=1568;
+const _BOM_VIS_MAX_SCALE=8;      // 576 dpi — beyond this nothing gets clearer
+const _BOM_VIS_OVERLAP=0.08;     // bands overlap so no row is cut in half unseen
+// The scale and the bands for a region [x0,y0,x1,y1] (fractions) of a page of
+// w × h points. Width is what decides the scale: a table is cut into
+// horizontal bands when it is tall, never into columns, because a row split
+// down the middle cannot be read back together.
+function _bomBandPlan(w, h, box){
+  const [x0,y0,x1,y1]=_bomClampBox(box);
+  const bw=(x1-x0)*w, bh=(y1-y0)*h;
+  const scale=Math.min(_BOM_VIS_MAX_SCALE, _BOM_VIS_MAX/Math.max(bw,1));
+  const pxW=Math.round(bw*scale), pxH=Math.round(bh*scale);
+  const step=Math.round(_BOM_VIS_MAX*(1-_BOM_VIS_OVERLAP));
+  const bands=[];
+  if(pxH<=_BOM_VIS_MAX) bands.push({top:0, height:pxH});
+  else for(let top=0; top<pxH; top+=step){
+    const height=Math.min(_BOM_VIS_MAX, pxH-top);
+    bands.push({top, height});
+    if(top+height>=pxH) break;
+  }
+  return {scale, x0px:Math.round(x0*w*scale), y0px:Math.round(y0*h*scale), pxW, pxH, bands};
+}
+function _bomClampBox(box){
+  const b=(Array.isArray(box)?box:[0,0,1,1]).map(v=>Math.max(0,Math.min(1,Number(v)||0)));
+  let [x0,y0,x1,y1]=b;
+  if(x1<x0) [x0,x1]=[x1,x0];
+  if(y1<y0) [y0,y1]=[y1,y0];
+  // A located box is padded: the model's corners are approximate, and a
+  // header row or a last line clipped off is a part that silently goes missing.
+  const px=0.02, py=0.02;
+  x0=Math.max(0,x0-px); y0=Math.max(0,y0-py); x1=Math.min(1,x1+px); y1=Math.min(1,y1+py);
+  if(x1-x0<0.05){ x0=Math.max(0,x0-0.05); x1=Math.min(1,x1+0.05); }
+  if(y1-y0<0.05){ y0=Math.max(0,y0-0.05); y1=Math.min(1,y1+0.05); }
+  return [x0,y0,x1,y1];
+}
+async function _bomRenderBands(page, box){
+  const base=page.getViewport({scale:1});
+  const plan=_bomBandPlan(base.width, base.height, box);
+  const out=[];
+  for(const band of plan.bands){
+    // Only the band is drawn: the viewport is shifted so the region lands at
+    // the canvas origin, and the canvas is the size of the band — a sheet at
+    // 8× would otherwise be a canvas of hundreds of megabytes.
+    const vp=page.getViewport({scale:plan.scale, offsetX:-plan.x0px, offsetY:-(plan.y0px+band.top)});
+    const canvas=document.createElement('canvas');
+    canvas.width=Math.max(1,plan.pxW); canvas.height=Math.max(1,band.height);
+    const ctx=canvas.getContext('2d');
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    await page.render({canvasContext:ctx, viewport:vp}).promise;
+    out.push(canvas.toDataURL('image/jpeg',0.92).split(',')[1]);
+  }
+  return out;
+}
+// Rows from overlapping bands, joined: a row seen at the bottom of one band and
+// again at the top of the next is the same row once.
+function _bomMergeBands(lists){
+  const out=[];
+  const key=r=>`${String(r?.item??'').trim()}|${String(r?.part_number||'').trim().toUpperCase()}|${String(r?.description||'').trim().toUpperCase()}`;
+  for(const rows of lists){
+    const seen=new Set(out.slice(-12).map(key));
+    for(const r of (rows||[])){ if(!seen.has(key(r))) out.push(r); }
+  }
+  return out;
+}
+// Whether a page's TEXT layer carries a parts list at all: a line naming at
+// least three of the columns a parts list has. A schematic exported from a CAD
+// tool is full of real text — net names, wire colours, part numbers on the
+// symbols — so "the text is long" says nothing about whether the table is in
+// it. On this shop's drawings the table is very often a picture pasted on the
+// sheet, and the text layer then holds everything but it.
+const _BOM_HEADER_TOKENS=[/\bitem\b|\bpos\b|^#|\s#\s/i, /\bq(?:uan)?ty\b|\bquantity\b/i,
+  /\bdesc(?:ription)?\b/i, /\bp\/?n\b|part\s*(?:no|num|number)|\bpn\b|catalog/i,
+  /\bmanufacturer\b|\bmfr\b|\bmfg\b|\bvendor\b/i, /\bu\/?m\b|\bunit\b|\buom\b/i, /\bref(?:erence)?\b|designator/i];
+function _textHasBomHeader(pageTexts){
+  return (pageTexts||[]).some(t=>String(t||'').split('\n').some(line=>
+    _BOM_HEADER_TOKENS.filter(re=>re.test(line)).length>=3));
+}
+const _BOM_LOCATE_PROMPT=`Look at this engineering drawing sheet. Is there a PARTS LIST / BOM table on it —
+a table whose columns are things like ITEM, PART No., DESCRIPTION, MANUFACTURER, QTY, U/M? It may be
+small, in any corner, and it may be a picture pasted onto the sheet. A title block, a revision table,
+a pin-out or wiring table, and a label table are NOT a parts list.
+
+Return ONE JSON object and nothing else:
+{"found":true,"box":[x0,y0,x1,y1],"rows":<about how many data rows>}
+where the box is the table's outline as fractions of the image (0 = left/top, 1 = right/bottom),
+including its header row. If there is no parts list on this sheet: {"found":false}`;
+async function _bomLocate(b64){
+  const resp=await _fetchWithRetry('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
+             'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
+    body:JSON.stringify({model:_csModel(), max_tokens:300, temperature:0, messages:[{role:'user',content:[
+      {type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},
+      {type:'text',text:_BOM_LOCATE_PROMPT}]}]})
+  });
+  if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}
+    if(_csModelRejected(resp.status,m)){ _csModelDown=true; return _bomLocate(b64); }
+    throw new Error(m); }
+  const d=await resp.json();
+  return _bomParseLocate((d.content&&d.content[0]&&d.content[0].text)||'');
+}
+function _bomParseLocate(text){
+  const m=/\{[\s\S]*\}/.exec(String(text||''));
+  if(!m) return null;
+  let o; try{ o=JSON.parse(m[0]); }catch{ return null; }
+  if(!o || o.found!==true || !Array.isArray(o.box) || o.box.length!==4) return null;
+  const b=o.box.map(Number);
+  if(b.some(v=>!Number.isFinite(v))) return null;
+  // Some answers come back in percent rather than fractions.
+  const box = b.some(v=>v>1.5) ? b.map(v=>v/100) : b;
+  return {box, rows:Number(o.rows)||0};
+}
+// The whole PDF path of a BOM import, shared by both screens that import one.
+// Returns the rows, the page they came from, and that page's image (the cable
+// process analysis that follows looks at the same sheet).
+async function _bomFromPDF(file, setMsg){
+  setMsg('Reading PDF pages…', 15);
+  const {pageTexts, pageImages, crop}=await extractPDFPages(file);
+  const pdfText=pageTexts.map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
+  const textLen=pageTexts.join('').trim().length;
+  const bomPageIdx=_findBOMPageIndex(pageTexts);
+  const bomPageSparse=bomPageIdx>=0 && (pageTexts[bomPageIdx]||'').trim().length<400;
+  const hasHeader=_textHasBomHeader(pageTexts);
+  let rows=[], page=-1, how='';
+
+  // 1. The text layer, when it actually holds a parts list: exact and quick.
+  if(textLen>50 && hasHeader){
+    setMsg('Sending text to AI…', 40);
+    rows=await aiExtractBOM(pdfText, false, null, file.name);
+    if(rows.length){ how='text'; page=bomPageIdx; }
+  }
+  // 2. Otherwise the picture: find the table on the sheet, then read just that
+  //    region rendered sharp. Pages with a parts-list heading go first.
+  if((!rows.length || bomPageSparse) && anthKey){
+    const order=pageImages.map((_,i)=>i);
+    if(bomPageIdx>0){ order.splice(order.indexOf(bomPageIdx),1); order.unshift(bomPageIdx); }
+    for(let k=0;k<order.length && (!rows.length || how!=='region');k++){
+      const pi=order[k];
+      if(!pageImages[pi]) continue;
+      setMsg(`Looking for the parts list on page ${pi+1}/${pageImages.length}…`, 50+Math.round(30*k/order.length));
+      let loc=null;
+      try{ loc=await _bomLocate(pageImages[pi]); }catch(e){ console.warn('[BOM] locate', e.message); }
+      if(!loc) continue;
+      setMsg(`Reading the parts list on page ${pi+1}…`, 60+Math.round(30*k/order.length));
+      const bands=await crop(pi, loc.box);
+      const lists=[];
+      for(const b64 of bands) lists.push(await aiExtractBOM('', true, {b64, mimeType:'image/jpeg'}, file.name));
+      const got=_bomMergeBands(lists);
+      if(got.length && got.length>=rows.length){ rows=got; page=pi; how='region'; }
+    }
+    // 3. Nothing located: the whole sheet, as before.
+    if(!rows.length){
+      for(let k=0;k<order.length;k++){
+        const pi=order[k];
+        if(!pageImages[pi]) continue;
+        setMsg(`Vision analysis: page ${pi+1}/${pageImages.length}…`, 85);
+        const got=await aiExtractBOM('', true, {b64:pageImages[pi], mimeType:'image/jpeg'}, file.name);
+        if(got.length){ rows=got; page=pi; how='page'; break; }
+      }
+    }
+  }
+  // 4. Last resort for a text layer with no recognisable header: it may still
+  //    be a table the header test did not catch.
+  if(!rows.length && textLen>50 && !hasHeader){
+    setMsg('Sending text to AI…', 90);
+    rows=await aiExtractBOM(pdfText, false, null, file.name);
+    if(rows.length) how='text';
+  }
+  logSystemAudit('drawing_bom_pdf',{filename:file.name, how, page:page+1, rows:rows.length, text_header:hasHeader},true);
+  const imgIdx = page>=0 ? page : (bomPageIdx>=0 ? bomPageIdx : 0);
+  return {rows, pageTexts, pageImages, pdfText, textLen,
+          imgData: pageImages[imgIdx] ? {b64:pageImages[imgIdx], mimeType:'image/jpeg'} : null,
+          fromImage: how==='region' || how==='page'};
 }
 
 // Multi-page drawings often put the actual BOM / Assembly Parts List table on
@@ -4566,10 +4723,16 @@ async function _anthropicBOM(text, isImage, imgData, filename, sourceType='drawi
     method:'POST',
     headers:{'x-api-key':anthKey,'anthropic-version':'2023-06-01',
              'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-    body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:4096, messages})
+    // A table read off a picture goes to the stronger model: small print in a
+    // scanned or pasted parts list is exactly where the small one misreads a
+    // digit or drops a row. Text needs no eyes and stays on the fast one.
+    body:JSON.stringify({model:isImage?_csModel():'claude-haiku-4-5-20251001',
+                         max_tokens:isImage?8192:4096, temperature:0, messages})
   });
   if(!resp.ok){let m=`Anthropic error ${resp.status}`;
-    try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
+    try{const e=await resp.json();m=e.error?.message||m;}catch{}
+    if(isImage && _csModelRejected(resp.status,m)){ _csModelDown=true; return _anthropicBOM(text, isImage, imgData, filename, sourceType); }
+    throw new Error(m);}
   const data=await resp.json();
   return _parseAIJson(data.content[0].text.trim());
 }
@@ -7614,43 +7777,11 @@ async function handleSDFiles(files){
         // those run in text mode off the same content.
         _pdfText=sheetText;
       } else if(isPDF){
-        setM('Reading PDF pages…',15);
-        const {pageTexts,pageImages}=await extractPDFPages(file);
-        _pdfImages=pageImages;
-        _pdfText=pageTexts.map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
-        _pdfTextLen=pageTexts.join('').trim().length;
-
-        // See _findBOMPageIndex — a detected BOM-header page whose OWN text
-        // is still very short (just the header, no real rows) is a strong
-        // sign this table's cells are graphics, not text: trust vision over
-        // the whole-document text blob even if it returned SOME rows, since
-        // those are almost certainly pulled from boilerplate elsewhere, not
-        // the real table.
-        const _bomPageIdx=_findBOMPageIndex(pageTexts);
-        const _bomPageSparse=_bomPageIdx>=0 && (pageTexts[_bomPageIdx]||'').trim().length<400;
-
-        if(_pdfTextLen>50){
-          setM('Sending text to AI…',45);
-          extractedRows=await aiExtractBOM(_pdfText,false,null,file.name);
-        }
-        if((!extractedRows.length||_bomPageSparse)&&anthKey){
-          setM('Text extraction found nothing — trying page vision…',60);
-          // Try the detected BOM sheet FIRST, then fall back to the rest of
-          // the pages in order.
-          const pageOrder=_pdfImages.map((_,idx)=>idx);
-          if(_bomPageIdx>=0){
-            const pos=pageOrder.indexOf(_bomPageIdx);
-            if(pos>0){ pageOrder.splice(pos,1); pageOrder.unshift(_bomPageIdx); }
-          }
-          for(let k=0;k<pageOrder.length;k++){
-            const pi=pageOrder[k];
-            const b64=_pdfImages[pi];
-            if(!b64) continue;
-            setM(`Vision analysis: page ${pi+1}/${_pdfImages.length}…`,60+Math.round(35*k/pageOrder.length));
-            const rows2=await aiExtractBOM('',true,{b64,mimeType:'image/jpeg'},file.name);
-            if(rows2.length){extractedRows=rows2;_procIsImage=true;_procImgData={b64,mimeType:'image/jpeg'};break;}
-          }
-        }
+        // See _bomFromPDF — shared with the RFQ import.
+        const r=await _bomFromPDF(file, setM);
+        extractedRows=r.rows; _pdfImages=r.pageImages; _pdfText=r.pdfText; _pdfTextLen=r.textLen;
+        const _bomPageIdx=_findBOMPageIndex(r.pageTexts);
+        if(r.fromImage && r.imgData){ _procIsImage=true; _procImgData=r.imgData; }
         // Fall back to the detected BOM sheet's own image (or page 1 if none
         // was detected) for the cable-process analysis below, rather than
         // always defaulting to page 1 — the real assembly content, and
