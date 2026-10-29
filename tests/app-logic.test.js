@@ -2125,6 +2125,30 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('bom: ...but the same part on two lines of the list stays two lines', twice.length, 2);
 }
 
+// ──────────────────────────── 44. the company's number and the maker's number
+// EL-004695-AC lists both: "B.B PART No." (EL-000787 — the company's own) and
+// "MANUFACTURER PART No." (2126/19-2 — what a distributor sells). The first is
+// the app's Customer PN, the second its MNF P/N; they had come in swapped.
+{
+  const V=G('_BOM_VISION_PROMPT'), T=G('_BOM_TEXT_PROMPT'), hdr=G('_xlsFindHeaderRow'),
+        isInt=G('_xlsIsInternalPnHeader'), sq=G('_xlsSquash');
+  for(const [name,p] of [['picture',V],['text',T('x.pdf')]]){
+    ok(`pn: the ${name} prompt maps the maker's column to part_number`,
+       /MANUFACTURER PART No\.[^\n]*\n\s*→ "part_number"/.test(p));
+    ok(`pn: ...and the company's own column (B.B PART No.) to atlantium_pn`,
+       /B\.B PART No\.[\s\S]{0,300}→ "atlantium_pn"/.test(p));
+    ok(`pn: ...never the other way round when both exist`,
+       /company's own number NEVER goes in\s+"part_number"/.test(p));
+    ok(`pn: ...with this drawing's own row as the example`,
+       /"atlantium_pn":"EL-000787","part_number":"2126\/19-2"/.test(p));
+  }
+  const h=hdr([['ITEM','B.B PART No.','DESCRIPTION','MANUFACTURER','MANUFACTURER PART No.','U/M','QTY']]);
+  t('pn: a spreadsheet with the same columns maps B.B PART No. to Customer PN', h.colMap.internal_pn, 1);
+  t('pn: ...and MANUFACTURER PART No. to MNF P/N', h.colMap.mfpn, 4);
+  t('pn: a customer prefix still reads as the customer\'s number', isInt(sq('AMAT P/N')), true);
+  t('pn: ...but a maker\'s prefix never does', [ 'Mfg Part No','Vendor PN','MNF P/N','MPN','Mfr PN' ].some(x=>isInt(sq(x))), false);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

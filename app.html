@@ -780,7 +780,7 @@ function _buildPager(page,totalPages,idPrefix){
   </div>`;
 }
 let sdItems     = [];
-const APP_VER   = '1.57.0';
+const APP_VER   = '1.57.1';
 
 // ── Version check ─────────────────────────────────────────────────────────────
 // The whole app is one static file on GitHub Pages, so a browser can keep
@@ -3993,7 +3993,18 @@ const _XLS_COL_ALIASES={
 // CUSTOMER's internal number, not the manufacturer's. Matched by shape so the
 // next customer's export doesn't need its own alias entry, but never for the
 // manufacturer-side spellings, which mean the opposite thing.
-const _XLS_INTERNAL_PN_SHAPE=/^[a-z]{2,8}pn$/;
+const _XLS_INTERNAL_PN_SHAPE=/^([a-z]{1,8})(pn|partno|partnum|partnumber)$/;
+// "B.B PART No." squashes to "bbpartno": a company's initials in front of a
+// part-number column. The manufacturer's own spellings ("Mfg Part No",
+// "Vendor PN") look the same shape and mean the opposite, so their prefixes
+// are excluded by name.
+const _XLS_MFG_PREFIXES=['mfg','mfr','mnf','mf','manufacturer','vendor','supplier','maker','nf','m'];
+function _xlsIsInternalPnHeader(c){
+  const m=_XLS_INTERNAL_PN_SHAPE.exec(String(c||''));
+  if(!m) return false;
+  if(_XLS_MFG_PN_SQUASHED.includes(c)) return false;
+  return !_XLS_MFG_PREFIXES.includes(m[1]);
+}
 const _XLS_MFG_PN_SQUASHED=['mfgpn','mfrpn','mpn','mfpn','nfpn','vendorpn','manufacturerpn'];
 // Row-TYPE semantics in hierarchical ERP/PLM exports (ELBIT "BOM QVL Report"
 // and friends). Classified with ANCHORED patterns on purpose: a loose
@@ -4067,7 +4078,7 @@ function _xlsFindHeaderRow(rows){
       }
     });
     if(candidates.internal_pn===undefined){
-      const ci=cells.findIndex(c=>c && _XLS_INTERNAL_PN_SHAPE.test(c) && !_XLS_MFG_PN_SQUASHED.includes(c));
+      const ci=cells.findIndex(c=>c && _xlsIsInternalPnHeader(c));
       if(ci>=0) candidates.internal_pn=[ci];
     }
     const keys=Object.keys(candidates);
@@ -4545,15 +4556,31 @@ has similar-looking column headers (e.g. "NAME", "DESCRIPTION").
 COLUMN MAPPING (column names may vary between drawings):
 - "item" → row number (1, 2, 3 ...) — look for: ITEM, #, NO., SEQ
 - "description" → component description — look for: DESCRIPTION, DESC, NAME
-- "atlantium_pn" → company internal part number — look for: ATLANTIUM PN, INTERNAL PN, CATALOG NO, CUST PN, CUSTOMER PN
+- "atlantium_pn" → company internal part number — look for: ATLANTIUM PN, INTERNAL PN, CATALOG NO, CUST PN, CUSTOMER PN, a "<COMPANY INITIALS> PART No." column such as B.B PART No.
 - "manufacturer" → maker name — look for: MANUFACTURER, MFG, MAKE, VENDOR
-- "part_number" → manufacturer part number — look for: MANUFACTURER PN, MFR PN, MFG PN, PART NUMBER, PART NO, PN, P/N
+- "part_number" → manufacturer part number — look for: MANUFACTURER PART No., MANUFACTURER PN, MFR PN, MFG PN; only when there is no such column: PART NUMBER, PART NO, PN, P/N
 - "drawing_number" → drawing number — look for: DWG NO, DRAWING NO, DRAWING #
 - "drawing_name" → drawing title or assembly name
 - "qty" → quantity — look for: QTY, QUANTITY, NO. REQ'D, NO. OFF, AMOUNT. Return as a plain number string (e.g. "3", "2500"). This is REQUIRED for every row — do not leave it empty unless the drawing genuinely has no quantity column.
 - "unit" → unit of measure — look for: UNIT, UOM, U/M — the ONLY valid values are: "pc", "mm", "cm", "ea", "gm" (grams — also written "GR"), "M" (meters). If the column shows anything else, leave "unit" as empty string "" rather than inventing or guessing a unit.
 - "pin_count" → for connector parts only: the number of pins/positions/contacts (look for a POS, PINS, CONTACTS, WAY column, or a count embedded in the part number/description of a known connector series). Empty string "" if the row isn't a connector or the count isn't known — do not guess.
 - "price" → normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). The ONLY exception is a synthesized crimp-tool row — see rule 5 below.
+TWO PART-NUMBER COLUMNS: many parts lists carry the company's OWN number for each
+part AND the manufacturer's number, in two separate columns. Map them by what they ARE,
+never by which one is called "PART No.":
+- the column headed MANUFACTURER PART No. / MFR P/N / MFG P/N / MPN / VENDOR P/N
+  → "part_number" (shown in the app as MNF P/N)
+- the company's own column — often headed with the company's initials or name
+  ("B.B PART No.", "<COMPANY> P/N"), or INTERNAL P/N, CAT. NO., ITEM CODE, CUST PN, or just
+  "PART No." when a manufacturer column sits beside it — whose codes usually share one
+  house pattern (EL-000787, CON-10652, SHR-12765)
+  → "atlantium_pn" (shown in the app as Customer PN)
+When a manufacturer-part-number column exists, the company's own number NEVER goes in
+"part_number". Example, columns ITEM | B.B PART No. | DESCRIPTION | MANUFACTURER |
+MANUFACTURER PART No. | U/M | QTY with the row 3 | EL-000787 | Wire 26 awg RED | WEICO |
+2126/19-2 | CM | 200 →
+{"item":"3","atlantium_pn":"EL-000787","part_number":"2126/19-2","description":"Wire 26 awg RED","manufacturer":"WEICO","unit":"cm","qty":"200"}
+Only when the table has a single part-number column does that column go in "part_number".
 THE SAME PART ON SEVERAL LINES: a parts list often gives one part more than one
 item number, because it is fitted in more than one place. Output EVERY one of
 those lines as its own row, in the order they appear, each keeping its own item
@@ -4604,16 +4631,32 @@ table or inventing rows.
 
 For each row extract:
 - "item": row/item number (1, 2, 3 ...)
-- "part_number": the manufacturer part number (alphanumeric code in PART NUMBER / PN / P/N column)
+- "part_number": the MANUFACTURER part number — the MANUFACTURER PART No. / MFR P/N column when there is one (see TWO PART-NUMBER COLUMNS), otherwise the PART NUMBER / PN / P/N column
 - "drawing_number": drawing number (DWG NO, DRAWING NO)
 - "drawing_name": drawing title or assembly name
-- "atlantium_pn": internal/customer part number if a separate column exists, else empty
+- "atlantium_pn": the company's own / internal / customer part number (e.g. a "B.B PART No." column) when it is a separate column from the manufacturer part number, else empty
 - "description": component description (DESCRIPTION / DESC column)
 - "qty": quantity as a number string
 - "unit": unit of measure — the ONLY valid values are: pc, mm, M, cm, ea, gm (grams — also written GR). If it's anything else, use empty string "" instead of guessing.
 - "manufacturer": manufacturer name if shown, else empty string
 - "pin_count": for connector parts only — the number of pins/positions/contacts, read from a POS/PINS/CONTACTS/WAY column if the drawing has one, or inferred from a count embedded in the part number/description of a known connector series. Empty string "" if the row isn't a connector or the count isn't known — do not guess.
 - "price": normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). The ONLY exception is a synthesized crimp-tool row — see rule 5 below.
+TWO PART-NUMBER COLUMNS: many parts lists carry the company's OWN number for each
+part AND the manufacturer's number, in two separate columns. Map them by what they ARE,
+never by which one is called "PART No.":
+- the column headed MANUFACTURER PART No. / MFR P/N / MFG P/N / MPN / VENDOR P/N
+  → "part_number" (shown in the app as MNF P/N)
+- the company's own column — often headed with the company's initials or name
+  ("B.B PART No.", "<COMPANY> P/N"), or INTERNAL P/N, CAT. NO., ITEM CODE, CUST PN, or just
+  "PART No." when a manufacturer column sits beside it — whose codes usually share one
+  house pattern (EL-000787, CON-10652, SHR-12765)
+  → "atlantium_pn" (shown in the app as Customer PN)
+When a manufacturer-part-number column exists, the company's own number NEVER goes in
+"part_number". Example, columns ITEM | B.B PART No. | DESCRIPTION | MANUFACTURER |
+MANUFACTURER PART No. | U/M | QTY with the row 3 | EL-000787 | Wire 26 awg RED | WEICO |
+2126/19-2 | CM | 200 →
+{"item":"3","atlantium_pn":"EL-000787","part_number":"2126/19-2","description":"Wire 26 awg RED","manufacturer":"WEICO","unit":"cm","qty":"200"}
+Only when the table has a single part-number column does that column go in "part_number".
 THE SAME PART ON SEVERAL LINES: a parts list often gives one part more than one
 item number, because it is fitted in more than one place. Output EVERY one of
 those lines as its own row, in the order they appear, each keeping its own item
