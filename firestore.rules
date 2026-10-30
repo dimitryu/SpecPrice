@@ -56,7 +56,12 @@ service cloud.firestore {
 
     // ── companies/{cid}/parts_cache/{id}  (Part Stock) ────────────────────
     match /companies/{cid}/parts_cache/{docId} {
-      allow read, write: if isSameCompany(cid) || isAdmin();
+      // Anyone in the company reads and edits the Database. Removing a part
+      // for good is an admin's call: the app's "Delete Selected" only moves a
+      // part to the recycle bin (an update), and the permanent purge — manual
+      // or after the retention period — runs from an admin session.
+      allow read, create, update: if isSameCompany(cid) || isAdmin();
+      allow delete: if isAdmin();
     }
 
     // ── companies/{cid}/projects/{id}  (RFQs) + nested drawings (BOMs) ────
@@ -66,6 +71,19 @@ service cloud.firestore {
       match /drawings/{drawingId} {
         allow read, write: if isSameCompany(cid) || isAdmin();
       }
+    }
+
+    // ── companies/{cid}/cut_strip_specs/{id}  (Cut & Strip) ────────────────
+    // Doc id is the sanitised drawing number, so re-analysing a drawing updates
+    // its sheet instead of creating a near-duplicate.
+    //
+    // Read and write are both company-scoped rather than admin-only on purpose:
+    // the whole point of these sheets is that the person at the bench opens one,
+    // and the 'viewer' role exists for exactly that kind of shop-floor account.
+    // Write stays open to the company because generating a sheet from a drawing
+    // is normal production work, not administration.
+    match /companies/{cid}/cut_strip_specs/{docId} {
+      allow read, write: if isSameCompany(cid) || isAdmin();
     }
 
     // ── companies/{cid}/customers/{id} ─────────────────────────────────────
@@ -104,7 +122,9 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // ── secure_config/{docId}  (Mouser / DigiKey API credentials) ─────────
+    // ── secure_config/{docId}  (Mouser / DigiKey / Anthropic API keys) ────
+    // ai_api holds the Anthropic key; only the aiProxy / apiConfig functions
+    // read or write it.
     // Denied to EVERY client, including admins. That is intentional, not an
     // oversight: these credentials are only ever used by the priceLookup Cloud
     // Function, which talks to Firestore through the Admin SDK and therefore

@@ -4,6 +4,8 @@
  *   priceLookup — part pricing from the Mouser and DigiKey APIs
  *   apiConfig   — admin-managed storage for those API credentials
  *   priceProxy  — a narrow CORS proxy, now only for currency-rate pages
+ *   aiProxy     — every Anthropic (Claude) call the app makes, so the AI key
+ *                 lives on the server and never in a browser
  *
  * HISTORY, because it explains the shape of this file: pricing used to come
  * from scraping findchips.com through priceProxy. That was abandoned — the
@@ -17,7 +19,7 @@
  *   • priceProxy fetches only the hosts in ALLOWED_HOSTS;
  *   • only our own web origins get a CORS grant;
  *   • a valid Firebase ID token is required, and apiConfig also demands the
- *     'admin' role.
+ *     'admin' role; aiProxy demands an enabled user profile.
  * An unrestricted proxy would let anyone on the internet route traffic through
  * your Google project, on your quota and under your IP's reputation.
  */
@@ -378,6 +380,10 @@ function readMouserPart(part, qty, exact) {
     exactMatch: exact,
     manufacturer: part.Manufacturer || '',
     url: part.ProductDetailUrl || '',
+    // The datasheet is what an engineer actually opens: it is the document that
+    // says how deep the contact seats and how far back to strip. Mouser returns
+    // it on the part; passing it through costs nothing and saves a search.
+    datasheet: part.DataSheetUrl || '',
     status: part.LifecycleStatus || '',
   };
 }
@@ -469,6 +475,9 @@ function readDigiKeyProduct(product, qty, exact) {
     exactMatch: exact,
     manufacturer: (product.Manufacturer && product.Manufacturer.Name) || '',
     url: product.ProductUrl || '',
+    datasheet: product.DatasheetUrl
+      || (product.PrimaryDatasheet || '')
+      || ((product.Product && product.Product.DatasheetUrl) || ''),
     status: (product.ProductStatus && product.ProductStatus.Status) || '',
   };
 }
@@ -657,10 +666,11 @@ exports.priceLookup = onRequest(
 /* ═══════════════════════════════════════════════════════════════════════════
  * CREDENTIAL STORAGE — Admin UI ➜ Firestore ➜ Cloud Function
  * ---------------------------------------------------------------------------
- * The Anthropic/Gemini keys live in each admin's localStorage because the
- * BROWSER calls those APIs directly. Mouser and DigiKey are different: only
- * this Cloud Function ever talks to them, so the credentials must live
- * server-side — and, critically, must NEVER be readable by the browser.
+ * Mouser and DigiKey: only this Cloud Function ever talks to them, so the
+ * credentials live server-side — and, critically, are NEVER readable by the
+ * browser. The Anthropic key now follows the same path (see aiProxy below):
+ * it used to sit in each admin's localStorage and in the company document,
+ * where any signed-in user could read it.
  *
  * They're kept in Firestore at secure_config/distributor_api, a path that
  * firestore.rules denies to every client for both read AND write. That looks
@@ -803,12 +813,33 @@ exports.apiConfig = onRequest(
           // and hide the configured/not answer the admin actually came for.
           updatedAt: toIso(meta.updatedAt),
           updatedBy: meta.updatedBy || '',
+          anthropic: await aiKeyStatus(),
         });
       }
 
       if (req.method !== 'POST') return void res.status(405).json({ error: 'Use GET or POST' });
 
       const body = req.body || {};
+
+      // ── Live test of the AI key — one tiny request, a few tokens ──
+      if (body.action === 'test_ai') {
+        const key = await getAiKey();
+        if (!key) return void res.status(200).json({ ok: false, skipped: true, message: 'Not configured' });
+        try {
+          const r = await fetch(ANTHROPIC_URL, {
+            method: 'POST',
+            headers: { 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
+            body: JSON.stringify({ model: AI_TEST_MODEL, max_tokens: 5, messages: [{ role: 'user', content: 'ping' }] }),
+            signal: AbortSignal.timeout(30000),
+          });
+          if (r.ok) return void res.status(200).json({ ok: true, message: 'Connected — the key works' });
+          let m = `Anthropic error ${r.status}`;
+          try { const e = await r.json(); m = (e.error && e.error.message) || m; } catch { /* keep status */ }
+          return void res.status(200).json({ ok: false, message: m });
+        } catch (e) {
+          return void res.status(200).json({ ok: false, message: e.message || 'Request failed' });
+        }
+      }
 
       // ── Live test: prove the credentials actually work ──
       // Saving a typo'd key looks identical to saving a good one until the
@@ -841,6 +872,20 @@ exports.apiConfig = onRequest(
       // ── Write ──
       const update = {};
       const changed = [];
+
+      // The AI key has its own document: it is read by a different function,
+      // and keeping it apart means a distributor save can never touch it.
+      if ('anthropic_api_key' in body) {
+        const v = String(body.anthropic_api_key == null ? '' : body.anthropic_api_key).trim();
+        await admin.firestore().doc(AI_DOC).set({
+          anthropic_api_key: v,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedBy: user.email || user.uid,
+        }, { merge: true });
+        _aiKeyCache = null;
+        changed.push('anthropic_api_key');
+      }
+
       for (const f of CRED_FIELDS) {
         if (!(f in body)) continue;             // field omitted → leave as-is
         const v = String(body[f] == null ? '' : body[f]).trim();
@@ -851,10 +896,12 @@ exports.apiConfig = onRequest(
       }
       if (!changed.length) return void res.status(400).json({ error: 'Nothing to update' });
 
-      update.updatedAt = admin.firestore.FieldValue.serverTimestamp();
-      update.updatedBy = user.email || user.uid;
-      await admin.firestore().doc(CONFIG_DOC).set(update, { merge: true });
-      _credCache = null; // force the next lookup to pick up the new values
+      if (Object.keys(update).length) {
+        update.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+        update.updatedBy = user.email || user.uid;
+        await admin.firestore().doc(CONFIG_DOC).set(update, { merge: true });
+        _credCache = null; // force the next lookup to pick up the new values
+      }
 
       // Deliberately logged without any credential material.
       console.log(`[apiConfig] ${user.email || user.uid} updated: ${changed.join(', ')}`);
@@ -863,5 +910,164 @@ exports.apiConfig = onRequest(
       console.error('[apiConfig]', e);
       return void res.status(500).json({ error: e.message || 'Internal error' });
     }
+  }
+);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * AI PROXY — every Claude request from the app goes through here
+ * ---------------------------------------------------------------------------
+ * The browser used to call api.anthropic.com itself, which meant the key had
+ * to be IN the browser: in localStorage, and in the company document that any
+ * signed-in user can read. Anyone who opened devtools could copy it and spend
+ * the account's credit from anywhere.
+ *
+ * Now the browser sends the same request body here, with its Firebase ID
+ * token instead of a key. This function checks the caller is a real, enabled
+ * user, adds the key from secure_config/ai_api (denied to every client, like
+ * the distributor credentials), forwards the request, and returns Anthropic's
+ * status and JSON unchanged — so the app reads the answer, and every error,
+ * exactly as it did before.
+ *
+ * Deliberately narrow: only the Messages API, only Claude models, only the
+ * fields the app actually sends, and a cap on max_tokens. It is not a general
+ * door to the account.
+ *
+ * GET returns { configured } so the app knows whether to use this path. While
+ * the key is not set here, the app keeps working the old way (browser key).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+const AI_DOC = 'secure_config/ai_api';
+const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_VERSION = '2023-06-01';
+const AI_TEST_MODEL = 'claude-haiku-4-5-20251001';
+const AI_MODEL_RE = /^claude-[a-z0-9.\-]+$/i;
+const AI_MAX_TOKENS = 32000;
+// The fields the app sends. Anything else (tools, streaming, metadata …) is
+// dropped rather than forwarded: the proxy only has to do what the app does.
+const AI_FIELDS = ['model', 'max_tokens', 'temperature', 'messages', 'system', 'stop_sequences', 'top_p', 'top_k'];
+// Under the function's own 540s limit, above the app's longest wait (300s).
+const AI_UPSTREAM_TIMEOUT_MS = 520000;
+
+let _aiKeyCache = null, _aiKeyCacheExp = 0;
+async function getAiKey() {
+  if (_aiKeyCache !== null && Date.now() < _aiKeyCacheExp) return _aiKeyCache;
+  let key = (process.env.ANTHROPIC_API_KEY || '').trim();
+  try {
+    const snap = await admin.firestore().doc(AI_DOC).get();
+    if (snap.exists) {
+      const d = snap.data() || {};
+      if (d.anthropic_api_key) key = String(d.anthropic_api_key).trim();
+    }
+  } catch (e) {
+    console.warn('[aiKey] Firestore read failed, using env only:', e.message);
+  }
+  _aiKeyCache = key;
+  _aiKeyCacheExp = Date.now() + 60000;
+  return key;
+}
+
+async function aiKeyStatus() {
+  const key = await getAiKey();
+  let meta = {};
+  try {
+    const snap = await admin.firestore().doc(AI_DOC).get();
+    if (snap.exists) meta = snap.data() || {};
+  } catch { /* status still useful without metadata */ }
+  return {
+    configured: !!key,
+    hint: hint(key),
+    source: meta.anthropic_api_key ? 'ui' : (key ? 'env-var' : null),
+    updatedAt: toIso(meta.updatedAt),
+    updatedBy: meta.updatedBy || '',
+  };
+}
+
+// A signed-in account is not quite enough: the same users/{uid} document the
+// app reads at login must exist and must not be disabled — the AI costs money.
+async function requireMember(req) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!token) throw Object.assign(new Error('Missing auth token'), { code: 401 });
+  let decoded;
+  try { decoded = await admin.auth().verifyIdToken(token); }
+  catch { throw Object.assign(new Error('Invalid auth token — sign in again'), { code: 401 }); }
+  const snap = await admin.firestore().doc(`users/${decoded.uid}`).get();
+  const u = snap.exists ? (snap.data() || {}) : null;
+  if (!u) throw Object.assign(new Error('No user profile for this account'), { code: 403 });
+  if (u.disabled === true) throw Object.assign(new Error('This account has been disabled'), { code: 403 });
+  return decoded;
+}
+
+// Errors in Anthropic's own shape, so the app's existing `e.error.message`
+// reading shows them without any special case.
+function aiError(res, status, message) {
+  return void res.status(status).json({ type: 'error', error: { type: 'proxy_error', message } });
+}
+
+exports.aiProxy = onRequest(
+  {
+    region: 'us-central1',
+    timeoutSeconds: 540,
+    memory: '512MiB',
+    cors: false,
+  },
+  async (req, res) => {
+    const origin = req.headers.origin || '';
+    const originAllowed = !origin || ALLOWED_ORIGINS.some(re => re.test(origin));
+    if (origin && originAllowed) res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Authorization,Content-Type');
+    res.set('Access-Control-Max-Age', '3600');
+    res.set('Cache-Control', 'no-store');
+
+    if (req.method === 'OPTIONS') return void res.status(204).send('');
+    if (!originAllowed) return aiError(res, 403, `Origin not allowed: ${origin}`);
+
+    let user;
+    try { user = await requireMember(req); }
+    catch (e) { return aiError(res, e.code || 401, e.message); }
+
+    if (req.method === 'GET') {
+      return void res.status(200).json({ configured: !!(await getAiKey()) });
+    }
+    if (req.method !== 'POST') return aiError(res, 405, 'Use GET or POST');
+
+    const key = await getAiKey();
+    if (!key) {
+      return aiError(res, 503,
+        'No Anthropic key is configured on the server — an admin can add one in Admin → AI API Keys.');
+    }
+
+    const src = (req.body && typeof req.body === 'object') ? req.body : null;
+    if (!src) return aiError(res, 400, 'Request body must be JSON');
+    if (!AI_MODEL_RE.test(String(src.model || ''))) return aiError(res, 400, `Model not allowed: ${src.model}`);
+    if (!Array.isArray(src.messages) || !src.messages.length) return aiError(res, 400, 'messages is required');
+    const maxTok = Number(src.max_tokens);
+    if (!(maxTok > 0) || maxTok > AI_MAX_TOKENS) return aiError(res, 400, `max_tokens must be 1–${AI_MAX_TOKENS}`);
+
+    const body = {};
+    for (const f of AI_FIELDS) if (src[f] !== undefined) body[f] = src[f];
+
+    const t0 = Date.now();
+    let upstream;
+    try {
+      upstream = await fetch(ANTHROPIC_URL, {
+        method: 'POST',
+        headers: { 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(AI_UPSTREAM_TIMEOUT_MS),
+      });
+    } catch (e) {
+      console.error('[aiProxy] upstream failed:', e.message);
+      return aiError(res, 502, `Could not reach Anthropic: ${e.message}`);
+    }
+    const text = await upstream.text();
+    // Who, which model, how big, how it went — never the content.
+    console.log(`[aiProxy] ${user.email || user.uid} ${body.model} max=${maxTok} ` +
+                `→ ${upstream.status} in ${Date.now() - t0}ms (${text.length} chars)`);
+    res.status(upstream.status);
+    res.set('Content-Type', upstream.headers.get('content-type') || 'application/json');
+    return void res.send(text);
   }
 );

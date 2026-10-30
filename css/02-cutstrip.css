@@ -1,0 +1,192 @@
+/* ── Cut & Strip specification sheet ──────────────────────────────────────
+   Deliberately styled like a controlled document rather than like the rest
+   of the app: this page gets printed and taped to a bench, so it has to read
+   the same on paper as on screen. Everything is scoped under .cs-sheet so it
+   can't leak into the other views. */
+.cs-sheet { max-width:1080px; margin:0 auto 40px; background:#fff; color:#0F172A;
+            font-size:15px; line-height:1.6;
+            box-shadow:0 1px 3px rgba(0,0,0,.10), 0 6px 24px rgba(0,0,0,.06); }
+.cs-pad { padding:0 34px; }
+.cs-banner { background:repeating-linear-gradient(135deg,#FDE68A,#FDE68A 14px,#FCD34D 14px,#FCD34D 28px);
+             color:#78350F; font-weight:800; font-size:12.5px; text-align:center;
+             padding:10px 34px; border-bottom:2px solid #B45309; }
+/* ── The works' own form: a company block, a centred title, boxed
+      planning/execution/approval tables and a signature cell that is empty
+      on purpose — it is signed with a pen. ── */
+.cs-form-head { display:flex; align-items:center; gap:22px; padding:20px 34px 16px;
+                border-bottom:3px solid #1E293B; }
+.cs-form-co { width:190px; flex-shrink:0; display:flex; align-items:center; }
+.cs-form-co img { max-width:100%; max-height:62px; object-fit:contain; }
+.cs-form-co-n { font-size:15px; font-weight:800; color:#1E293B; line-height:1.3; }
+.cs-form-t { flex:1; text-align:center; }
+.cs-form-t1 { font-size:23px; font-weight:800; letter-spacing:-.01em;
+              text-decoration:underline; text-underline-offset:5px; }
+.cs-form-t2 { font-size:14px; color:#334155; margin-top:5px; }
+.cs-tbl.cs-form-tbl th { background:#fff; border:1px solid #0F172A; text-align:center !important; }
+.cs-tbl.cs-form-tbl td { border:1px solid #0F172A; }
+.cs-tbl.cs-form-tbl tr:nth-child(even) td { background:#fff; }
+.cs-formula { font:11.5px/1.45 monospace; color:#7C2D12; margin-top:3px; }
+.cs-links { display:flex; flex-wrap:wrap; gap:4px; }
+.cs-link { display:inline-flex; align-items:center; gap:2px; font-size:10px; font-weight:700;
+           color:#1D4ED8; text-decoration:none; border:1px solid #BFDBFE; background:#EFF6FF;
+           border-radius:9px; padding:0 5px; line-height:16px; white-space:nowrap; }
+.cs-link:hover { background:#DBEAFE; }
+.cs-link-s { color:#475569; border-color:#E2E8F0; background:#F8FAFC; font-weight:600; }
+.cs-links-sub { font-size:10px; color:#94A3B8; margin:4px 0 2px; }
+@media print { .cs-link { border:none; background:none; padding:0; color:#1E293B; } }
+.cs-datum { display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-top:12px;
+            padding:8px 11px; background:#F8FAFC; border:1px solid #E4E5E7; border-radius:6px;
+            font-size:13px; }
+.cs-notes-box { border:1px solid #0F172A; min-height:58px; padding:9px 11px;
+                font-size:13px; white-space:pre-wrap; }
+.cs-sig-cell { height:44px; }
+.cs-role { font-size:10.5px; color:#64748B; text-transform:uppercase; letter-spacing:.4px; }
+.cs-tb { display:grid; grid-template-columns:1.5fr 1fr; border-bottom:3px solid #1E293B; }
+.cs-tb-l { padding:22px 34px 18px; }
+.cs-tb-r { padding:18px 26px; background:#F8FAFC; }
+.cs-sheet[dir="ltr"] .cs-tb-r { border-left:1px solid #E4E5E7; }
+.cs-sheet[dir="rtl"] .cs-tb-r { border-right:1px solid #E4E5E7; }
+/* The do-this list at the head of the wire-build box: bigger than the
+   surrounding prose on purpose — it is the instruction, not commentary. */
+.cs-do { margin:8px 0 2px; padding-inline-start:22px; font-size:14px; line-height:1.75; }
+.cs-do li { margin:2px 0; }
+.cs-do b { font-weight:800; }
+.cs-ai-note { margin:0 0 10px; padding:9px 12px; border:1px solid #CBD5E1; border-inline-start:4px solid #1E293B;
+              background:#F8FAFC; font-size:13px; font-weight:700; color:#0F172A; }
+.cs-steps { margin:6px 0 14px; padding-inline-start:22px; }
+.cs-steps > li { margin:0 0 10px; font-size:14px; }
+.cs-step-t { font-weight:800; font-size:14.5px; margin-bottom:2px; }
+.cs-step-sub { font-weight:500; color:#475569; font-size:12.5px; margin-inline-start:6px; }
+.cs-step-why { display:block; color:#64748B; font-size:12.5px; }
+.cs-doc-t { font-size:24px; font-weight:800; letter-spacing:-.01em; }
+.cs-doc-s { font-size:14px; color:#334155; margin-top:3px; }
+.cs-kv { display:grid; grid-template-columns:auto 1fr; gap:5px 14px; font-size:13px; margin:0; }
+.cs-kv dt { color:#334155; font-weight:500; }
+.cs-kv dd { margin:0; font-weight:700; }
+.cs-h2 { font-size:13px; font-weight:800; color:#fff; background:#1E293B;
+         padding:8px 34px; margin:30px 0 16px; }
+.cs-sheet[dir="ltr"] .cs-n { opacity:.55; margin-right:11px; font-family:monospace; }
+.cs-sheet[dir="rtl"] .cs-n { opacity:.55; margin-left:11px; font-family:monospace;
+                             direction:ltr; display:inline-block; }
+.cs-h3 { font-size:15px; font-weight:700; margin:22px 0 8px; }
+/* Part numbers, dimensions and codes must not be reordered by the bidi
+   algorithm when the sheet is shown in Hebrew — an SMP part number printed
+   backwards is a wrong part number. */
+/* THE table bug. This class exists to hold a Latin part number upright inside
+   Hebrew text, and it was doing that with display:inline-block. Put it on a
+   <td> — which 65 cells in the sheet do — and the cell stops being a table
+   cell: the row falls apart and every cell lands on its own line, keeping its
+   column but dropping a step each time. unicode-bidi:isolate already does the
+   whole job on any display type, so the display override goes, and the cells
+   that need it get it explicitly. */
+.cs-ltr { direction:ltr; unicode-bidi:isolate;
+          font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; }
+span.cs-ltr, b.cs-ltr, i.cs-ltr { display:inline-block; }
+.cs-tbl td.cs-ltr, .cs-tbl th.cs-ltr { display:table-cell; }
+.cs-ctr { text-align:center; }
+.cs-tbl { width:100%; border-collapse:collapse; font-size:13px;
+          table-layout:fixed; }
+/* Long part numbers and formulas wrap inside their own cell instead of
+   widening it past the header it belongs under. white-space:normal undoes
+   the global `td { white-space:nowrap }`, which is meant for the scrolling
+   data grids and made every sheet cell overflow its own border. */
+.cs-tbl td, .cs-tbl th { white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
+/* A dimension must never break across two lines — "190" above "mm" reads as
+   two numbers. */
+.cs-tbl td.cs-nowrap { white-space:nowrap; }
+/* The strip codes now live inline with their description instead of in a
+   column of their own, which was pushing every row onto two lines. */
+.cs-code { display:inline-block; min-width:18px; padding:1px 5px; margin-inline-end:5px;
+           background:#1E293B; color:#fff; border-radius:3px; font:700 11px/1.5 monospace;
+           text-align:center; direction:ltr; }
+.cs-tbl th { background:#F1F2F3; padding:8px 10px; font-weight:700; font-size:12px;
+             color:#334155; border:1px solid #E4E5E7; }
+.cs-sheet[dir="ltr"] .cs-tbl th { text-align:left; }
+.cs-sheet[dir="rtl"] .cs-tbl th { text-align:right; }
+.cs-tbl td { padding:8px 10px; border:1px solid #E4E5E7; vertical-align:top; }
+.cs-tbl tr:nth-child(even) td { background:#FBFCFD; }
+.cs-note { font-size:12.5px; color:#334155; margin-top:7px; }
+/* The one number the operator acts on. */
+.cs-tbl tr.cs-cut-row td { background:#FEF3C7 !important; border-top:2px solid #B45309; }
+@media print { .cs-tbl tr.cs-cut-row td { -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
+.cs-box { padding:14px 18px; margin:0 0 16px; font-size:14px; }
+.cs-sheet[dir="ltr"] .cs-box { border-left:4px solid; }
+.cs-sheet[dir="rtl"] .cs-box { border-right:4px solid; }
+.cs-box b { display:block; margin-bottom:5px; font-weight:800; }
+.cs-box p { margin:0; }
+.cs-box ul { margin:8px 0 0; padding-inline-start:20px; padding-inline-end:0; }
+.cs-box li { margin:4px 0; }
+.cs-stop { border-color:#DC2626; background:#FEE2E2; color:#7F1D1D; }
+.cs-warn { border-color:#B45309; background:#FEF3C7; color:#78350F; }
+.cs-tag { display:inline-block; font-family:ui-monospace,Menlo,Consolas,monospace;
+          font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:3px;
+          white-space:nowrap; direction:ltr; }
+.cs-tbc { background:#DC2626; color:#fff; }
+.cs-dim { background:#DBEAFE; color:#1D4ED8; border:1px solid #93C5FD; }
+.cs-fig { margin:0 0 20px; border:1px solid #E4E5E7; background:#fff; }
+.cs-fig svg { display:block; width:100%; height:auto; }
+.cs-step { display:grid; grid-template-columns:40px 1fr; gap:15px;
+           padding:15px 0; border-top:1px solid #E4E5E7; }
+.cs-step:last-child { border-bottom:1px solid #E4E5E7; }
+.cs-step-n { width:34px; height:34px; border-radius:50%; background:#1E293B; color:#fff;
+             display:flex; align-items:center; justify-content:center; font-weight:800; font-size:14px; }
+.cs-step h4 { margin:0 0 4px; font-size:15px; font-weight:700; }
+.cs-crit { margin-top:7px; color:#B91C1C; font-weight:600; font-size:13.5px; }
+.cs-chk { list-style:none; padding:0; margin:0; font-size:14px; }
+.cs-chk li { display:grid; grid-template-columns:20px 1fr; gap:11px;
+             padding:8px 0; border-bottom:1px dashed #E4E5E7; }
+.cs-b { width:15px; height:15px; border:2px solid #334155; margin-top:4px; }
+.cs-sig { display:grid; grid-template-columns:repeat(3,1fr); gap:24px; margin-top:26px; }
+.cs-sig div { border-top:1px solid #1E293B; padding-top:7px; font-size:12px;
+              color:#334155; font-weight:600; min-height:56px; }
+.cs-foot { margin-top:28px; padding:12px 0 26px; border-top:1px solid #E4E5E7;
+           font-size:11.5px; color:#334155; display:flex; justify-content:space-between; gap:18px; }
+
+/* ── Edit mode ── */
+.cs-edit-bar { background:#EFF6FF; border-bottom:1px solid #BFDBFE; color:#1E3A8A;
+               padding:10px 34px; font-size:12.5px; display:flex; flex-wrap:wrap;
+               align-items:center; gap:6px 16px; }
+.cs-edit-bar b { font-weight:800; }
+.cs-edit-lang { opacity:.8; font-style:italic; }
+.cs-in { font:inherit; font-size:13px; color:#0F172A; background:#fff;
+         border:1px solid #93C5FD; border-radius:4px; padding:4px 7px; width:100%;
+         box-sizing:border-box; }
+.cs-in:focus { outline:2px solid #2563EB; outline-offset:-1px; border-color:#2563EB; }
+textarea.cs-in { resize:vertical; line-height:1.45; }
+.cs-in-num { width:88px; direction:ltr; text-align:center;
+             font-family:ui-monospace,Menlo,Consolas,monospace; }
+.cs-unit { font-size:12px; color:#334155; margin-inline-start:4px; }
+.cs-chk-lbl { display:inline-flex; align-items:center; gap:5px; font-size:12px;
+              color:#15803D; font-weight:700; margin-inline-start:8px; cursor:pointer;
+              white-space:nowrap; }
+.cs-chk-lbl input { cursor:pointer; }
+.cs-del-btn { border:1px solid #FCA5A5; background:#FEF2F2; color:#B91C1C;
+              border-radius:4px; font-size:11px; line-height:1; padding:3px 6px;
+              cursor:pointer; margin-inline-end:7px; }
+.cs-del-btn:hover { background:#DC2626; color:#fff; border-color:#DC2626; }
+/* An in-progress edit must never reach paper. */
+@media print { .cs-edit-bar, .cs-del-btn, .cs-chk-lbl { display:none !important; } }
+/* A row split across two sheets of paper is a row an operator reads wrong:
+   the part number at the bottom of one page, its dimension at the top of the
+   next. Keep rows whole, keep a heading with the table it introduces, and
+   repeat the header on every page a long table spans. */
+@media print {
+  .cs-tbl { page-break-inside:auto; break-inside:auto; }
+  .cs-tbl tr { page-break-inside:avoid; break-inside:avoid; }
+  .cs-tbl thead { display:table-header-group; }
+  .cs-tbl tfoot { display:table-footer-group; }
+  .cs-h2, .cs-h3 { page-break-after:avoid; break-after:avoid; }
+  .cs-fig, .cs-box { page-break-inside:avoid; break-inside:avoid; }
+}
+
+/* Printing the sheet must produce the sheet and nothing else — no topbar,
+   no Support button, no shadows eating toner. */
+@media print {
+  body { background:#fff; }
+  .topbar, .home-btn-grid, #btn-support-fab, #modal-bg, .breadcrumb { display:none !important; }
+  .cs-sheet { box-shadow:none; margin:0; max-width:none; }
+  .cs-h2 { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .cs-box, .cs-banner, .cs-tag, .cs-step-n, .cs-tbl th { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .cs-step, .cs-fig, .cs-chk li { break-inside:avoid; page-break-inside:avoid; }
+  .cs-h2 { break-after:avoid; page-break-after:avoid; }
+}

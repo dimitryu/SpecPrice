@@ -1,0 +1,19 @@
+{
+  "name": "specprice-tests",
+  "private": true,
+  "type": "commonjs",
+  "description": "Logic and DOM tests for web/js \u2014 see README.md",
+  "scripts": {
+    "test": "node extract.js && node app-logic.test.js && node cs-harness.js && node db-harness.js && node sup-harness.js && node bom-harness.js && node sd-labor-harness.js && node functions-harness.js && node --import ./smoke/register.mjs smoke/run.mjs"
+  },
+  "devDependencies": {
+    "acorn": "^8.12.0",
+    "acorn-walk": "^8.3.5",
+    "exceljs": "^4.4.0",
+    "jsdom": "^24.0.0",
+    "eslint-scope": "^7.2.2"
+  },
+  "dependencies": {
+    "eslint-scope": "^7.2.2"
+  }
+}

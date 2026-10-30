@@ -1,0 +1,176 @@
+/* ── Modal ── */
+.modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex;
+            align-items:center; justify-content:center; z-index:200;
+            animation:fadeIn .15s; }
+.modal { background:#fff; border-radius:12px; width:min(94vw,860px);
+         max-height:90vh; display:flex; flex-direction:column;
+         box-shadow:0 24px 64px rgba(0,0,0,.3); overflow:hidden; }
+.modal-sm { width:min(94vw,420px); }
+.modal-head { padding:16px 20px; border-bottom:1px solid var(--border);
+              display:flex; align-items:center; gap:10px; flex-shrink:0; }
+.modal-head h3 { font-size:15px; font-weight:700; color:var(--blue-dark); flex:1; }
+.modal-body { padding:20px; overflow-y:auto; flex:1; }
+.modal-foot { padding:12px 20px; border-top:1px solid var(--border);
+              display:flex; gap:8px; justify-content:flex-end; flex-shrink:0; }
+.close-modal { background:none; border:none; font-size:18px; cursor:pointer;
+               color:var(--muted); line-height:1; padding:2px 4px; }
+.close-modal:hover { color:var(--text); }
+
+/* ── Form ── */
+.form-field { margin-bottom:14px; }
+.form-field label { display:block; font-size:11px; font-weight:700; color:var(--muted);
+                    text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; }
+.form-input { width:100%; padding:8px 11px; border:1.5px solid var(--border);
+              border-radius:7px; font-size:13px; outline:none; }
+.form-input:focus { border-color:var(--blue-mid); }
+
+/* ── Sales Desk ── */
+.sd-split { display:grid; grid-template-columns:1fr 300px; gap:14px; height:calc(100vh - 110px); }
+.sd-panel { background:#fff; border:1px solid var(--border); border-radius:9px;
+            display:flex; flex-direction:column; overflow:hidden; }
+/* Same look as .sd-panel but WITHOUT the mobile max-height/overflow:hidden
+   behavior below — .sd-panel's mobile constraint is meant for the Sales Desk
+   BOM-items panel (which has its own internal .sd-scroll region), and was
+   clipping content (e.g. the Save Settings button) when reused on the
+   Settings page, whose panels can be taller than 60vh and have no inner
+   scroll region of their own. */
+/* Full width on purpose: these panels hold wide tables (users, roles, logs)
+   and a fixed max-width left half the window empty with no way to widen
+   them. The page's own padding is the only margin they need. */
+/* A Home button a role may see but not use. Kept legible rather than
+   ghosted — it is information, not decoration — but plainly inert: no
+   hover, no pointer, no colour. */
+/* The order line: same weight class as the unit price but a different
+   colour, so the two read as two answers to two questions rather than one
+   number repeated. */
+.summary-order { background:#1F8B4C; color:#fff; padding:10px 13px; margin-top:6px;
+                 border-radius:6px; display:flex; justify-content:space-between;
+                 align-items:center; font-size:15px; font-weight:700; }
+.summary-order .lbl { font-size:13px; font-weight:600; opacity:.95; }
+
+.home-btn-off { background:#F1F5F9 !important; color:#94A3B8 !important;
+                border-color:#E2E8F0 !important; box-shadow:none !important;
+                cursor:not-allowed; opacity:.85; }
+.home-btn-off:hover { transform:none !important; }
+.home-btn-off .home-btn-icon { filter:grayscale(1); opacity:.55; }
+
+/* ── Statistics dashboard ── */
+.stat-wrap { max-width:1500px; margin:0 auto; padding-bottom:30px; }
+.stat-filter { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+.stat-tiles { display:grid; gap:10px; margin:4px 0 2px;
+              grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); }
+.stat-tile { background:var(--blue-light); border:1px solid var(--border);
+             border-radius:8px; padding:11px 13px; }
+.stat-tile-v { font-size:22px; font-weight:800; color:var(--blue-dark); line-height:1.1; }
+.stat-tile-l { font-size:11px; color:var(--muted); margin-top:3px;
+               text-transform:uppercase; letter-spacing:.4px; }
+.stat-tile-s { font-size:11px; color:#94A3B8; margin-top:2px; }
+.stat-block-head { display:flex; align-items:flex-start; justify-content:space-between;
+                   gap:12px; margin-bottom:10px; }
+.stat-block-title { font-size:14px; font-weight:700; color:var(--blue-dark); }
+.stat-block-note { font-size:11px; color:var(--muted); margin-top:2px; }
+.stat-sub { font-size:11px; font-weight:700; color:var(--muted); margin:14px 0 6px;
+            text-transform:uppercase; letter-spacing:.4px; }
+.stat-bars { display:flex; flex-direction:column; gap:4px; }
+.stat-bar-row { display:flex; align-items:center; gap:9px; font-size:12px; }
+.stat-bar-k { width:190px; flex-shrink:0; color:#334155; overflow:hidden;
+              text-overflow:ellipsis; white-space:nowrap; }
+.stat-bar-t { flex:1; height:13px; background:#F1F5F9; border-radius:3px; overflow:hidden; }
+.stat-bar-f { display:block; height:100%; background:var(--blue); border-radius:3px; }
+.stat-bar-v { width:62px; text-align:right; flex-shrink:0; font-weight:700;
+              color:var(--blue-dark); }
+.stat-empty { font-size:12px; color:var(--muted); padding:8px 0; }
+
+.settings-panel { background:#fff; border:1px solid var(--border); border-radius:9px; }
+.sd-panel-title { padding:9px 13px; font-size:12px; font-weight:700;
+                  color:var(--blue-dark); background:var(--blue-light);
+                  border-bottom:1px solid var(--border); flex-shrink:0; }
+.sd-scroll { flex:1; overflow:auto; }
+.summary-row { display:flex; justify-content:space-between; padding:7px 13px;
+               font-size:12px; border-bottom:1px solid #EDF2F7; }
+.summary-total { background:var(--blue-dark); color:#fff; padding:11px 13px;
+                 display:flex; justify-content:space-between; font-weight:700; font-size:13px; }
+
+/* ── Suggest dropdown ── */
+.suggest-wrap { position:relative; flex:1; }
+.suggest-list { position:absolute; top:100%; left:0; right:0; background:#fff;
+                border:1px solid var(--border); border-radius:7px;
+                box-shadow:0 8px 24px rgba(0,0,0,.12); z-index:50; max-height:260px;
+                overflow-y:auto; animation:fadeIn .1s; }
+.suggest-item { padding:8px 12px; cursor:pointer; border-bottom:1px solid #EDF2F7;
+                font-size:12px; }
+.suggest-item:hover { background:var(--blue-light); }
+.suggest-item:last-child { border-bottom:none; }
+.suggest-item strong { color:var(--blue-dark); }
+
+/* ── Toast ── */
+.toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+         padding:10px 20px; border-radius:8px; font-size:13px; font-weight:600;
+         z-index:900; animation:fadeIn .2s; white-space:nowrap; }
+.toast-info    { background:var(--blue-dark); color:#fff; }
+.toast-success { background:#1F8B4C; color:#fff; }
+.toast-error   { background:#C0392B; color:#fff; }
+.toast-warn    { background:#B45309; color:#fff; }
+
+/* ── Update bar ── */
+/* Sits above the toast so a "version available" message and the bar that
+   acts on it are never stacked on top of each other. */
+#update-bar { position:fixed; left:50%; transform:translateX(-50%); bottom:72px; z-index:901;
+              display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:8px;
+              background:var(--blue-dark); color:#fff; font-size:12px; line-height:1.4;
+              box-shadow:0 6px 20px rgba(0,0,0,.25); animation:fadeIn .2s ease-out;
+              max-width:calc(100vw - 24px); flex-wrap:wrap; justify-content:center; }
+#update-bar .btn { min-height:30px; }
+
+/* ── Progress bar ── */
+.progress-bar { height:4px; background:var(--blue-light); border-radius:2px; overflow:hidden; margin-top:8px; }
+.progress-fill { height:100%; background:var(--blue-mid); width:0%;
+                 transition:width .3s; border-radius:2px; }
+
+/* ── AI status ── */
+.ai-status { display:flex; align-items:center; gap:8px; padding:10px 14px;
+             background:var(--blue-light); border-radius:7px; margin-bottom:12px; font-size:12px; }
+.ai-status .ring { width:16px; height:16px; border-width:2px; flex-shrink:0; }
+.ai-status .ring.done { border-color:var(--green); border-top-color:var(--green);
+                         animation:none; }
+
+/* ── Column resizer ── */
+.col-resizer { position:absolute; right:0; top:0; bottom:0; width:5px; cursor:col-resize;
+               user-select:none; z-index:3; border-radius:0 3px 3px 0; }
+.col-resizer:hover, .col-resizer:active { background:rgba(255,255,255,.45); }
+
+@media print {
+  .topbar, .toolbar { display:none !important; }
+  #content { padding:0 !important; background:#fff !important; overflow:visible !important; }
+  #shell { display:block; height:auto; }
+  .main { overflow:visible; }
+  table { font-size:11px; }
+}
+
+/* ── Home screen (button grid, replaces the old sidebar nav) ── */
+#btn-home { display:none; background:var(--blue-light); color:var(--blue-dark);
+            border:1px solid var(--border); border-radius:6px; width:32px; height:32px;
+            font-size:16px; cursor:pointer; flex-shrink:0; align-items:center; justify-content:center; }
+.home-btn-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:16px; }
+.home-btn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;
+            padding:26px 14px; background:#fff; border:1px solid var(--border); border-radius:10px;
+            cursor:pointer; font-size:13px; font-weight:600; color:var(--blue-dark);
+            transition:box-shadow .12s, transform .12s; }
+.home-btn:hover { box-shadow:0 4px 14px rgba(31,58,95,.12); transform:translateY(-2px); }
+.home-btn-icon { font-size:30px; }
+
+/* ── Support: unread markers and attachments ── */
+.home-btn { position:relative; }
+.sup-badge { position:absolute; top:-5px; right:-5px; min-width:19px; height:19px;
+             padding:0 5px; border-radius:10px; background:#E53E3E; color:#fff;
+             font-size:11px; font-weight:800; line-height:19px; text-align:center;
+             box-shadow:0 0 0 2px #fff; pointer-events:none; }
+.adm-alert { background:#E53E3E; color:#fff; border:none; border-radius:12px;
+             padding:3px 10px; font-size:11px; font-weight:700; cursor:pointer;
+             white-space:nowrap; }
+.adm-alert:hover { background:#C53030; }
+.sup-file { display:inline-flex; align-items:center; gap:5px; background:#fff;
+            border:1px solid var(--border); border-radius:14px; padding:3px 9px;
+            font-size:11px; font-weight:600; color:var(--blue-dark); cursor:pointer;
+            max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sup-file:hover { background:var(--blue-light); }

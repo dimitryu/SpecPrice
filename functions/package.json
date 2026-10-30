@@ -1,10 +1,10 @@
 {
   "name": "specprice-functions",
-  "description": "SpecPrice Cloud Functions — price-check proxy",
+  "description": "SpecPrice Cloud Functions — price lookup, API credentials, AI proxy",
   "main": "index.js",
   "private": true,
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "scripts": {
     "serve": "firebase emulators:start --only functions",
