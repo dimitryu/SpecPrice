@@ -88,7 +88,7 @@ export function disabledViews(){
 }
 export function isViewDisabled(v){ return disabledViews().includes(v); }
 export function canView(v){
-  if(v==='home') return true;
+  if(v==='home' || v==='guide') return true;   // the user guide is open to every role
   return allowedViews().includes(v) && !isViewDisabled(v);
 }
 // Every role key the app knows about.

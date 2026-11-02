@@ -9,6 +9,7 @@ import { renderAdminPage } from '../features/admin.js';
 import { renderCustomers } from '../features/customers.js';
 import { renderCutStrip } from '../features/cutstrip/list.js';
 import { renderPartStock } from '../features/database.js';
+import { renderGuide } from '../features/guide.js';
 import { renderManufacturing } from '../features/manufacturing.js';
 import { renderRFQList } from '../features/rfq.js';
 import { renderSalesDesk } from '../features/salesDesk/salesDesk.js';
@@ -28,7 +29,7 @@ export function route(v){
   S.currentView=target;
   const btnHome=document.getElementById('btn-home');
   if(btnHome) btnHome.style.display = S.currentView==='home' ? 'none' : 'inline-flex';
-  const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','cut-strip':'✂️ Cut & Strip','customers':'👥 Customers','manufacturing':'🛠️ Manufacturing Instructions','statistics':'📊 Statistics','settings':'⚙️ Settings','admin':'🛡️ Admin'};
+  const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','cut-strip':'✂️ Cut & Strip','customers':'👥 Customers','manufacturing':'🛠️ Manufacturing Instructions','statistics':'📊 Statistics','settings':'⚙️ Settings','admin':'🛡️ Admin','guide':'📘 User Guide'};
   document.getElementById('page-title').textContent=TITLES[S.currentView]||'';
   setActions('');
   if(S.currentView!=='home') logAudit('screen_open',{screen:S.currentView},true);
@@ -53,6 +54,7 @@ export function route(v){
   // to be open last — same reasoning as Cut & Strip above.
   else if(S.currentView==='manufacturing'){ S.mfgCurrent=null; renderManufacturing(); }
   else if(S.currentView==='statistics') renderStatisticsPage();
+  else if(S.currentView==='guide') renderGuide();
   else if(S.currentView==='settings'){
     if(currentUserRole!=='admin'){ route('home'); return; }
     renderSettingsPage();
@@ -101,7 +103,11 @@ export function renderHome(){
             const dis=off.has(v);
             return `<button class="home-btn${dis?' home-btn-off':''}" data-view="${v}"${dis?' disabled aria-disabled="true" title="This screen is turned off for your role"':''}>`
                  + `<span class="home-btn-icon">${icon}</span><span>${label}</span></button>`;
-          }).join('');
+          }).join('')
+            // The user guide is for everyone, whatever the role, so it is not
+            // one of the role-controlled buttons and always comes last.
+            + `<button class="home-btn home-btn-guide" data-view="guide">`
+            + `<span class="home-btn-icon">📘</span><span>User Guide</span></button>`;
         })()}
       </div>
       <button class="btn btn-ghost" id="btn-home-signout" style="margin-top:36px">Sign Out</button>

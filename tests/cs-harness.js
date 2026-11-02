@@ -454,6 +454,15 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
      && ph.indexOf('cs-ai-note') < ph.indexOf('<span class="cs-n">7</span>'));
   vm.runInContext(`_csLang='en';`, ctx);
 
+  // 5. Manufacturing: the drafted build sequence comes back. _csSalvageJson
+  //    answers {obj, partial}; reading .steps off that wrapper returned nothing,
+  //    so every instruction made from a cut & strip spec opened with no steps.
+  const MFG_REPLY=JSON.stringify({steps:[{n:1,title:'Cut',body:'Cut 1000 mm'}],inspection:['Length ok'],tools:[{tool:'PCT-2510'}]});
+  vm.runInContext(`_fetchWithRetry=async(u,o)=>({ok:true, json:async()=>({content:[{type:'text',text:${JSON.stringify(MFG_REPLY)}}], stop_reason:'end_turn'})});`, ctx);
+  const mw=await M._mfgWriteSteps(SPEC,'en');
+  ok('mfg: the drafted sequence comes back, not empty', mw.steps.length===1 && mw.steps[0].title==='Cut');
+  ok('mfg: ...with its inspection lines and tools', mw.inspection.length===1 && mw.tools.length===1 && mw.tools[0].tool==='PCT-2510');
+
   console.log(`\n  ${pass} passed, ${fail} failed\n`);
   fails.forEach(f=>console.log('  ✗ '+f));
   if(fail) process.exit(1);

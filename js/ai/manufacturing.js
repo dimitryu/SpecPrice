@@ -75,7 +75,9 @@ ${_mfgSpecDigest(spec)}`;
     throw new Error(_csProviderHint('Anthropic', m)); }
   const d=await resp.json();
   const raw=(d.content&&d.content[0]&&d.content[0].text)||'';
-  const obj=_csSalvageJson(raw) || {};
+  // _csSalvageJson answers {obj, partial}, not the object itself — reading
+  // .steps off the wrapper found nothing, so the sequence always came back empty.
+  const obj=(_csSalvageJson(raw)||{}).obj || {};
   return {
     steps: (Array.isArray(obj.steps)?obj.steps:[]).map((x,i)=>({n:x.n??(i+1),
       title:String(x.title||''), body:String(x.body||''), critical:String(x.critical||'')})),

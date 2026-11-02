@@ -64,6 +64,16 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
 ה-`?v=` על כל קובץ מונע מצב שבו דפדפן מריץ `app.html` חדש עם מודולים ישנים מה-cache.
 `push-specprice-v2.ps1` מסרב לדחוף אם הגרסה ב-`app.html` לא תואמת ל-`?v=` של הקבצים.
 
+## מדריך למשתמש — חובה לעדכן בכל שינוי
+
+מקור אחד: `web/guide/content.json` + צילומי המסך ב-`web/guide/img/`.
+ממנו נבנים מסך **📘 User Guide** באפליקציה (`features/guide.js`, פתוח לכל תפקיד, תמיד הקובייה האחרונה
+במסך הבית) וקובץ ה-Word: `node tools/build-guide-docx.js` → `docs/user-guide/SpecPrice-User-Guide.docx`.
+
+**כל שינוי במסך, בכפתור או בתהליך מעדכן את המדריך באותו שחרור**: הפרק ב-`content.json`, צילום מסך
+חדש אם המסך השתנה (`tools/guide/` — נתוני דמו בלבד), בניית ה-Word מחדש, ו-`node tests/guide-check.js`.
+פרטים: `tools/guide/README.md`. פרקי RFQ ו-Customers לא נכללים במדריך.
+
 ## מפתח ה-AI — בשרת
 
 כל בקשה למודל עוברת ב-`_aiFetch` (`ai/client.js`):
