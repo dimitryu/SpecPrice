@@ -26,10 +26,11 @@ cd web && python -m http.server 8820 --bind 127.0.0.1     # serve the app (needs
 cd tools/guide
 npm i playwright            # once, or set NODE_PATH to an existing install
 node shots-1-login-database.js    # 01–09
-node shots-2-sales-desk.js        # 10–19
+node shots-2-sales-desk.js        # 10–19 (also saves .quote.xlsx for excel_shot.py)
 node shots-3-cut-strip.js         # 20–33 (also writes .specs-db.json for script 4)
 node shots-4-mfg-settings-admin.js# 34–51
 node shots-5-guide.js             # 52
+python excel_shot.py              # 17b — the Excel quotation (needs LibreOffice + pdftoppm)
 python shrink_images.py           # optional: 256-colour PNGs, ~60% smaller
 ```
 

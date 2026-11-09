@@ -35,7 +35,10 @@ const L=require('./lib.js');
   await L.shot(page,'17-sd-priced',{x:0,y:0,width:1200,height:620});
   // tools warning close-up
   const warn=await page.$('text=Final price does NOT include');
-  if(warn){ await L.shot(page,'18-sd-summary','#sd-summary-host'); }
+  if(warn){ await L.mark(page,[{sel:'.sd-tool-jump',pad:3,at:'bottom'},{sel:'.sd-tool-jump + a',pad:3,at:'right'}]); await L.shot(page,'18-sd-summary','#sd-summary-host'); }
+  // The Excel quotation for the same 50 cables — rendered to an image by excel_shot.py.
+  { const [dl]=await Promise.all([page.waitForEvent('download'), page.click('#btn-sd-export')]);
+    await dl.saveAs(require('path').join(__dirname,'.quote.xlsx')); console.log('saved .quote.xlsx'); }
   await page.click('#btn-sd-addpick'); await page.waitForTimeout(700);
   const chk=await page.$$('.modal tbody input[type=checkbox]'); if(chk[0]) await chk[0].click(); if(chk[6]) await chk[6].click();
   await L.mark(page,[{sel:'.modal select',idx:0},{sel:'.modal input.search-box, .modal input[placeholder*="Search"]',idx:0},{sel:'.modal tbody input[type=checkbox]',idx:0,pad:5},{sel:'.modal input[type=number]',idx:0},'#pp-add']);

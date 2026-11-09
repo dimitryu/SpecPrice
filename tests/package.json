@@ -4,7 +4,7 @@
   "type": "commonjs",
   "description": "Logic and DOM tests for web/js — see README.md",
   "scripts": {
-    "test": "node extract.js && node app-logic.test.js && node cs-harness.js && node db-harness.js && node sup-harness.js && node bom-harness.js && node sd-labor-harness.js && node functions-harness.js && node guide-check.js && node --import ./smoke/register.mjs smoke/run.mjs"
+    "test": "node extract.js && node app-logic.test.js && node cs-harness.js && node db-harness.js && node sup-harness.js && node bom-harness.js && node sd-labor-harness.js && node xl-export-harness.js && node functions-harness.js && node guide-check.js && node --import ./smoke/register.mjs smoke/run.mjs"
   },
   "devDependencies": {
     "acorn": "^8.12.0",

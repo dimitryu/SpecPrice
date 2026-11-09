@@ -174,3 +174,6 @@
             font-size:11px; font-weight:600; color:var(--blue-dark); cursor:pointer;
             max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .sup-file:hover { background:var(--blue-light); }
+/* Sales Desk: the row a tool link jumped to */
+@keyframes sd-flash { 0%,60% { background:#FDE68A; } 100% { background:transparent; } }
+.sd-row-flash > td { animation:sd-flash 2.4s ease-out; }

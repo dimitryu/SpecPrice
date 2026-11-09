@@ -241,6 +241,28 @@ export function _toolRowAttrs(r){
 // point AFTER a drawing's tool row is already sitting in the Sales Desk BOM —
 // the price exclusion has to react to that immediately, not require deleting
 // and re-importing the drawing to pick it up.
+// The tool warning in Cost Summary links straight to the tool's own row, so the
+// price can be typed in without hunting for it: the row's drawing is expanded,
+// a search that hides it is cleared, and its Part Cost field takes the focus.
+export function _sdJumpToRow(i, rerender){
+  const r=sdItems[i];
+  if(!r) return false;
+  let again=false;
+  const dwg=_sdDwgKey(r);
+  if(_sdCollapsedRows.has(dwg)){ _sdCollapsedRows.delete(dwg); again=true; }
+  if(_sdFilterQ && !document.querySelector(`#sd-tbody tr[data-i="${i}"]`)){
+    _sdFilterQ=''; const box=document.getElementById('sd-search'); if(box) box.value=''; again=true;
+  }
+  if(again && rerender) rerender();
+  const tr=document.querySelector(`#sd-tbody tr[data-i="${i}"]`);
+  if(!tr) return false;
+  const inp=tr.querySelector('.sd-manual-total');
+  (inp||tr).scrollIntoView({block:'center', inline:'center', behavior:'smooth'});
+  tr.classList.add('sd-row-flash');
+  setTimeout(()=>tr.classList.remove('sd-row-flash'), 2400);
+  if(inp){ inp.focus({preventScroll:true}); inp.select(); }
+  return true;
+}
 export function _sdIsToolOwned(r){
   if(!_sdIsToolRow(r)) return false;
   const pn=String(r.part_number||'').trim().toLowerCase();
@@ -554,7 +576,12 @@ export async function renderSalesDesk(){
         </div>`:''}
         ${miss.length?`<div style="font-size:13px;color:#92400e;background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;padding:8px 10px;margin-top:8px;line-height:1.4;font-weight:600">
             ⚠ Final price does NOT include manufacturing tools.<br>
-            ${miss.length} tool${miss.length>1?'s':''} not in Stock — estimated <strong>${$(g.toolsTotal)}</strong>: ${esc(miss.map(r=>r.part_number||r.description||'tool').join(', '))}
+            ${miss.length} tool${miss.length>1?'s':''} not in Stock — estimated <strong>${$(g.toolsTotal)}</strong>:
+            ${miss.map(r=>`<span style="white-space:nowrap"><a href="#" class="sd-tool-jump" data-i="${sdItems.indexOf(r)}"
+                title="Go to this tool's row and type its price" style="color:#92400e;text-decoration:underline">${esc(r.part_number||r.description||'tool')}</a>${
+              r.part_number?` <a href="https://www.findchips.com/search/${encodeURIComponent(r.part_number)}" target="_blank" rel="noopener"
+                title="Look up this tool's price online (FindChips)" style="text-decoration:none">🔍</a>`:''}</span>`).join(', ')}
+            <div style="font-weight:400;font-size:11px;margin-top:4px">Click a tool to jump to its price in the table · 🔍 to look it up online.</div>
           </div>`:''}
         ${owned.length?`<div style="font-size:11px;color:#1F8B4C;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:4px;padding:5px 8px;margin-top:6px">
             ✓ ${owned.length} tool${owned.length>1?'s':''} excluded — already in Stock: <strong>${esc(owned.map(r=>r.part_number||r.description||'tool').join(', '))}</strong>
@@ -595,6 +622,9 @@ export async function renderSalesDesk(){
       _sdRenderSummary();
     }));
     document.getElementById('sd-exp-all')?.addEventListener('click',()=>{_sdCollapsed.clear();_sdRenderSummary();});
+    host.querySelectorAll('.sd-tool-jump').forEach(a=>a.addEventListener('click',e=>{
+      e.preventDefault(); _sdJumpToRow(+a.dataset.i, renderSD);
+    }));
     document.getElementById('sd-col-all')?.addEventListener('click',()=>{
       groups.forEach(g=>_sdCollapsed.add(g.dwg)); _sdRenderSummary();});
     const bind=(sel,key)=>host.querySelectorAll(sel).forEach(inp=>inp.addEventListener('change',()=>{

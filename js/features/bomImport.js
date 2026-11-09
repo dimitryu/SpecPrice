@@ -211,7 +211,7 @@ export function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
   // more confusing than seeing it flagged at the point it's introduced.
   const tBody = rows.map((r,i)=>`<tr data-i="${i}"${_toolRowAttrs(r)}>
     ${PCOLS.map(k=>`<td contenteditable="true" data-k="${k}" data-i="${i}" style="min-width:70px">${esc(r[k]||'')}${
-      k==='description' && _sdIsToolRow(r) ? _TOOL_TAG : ''}</td>`).join('')}
+      k==='description' && _sdIsToolRow(r) ? `<span data-tag contenteditable="false">${_TOOL_TAG}</span>` : ''}</td>`).join('')}
     <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
   </tr>`).join('');
 
@@ -234,7 +234,12 @@ export function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
     const updatedRows=[];
     document.querySelectorAll('#preview-tbody tr').forEach(tr=>{
       const row={};
-      tr.querySelectorAll('td[contenteditable]').forEach(td=>{row[td.dataset.k]=td.textContent.trim();});
+      tr.querySelectorAll('td[contenteditable]').forEach(td=>{
+        // The TOOL badge is decoration, not text — it was being read back into
+        // the description ("…FERRULESTOOL") and from there into the Database.
+        const t=td.cloneNode(true); t.querySelectorAll('[data-tag]').forEach(x=>x.remove());
+        row[td.dataset.k]=t.textContent.trim();
+      });
       // Carry over the hidden "price" field (not a visible column — see above)
       // from the original row, keyed by the stable data-i index so it survives
       // even though it's not one of the contenteditable cells.
