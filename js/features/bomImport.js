@@ -1,7 +1,7 @@
 import { _bomFromPDF, aiExtractBOM } from '../ai/bom.js';
 import { _aiReady } from '../ai/client.js';
 import { logAudit } from '../core/audit.js';
-import { closeModal, esc, showModal, toast } from '../core/ui.js';
+import { closeModal, esc, progressPanel, showModal, toast } from '../core/ui.js';
 import { saveBOMToPartStock } from '../data/parts.js';
 import { appendRowsToDrawing } from '../data/projects.js';
 import { _XLS_MAP_FIELDS, _normalizeBOMRows, _normalizeExtractedRow, _xlsAnalyzeSheet, _xlsMapSignature, parseExcelSheetsStructured } from '../domain/bom.js';
@@ -257,8 +257,18 @@ export function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
     if(!updatedRows.length){ toast('No rows to save','error'); return; }
     const btn=document.getElementById('btn-save-bom');
     if(btn){btn.disabled=true;btn.textContent='Saving…';}
-    try{ await saveCallback(updatedRows); }
-    catch(e){ toast('Save error: '+e.message,'error'); if(btn){btn.disabled=false;btn.textContent=btnLabel||'💾 Save';} }
+    const cancel=document.getElementById('modal-cancel'); if(cancel) cancel.disabled=true;
+    // Saving is one Database write per row; on a big BOM that takes a while,
+    // so the count and the bar show it moving (see saveBOMToPartStock).
+    body.querySelector('.db-progress')?.remove();
+    const prog=progressPanel(body,'Saving to Database…');
+    body.scrollTop=0;
+    try{ await saveCallback(updatedRows, prog); }
+    catch(e){
+      toast('Save error: '+e.message,'error'); prog.el.remove();
+      if(btn){btn.disabled=false;btn.textContent=btnLabel||'💾 Save';}
+      if(cancel) cancel.disabled=false;
+    }
   });
 }
 

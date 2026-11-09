@@ -1,5 +1,6 @@
 import { initializeApp }       from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js';
-import { getAuth, onAuthStateChanged, signOut, sendPasswordResetEmail }
+import { getAuth, onAuthStateChanged, signOut, sendPasswordResetEmail,
+         EmailAuthProvider, reauthenticateWithCredential, updatePassword }
                                from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
 import { getFirestore, doc, getDoc, getDocs, setDoc, addDoc, arrayUnion, deleteField,
          updateDoc, deleteDoc, collection, query, where, orderBy, limit, serverTimestamp,
@@ -18,5 +19,5 @@ export const FB = initializeApp({
 export const auth = getAuth(FB);
 export const db   = getFirestore(FB);
 
-export { initializeApp, getAuth, onAuthStateChanged, signOut, sendPasswordResetEmail, getFirestore, doc, getDoc, getDocs, setDoc, addDoc, arrayUnion, deleteField, updateDoc, deleteDoc, collection, query, where, orderBy, limit, serverTimestamp, writeBatch };
+export { initializeApp, getAuth, onAuthStateChanged, signOut, sendPasswordResetEmail, EmailAuthProvider, reauthenticateWithCredential, updatePassword, getFirestore, doc, getDoc, getDocs, setDoc, addDoc, arrayUnion, deleteField, updateDoc, deleteDoc, collection, query, where, orderBy, limit, serverTimestamp, writeBatch };
 

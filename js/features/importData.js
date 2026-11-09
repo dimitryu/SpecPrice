@@ -1,6 +1,6 @@
 import { S } from '../core/state.js';
 import { logAudit } from '../core/audit.js';
-import { closeModal, esc, showModal, toast } from '../core/ui.js';
+import { closeModal, esc, progressPanel, showModal, toast } from '../core/ui.js';
 import { savePriorityImport, saveToolsImport } from '../data/parts.js';
 import { _convertToUSD } from '../data/pricing.js';
 import { _CURRENCY_HEADER_HINTS, _DESC_HEADER_HINTS, _PN_HEADER_HINTS, _PRICE_HEADER_HINTS, _UNIT_HEADER_HINTS, _priorityFindCol, _priorityMapUnit, _priorityScoreSheet, _toolsScoreSheet } from '../domain/bom.js';
@@ -236,8 +236,9 @@ export function showPriorityPreview(rows, body, foot){
     if(!finalRows.length){ toast('No rows to save','error'); return; }
     const btn=document.getElementById('pi-save');
     btn.disabled=true; btn.textContent='Saving…';
+    const prog=progressPanel(document.getElementById('pi-modal-body'),'Saving to Database…');
     try{
-      const {updated, created}=await savePriorityImport(finalRows);
+      const {updated, created}=await savePriorityImport(finalRows,(d,t)=>prog.set(d,t));
       toast(`Priority Import: ${updated} updated, ${created} created`,'success');
       logAudit('priority_import',{updated,created},true);
       closeModal();
@@ -414,7 +415,8 @@ export function showToolsPreview(rows, body, foot){
     const btn=document.getElementById('ti-save');
     btn.disabled=true; btn.textContent='Saving…';
     try{
-      const {updated, created}=await saveToolsImport(finalRows);
+      const prog=progressPanel(document.getElementById('ti-modal-body'),'Saving to Database…');
+      const {updated, created}=await saveToolsImport(finalRows,(d,t)=>prog.set(d,t));
       toast(`Tools Catalog Import: ${updated} updated, ${created} created`,'success');
       logAudit('tools_catalog_import',{updated,created},true);
       closeModal();

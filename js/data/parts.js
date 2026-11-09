@@ -176,9 +176,11 @@ export async function purgeLegacyFindChipsFields(){
 // Desk "From File" import), that RFQ's name is added to the part's rfq_names array
 // — a part_number can be referenced by more than one RFQ, so this is a set, not a
 // single value, and existing entries are always preserved (arrayUnion).
-export async function saveBOMToPartStock(rows, rfqName=''){
-  let created=0, skipped=0, revived=0;
+export async function saveBOMToPartStock(rows, rfqName='', onProgress){
+  let created=0, skipped=0, revived=0, _done=0;
   for(const r of rows){
+    if(onProgress && _done) onProgress(_done, rows.length);
+    _done++;
     const pn=(r.part_number||'').trim();
     // The Database is keyed on the part number, so a row without one has
     // nowhere to live. It used to be dropped in silence, which looked exactly
@@ -236,6 +238,7 @@ export async function saveBOMToPartStock(rows, rfqName=''){
       }
     }catch(e){ console.warn('[PartStock] save error:',pn,e.message); }
   }
+  if(onProgress) onProgress(rows.length, rows.length);
   if(skipped){
     toast(`${skipped} of ${rows.length} row(s) had no part number and were NOT saved to the Database — fill MNF P/N and import again`,'error');
   }
@@ -248,10 +251,12 @@ export async function saveBOMToPartStock(rows, rfqName=''){
 
 // Upsert priority prices into parts_cache. Existing part_number → update priority_price;
 // unknown part_number → create a new row with just part_number + priority_price.
-export async function savePriorityImport(rows){
+export async function savePriorityImport(rows, onProgress){
   await loadParts();
-  let updated=0, created=0;
+  let updated=0, created=0, _done=0;
   for(const r of rows){
+    if(onProgress) onProgress(_done, rows.length);
+    _done++;
     const pn=r.part_number.trim();
     if(!pn) continue;
     const existing=S.allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
@@ -275,6 +280,7 @@ export async function savePriorityImport(rows){
       }
     }catch(e){ console.warn('[PriorityImport] save error:',pn,e.message); }
   }
+  if(onProgress) onProgress(rows.length, rows.length);
   return {updated, created};
 }
 
@@ -287,10 +293,12 @@ export async function savePriorityImport(rows){
 // import are, by definition, tools the company already has in stock (see the
 // "Stock" column in _psCellHTML, and Sales Desk's ownership check in
 // handleSDFiles, which excludes own_stock=true tool rows from the final price).
-export async function saveToolsImport(rows){
+export async function saveToolsImport(rows, onProgress){
   await loadParts();
-  let updated=0, created=0;
+  let updated=0, created=0, _done=0;
   for(const r of rows){
+    if(onProgress) onProgress(_done, rows.length);
+    _done++;
     const pn=r.part_number.trim();
     if(!pn) continue;
     const existing=S.allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
@@ -312,6 +320,7 @@ export async function saveToolsImport(rows){
       }
     }catch(e){ console.warn('[ToolsImport] save error:',pn,e.message); }
   }
+  if(onProgress) onProgress(rows.length, rows.length);
   return {updated, created};
 }
 

@@ -7,6 +7,7 @@ import { route } from './core/router.js';
 import { currentUserRole, initCompany } from './core/session.js';
 import { closeModal, esc, splashErr, splashMsg } from './core/ui.js';
 import { APP_VER, autoCheckForUpdate, checkForUpdate } from './core/version.js';
+import { openAccountModal } from './features/account.js';
 import { _supStartBadgePolling, openSupportModal } from './features/support.js';
 
 try{ localStorage.removeItem('gem_key'); }catch{}   // left over from the Gemini era
@@ -44,11 +45,13 @@ onAuthStateChanged(auth, async user => {
   // running?" is the place to answer "is it current?". It was on the Home
   // screen only, in 10px grey, where nobody found it.
   if (infoEl){
-    infoEl.innerHTML = `<span>👤 ${esc(S.currentUserEmail)}</span><span style="color:#CBD5E1">|</span>`
+    infoEl.innerHTML = `<button class="btn btn-ghost btn-sm" id="btn-account-top" title="My account — change password" `
+      + `style="color:#64748B;font-weight:400">👤 ${esc(S.currentUserEmail)}</button><span style="color:#CBD5E1">|</span>`
       + `<button class="btn btn-ghost btn-sm" id="btn-check-version-top" `
       + `title="Check for a newer version">↻ v${APP_VER}</button>`;
     document.getElementById('btn-check-version-top')
       ?.addEventListener('click',e=>checkForUpdate(e.currentTarget));
+    document.getElementById('btn-account-top')?.addEventListener('click',()=>openAccountModal());
   }
   logAudit('login', {role: currentUserRole}, true);
   route('home');

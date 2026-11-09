@@ -60,3 +60,29 @@ export function closeModal(){const m=document.getElementById('modal-bg');if(m)m.
 
 export function setContent(html){document.getElementById('content').innerHTML=html;}
 export function setActions(html){document.getElementById('topbar-actions').innerHTML=html;}
+
+// A progress panel for a long save: a bar plus "12 / 40", so a user saving a
+// big BOM can see the work moving and how much is left. Inserted at the top of
+// `host`; set(done,total,label) updates it, done(text) shows the finish.
+export function progressPanel(host, label){
+  const el=document.createElement('div');
+  el.className='db-progress';
+  el.setAttribute('role','status'); el.setAttribute('aria-live','polite');
+  el.innerHTML=`<div class="ai-status"><div class="ring"></div><span class="db-progress-txt"></span></div>
+    <div class="progress-bar" style="height:8px"><div class="progress-fill" style="transition:width .15s"></div></div>`;
+  host.prepend(el);
+  const txt=el.querySelector('.db-progress-txt'), bar=el.querySelector('.progress-fill');
+  const api={
+    el,
+    set(done,total,what){
+      const pct=total?Math.round(100*done/total):0;
+      bar.style.width=pct+'%';
+      txt.textContent= total ? `${what||label||'Saving…'} ${done} / ${total} (${pct}%)` : (what||label||'Saving…');
+    },
+    note(text){ txt.textContent=text; },
+    finish(text){ bar.style.width='100%'; txt.textContent=text||'Done';
+      const r=el.querySelector('.ring'); if(r){ r.className=''; r.textContent='✓'; r.style.cssText='color:#1B6B3A;font-weight:700'; } },
+  };
+  api.set(0,0,label);
+  return api;
+}

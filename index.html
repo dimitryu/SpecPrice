@@ -38,6 +38,11 @@
     .btn:hover:not(:disabled) { background: #1F5B92; }
     .btn:disabled { background: #A0AEC0; cursor: not-allowed; }
     .error { color: #E53E3E; font-size: 13px; margin-top: 14px; text-align: center; min-height: 18px; }
+    .error.ok { color: #1B6B3A; }
+    .forgot { display: block; margin-top: 14px; text-align: center; font-size: 13px; color: #2E75B6;
+              background: none; border: none; cursor: pointer; width: 100%; }
+    .forgot:hover { text-decoration: underline; }
+    .forgot:disabled { color: #A0AEC0; cursor: default; text-decoration: none; }
     .spinner {
       width: 15px; height: 15px;
       border: 2px solid rgba(255,255,255,.4); border-top-color: #fff;
@@ -60,14 +65,16 @@
   <input type="password" id="pw" placeholder="••••••••" autocomplete="current-password">
 
   <button class="btn" id="btn">Sign In</button>
-  <div class="error" id="err"></div>
+  <button type="button" class="forgot" id="forgot">Forgot password?</button>
+  <div class="error" id="err" role="alert" aria-live="polite"></div>
 </div>
 
 <script type="module">
 import { initializeApp }                        from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js';
 import { getAuth, signInWithEmailAndPassword,
          onAuthStateChanged, setPersistence,
-         browserLocalPersistence }              from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
+         browserLocalPersistence,
+         sendPasswordResetEmail }               from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
 
 const app  = initializeApp({
   apiKey:            "AIzaSyCyRRnbEE_h7KC5RieXiNcVAZv_aaiqNK4",
@@ -88,6 +95,7 @@ const err = document.getElementById('err');
 async function doLogin() {
   const email = document.getElementById('email').value.trim();
   const pw    = document.getElementById('pw').value;
+  err.classList.remove('ok');
   if (!email || !pw) { err.textContent = 'Please enter email and password.'; return; }
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Signing in…';
@@ -106,6 +114,35 @@ async function doLogin() {
 }
 
 btn.addEventListener('click', doLogin);
+
+// Forgot password: Firebase e-mails a link to set a new one. The answer is the
+// same whether or not the address has an account — saying "no such user" would
+// tell a stranger which e-mail addresses are registered.
+const forgot = document.getElementById('forgot');
+forgot.addEventListener('click', async () => {
+  const email = document.getElementById('email').value.trim();
+  err.classList.remove('ok');
+  if (!email) { err.textContent = 'Type your email above, then click "Forgot password?" again.';
+                document.getElementById('email').focus(); return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { err.textContent = 'That email address does not look right.'; return; }
+  forgot.disabled = true; forgot.textContent = 'Sending…';
+  try {
+    await sendPasswordResetEmail(auth, email);
+    err.classList.add('ok');
+    err.textContent = `If ${email} has an account, a password reset link was sent to it. `
+                    + 'Check your inbox (and the spam folder), set a new password, then sign in here.';
+  } catch (e) {
+    err.classList.remove('ok');
+    err.textContent = e.code === 'auth/invalid-email' ? 'That email address does not look right.'
+                    : e.code === 'auth/too-many-requests' ? 'Too many requests. Wait a few minutes and try again.'
+                    : e.code === 'auth/user-not-found'
+                      ? `If ${email} has an account, a password reset link was sent to it.`
+                    : e.message;
+    if (e.code === 'auth/user-not-found') err.classList.add('ok');
+  } finally {
+    forgot.disabled = false; forgot.textContent = 'Forgot password?';
+  }
+});
 document.getElementById('pw').addEventListener('keydown', e => e.key === 'Enter' && doLogin());
 </script>
 </body>

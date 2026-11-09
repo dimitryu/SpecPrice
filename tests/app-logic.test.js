@@ -2149,6 +2149,43 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('pn: ...but a maker\'s prefix never does', [ 'Mfg Part No','Vendor PN','MNF P/N','MPN','Mfr PN' ].some(x=>isInt(sq(x))), false);
 }
 
+// ─────────────────────────────────────────── guide search + account checks (v1.64)
+{
+  const terms=G('_guideTerms'), search=G('_guideSearch'), mark=G('_guideMark');
+  t('guide: terms are lower-case, unique, split on spaces', terms('  Price  price TOOL '), ['price','tool']);
+  t('guide: empty query has no terms', terms(''), []);
+  const B=[{t:'h1',id:'db',text:'4. Database'},{t:'p',text:'Check **price** at Mouser.'},
+    {t:'h2',text:'Tools'},{t:'p',text:'Crimp tool price comes from `Check Price`.'},
+    {t:'table',head:['A','B'],rows:[['tool','x']]},
+    {t:'h1',id:'sd',text:'5. Sales Desk'},{t:'img',src:'x.png',caption:'Desk',callouts:['the PRICE column']}];
+  const r=search(B,'price');
+  t('guide: every block with the word is a result', r.map(x=>x.b), [1,3,6]);
+  t('guide: result carries chapter and section', [r[1].chapterId,r[1].chapter,r[1].section], ['db','4. Database','Tools']);
+  t('guide: hits count every occurrence', r[1].hits, 2);
+  t('guide: callouts are searched, section resets at a new chapter', [r[2].chapterId, r[2].section], ['sd','']);
+  t('guide: all words must be in the block', search(B,'tool price').map(x=>x.b), [3]);
+  t('guide: snippet has no markdown marks', /\*\*|`/.test(r[0].snippet), false);
+  t('guide: no query, no results', search(B,'  '), []);
+  t('guide: regex characters are literal', search([{t:'p',text:'a (b) c'}],'(b)').length, 1);
+  t('guide: mark escapes and wraps', mark('<b> price', ['price']), '&lt;b&gt; <mark class="gd-hit">price</mark>');
+  t('guide: mark is case-insensitive', mark('Price', ['price']), '<mark class="gd-hit">Price</mark>');
+  const long='word '.repeat(40)+'target '+'tail '.repeat(40);
+  const sn=search([{t:'p',text:long}],'target')[0].snippet;
+  ok('guide: snippet starts and ends on whole words', /^…word /.test(sn) && / tail…$/.test(sn));
+
+  const chk=G('_accCheckNewPassword'), err=G('_accAuthError');
+  t('account: current password needed', chk('', 'newpass1','newpass1'), 'Enter your current password.');
+  ok('account: too short', /at least 6/.test(chk('old','abc','abc')));
+  t('account: the two must match', chk('old','newpass1','newpass2'), 'The two new passwords are not the same.');
+  ok('account: must differ from current', /different/.test(chk('samepass','samepass','samepass')));
+  t('account: a good change passes', chk('old-pass','newpass1','newpass1'), '');
+  t('account: wrong current password', err({code:'auth/invalid-credential'}), 'The current password is not correct.');
+  ok('account: weak password', /too weak/.test(err({code:'auth/weak-password'})));
+  ok('account: too many requests', /Too many/.test(err({code:'auth/too-many-requests'})));
+  ok('account: recent login', /sign in again/.test(err({code:'auth/requires-recent-login'})));
+  t('account: unknown error keeps its message', err({code:'x',message:'boom'}), 'boom');
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

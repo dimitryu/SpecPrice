@@ -74,6 +74,18 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
 חדש אם המסך השתנה (`tools/guide/` — נתוני דמו בלבד), בניית ה-Word מחדש, ו-`node tests/guide-check.js`.
 פרטים: `tools/guide/README.md`. פרקי RFQ ו-Customers לא נכללים במדריך.
 
+החיפוש במדריך (`_guideSearch` / `_guideHighlight` ב-`features/guide.js`) עובד על אותו `content.json`:
+בלוק נחשב תוצאה כשכל המילים מופיעות בו (התאמה כחלק ממילה — בגלל תחיליות בעברית: ה/ו/ב/ל).
+
+## חשבון משתמש ושמירה ל-DB עם התקדמות
+
+- **שכחתי סיסמה**: `web/index.html` → `sendPasswordResetEmail`. ההודעה זהה גם לאימייל שלא קיים
+  (לא חושפים אילו כתובות רשומות). את תבנית המייל עורכים ב-Firebase Console → Authentication → Templates.
+- **החלפת סיסמה**: הכפתור 👤 בסרגל העליון (`main.js`) → `openAccountModal()` ב-`features/account.js`:
+  `reauthenticateWithCredential` עם הסיסמה הנוכחית ואז `updatePassword`. נרשם ביומן: `password_changed`.
+- **פס התקדמות**: `progressPanel(host,label)` ב-`core/ui.js`. פונקציות השמירה ב-`data/parts.js`
+  (`saveBOMToPartStock`, `savePriorityImport`, `saveToolsImport`) מקבלות `onProgress(done,total)` אופציונלי.
+
 ## מפתח ה-AI — בשרת
 
 כל בקשה למודל עוברת ב-`_aiFetch` (`ai/client.js`):

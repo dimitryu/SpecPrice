@@ -148,6 +148,15 @@ const DAY=86400000;
   ok('revive: ...into the list the screens read', vm.runInContext('allParts', ctx).some(p=>p._id==='P-LIVE-2'));
   no('revive: ...and out of the bin', vm.runInContext('trashParts', ctx).some(p=>p._id==='P-LIVE-2'));
 
+  // ── saving reports its progress: done / total, ending at total ─────────
+  { const seen=[];
+    await M.saveBOMToPartStock([{part_number:'P-PR-1',description:'A'},{part_number:'P-PR-2',description:'B'},{part_number:'P-PR-3',description:'C'}],'',(d,t)=>seen.push(d+'/'+t));
+    ok('progress: BOM save counts up to 3 / 3', seen[seen.length-1]==='3/3' && seen.every(x=>/\/3$/.test(x)));
+    ok('progress: ...never goes backwards', seen.map(x=>+x.split('/')[0]).every((v,i,a)=>!i||v>=a[i-1]));
+    ok('progress: ...and the parts are saved', ['P-PR-1','P-PR-2','P-PR-3'].every(k=>DB[PC][k]));
+    let threw=null; try{ await M.saveBOMToPartStock([{part_number:'P-PR-4',description:'D'}]); }catch(e){ threw=e; }
+    ok('progress: the callback is optional', !threw && DB[PC]['P-PR-4']); }
+
   // ── a big delete is audited in chunks that fit a Firestore document ─────
   const many={}; for(let i=0;i<250;i++) many['M'+i]={part_number:'M'+i, description:'x'.repeat(200)};
   Object.assign(DB[PC], many);

@@ -363,8 +363,9 @@ export async function handleSDFiles(files){
   // Show editable preview — on Save: save to Part Stock + add to Sales Desk
   showBOMPreview(allRows, body, foot,
     `💾 Save to Database + Sales Desk (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
-    async(updatedRows)=>{
-      await saveBOMToPartStock(updatedRows);
+    async(updatedRows, prog)=>{
+      await saveBOMToPartStock(updatedRows, '', prog ? (d,t)=>prog.set(d,t,'Saving to Database…') : null);
+      if(prog) prog.note(`Adding ${updatedRows.length} rows to Sales Desk…`);
       let added=0;
       let _sdRowIdx=-1;
       // A synthesized tool row sits right after the connector it is for (the
