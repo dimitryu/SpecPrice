@@ -128,7 +128,7 @@ export function _sdCellHTML(k,r,i){
         : '';
       return `<input type="number" class="sd-manual-total" data-i="${i}" value="${r.total?+r.total.toFixed(2):''}"
              min="0" step="any" placeholder="0.00" title="${hasManual?'Manual price override — clear to go back to FC/Priority price':'No FC/Priority price — type one in manually'}"
-             style="width:78px;padding:2px 5px;border:1px solid ${noSourcePrice?'#06b6d4':'var(--border)'};border-radius:4px;font-size:12px;font-weight:700;text-align:right;${noSourcePrice?'background:#ecfeff;color:#0e7490':''}">${ownedNote}`;
+             style="width:78px;padding:2px 5px;border:1px solid ${noSourcePrice?'#06b6d4':'var(--border)'};border-radius:4px;font-size:12px;font-weight:700;text-align:right;${noSourcePrice?'background:#ecfeff;color:#0e7490':''}">${ownedNote}${_sdIsToolRow(r)&&!_sdIsToolOwned(r)?_sdToolSourceChip(r):''}`;
     }
     // Labor Time shows/edits the row's actual total minutes directly (what
     // used to be the separate read-only "Labor Total" column) — type a number
@@ -241,6 +241,85 @@ export function _toolRowAttrs(r){
 // point AFTER a drawing's tool row is already sitting in the Sales Desk BOM —
 // the price exclusion has to react to that immediately, not require deleting
 // and re-importing the drawing to pick it up.
+// ── Where a price came from ──────────────────────────────────────────────────
+// Part Cost is one number picked from several (see _sdRecalcTotal). For a tool
+// especially — a row the drawing analysis added on its own — the reader needs
+// to know WHICH number it is and be able to open where it was quoted.
+export function _sdSafeUrl(u){
+  const s=String(u||'').trim();
+  return /^https:\/\/[^\s"'<>]+$/i.test(s) ? s : '';
+}
+export function _sdSearchUrls(pn){
+  const q=encodeURIComponent(String(pn||'').trim());
+  return {
+    mouser:   `https://www.mouser.com/c/?q=${q}`,
+    digikey:  `https://www.digikey.com/en/products/result?keywords=${q}`,
+    findchips:`https://www.findchips.com/search/${q}`,
+  };
+}
+// The product pages and price breaks a Database part carries from Check Price.
+export function _sdTraceFields(p){
+  if(!p) return {};
+  return {mouser_url:p.mouser_url||'', mouser_brk:p.mouser_brk||0,
+          digikey_url:p.digikey_url||'', digikey_brk:p.digikey_brk||0};
+}
+// {kind, label, unit, brk, url, verified}: what Part Cost is using right now.
+export function _sdPriceSource(r){
+  const src=r._costSource||'';
+  const pn=r.part_number||'';
+  const search=_sdSearchUrls(pn);
+  if(src==='manual')
+    return {kind:'manual', label:'Typed in Sales Desk', verified:true, url:''};
+  if(src==='mouser_price')
+    return {kind:'mouser', label:'Mouser', unit:+r.mouser_price||0, brk:r.mouser_brk||0, verified:true,
+            url:_sdSafeUrl(r.mouser_url)||(pn?search.mouser:'')};
+  if(src==='digikey_price')
+    return {kind:'digikey', label:'DigiKey', unit:+r.digikey_price||0, brk:r.digikey_brk||0, verified:true,
+            url:_sdSafeUrl(r.digikey_url)||(pn?search.digikey:'')};
+  if(src==='priority_price')
+    return {kind:'priority', label:'Priority (our purchase price)', unit:+r.priority_price||0, verified:true, url:''};
+  if(src==='est_price')
+    return {kind:'ai', label:'AI estimate — not verified', unit:+r.est_price||0, verified:false, url:''};
+  return {kind:'none', label:'No price yet', verified:false, url:''};
+}
+// Under a tool's Part Cost in the table: where that number came from, linked.
+export function _sdToolSourceChip(r){
+  const s=_sdPriceSource(r);
+  const short={mouser:'Mouser',digikey:'DigiKey',priority:'Priority',ai:'AI est.',manual:'manual',none:'no price'}[s.kind];
+  const color=s.verified?'#166534':'#b45309';
+  const body=s.url
+    ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" style="color:${color};text-decoration:underline">${short} ↗</a>`
+    : `<span style="color:${color}">${short}</span>`;
+  return `<div style="font-size:9.5px;font-weight:700;white-space:nowrap;margin-top:2px" title="${esc(_sdPriceSourceText(r))}">${body}</div>`;
+}
+// One-line description of that source, for a tooltip or a spreadsheet note.
+export function _sdPriceSourceText(r){
+  const s=_sdPriceSource(r);
+  const $=v=>'$'+(+v||0).toFixed(2);
+  if(s.kind==='mouser'||s.kind==='digikey')
+    return `${s.label}: ${$(s.unit)} per unit${s.brk?` (price break ${s.brk}+)`:''}`;
+  if(s.kind==='priority') return `${s.label}: ${$(s.unit)} per unit`;
+  if(s.kind==='ai') return `${s.label}: approximate list price ${$(s.unit)} — run Check Price or confirm with the supplier`;
+  if(s.kind==='manual') return `Typed in Sales Desk: ${$(r.total)}`;
+  return 'No price yet';
+}
+// The links shown beside a tool: the source of the chosen price when there is
+// one, and searches at the vendors so a price can be found or checked.
+export function _sdToolLinksHTML(r){
+  const s=_sdPriceSource(r);
+  const q=_sdSearchUrls(r.part_number);
+  const a=(href,text,title,strong)=>`<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="${esc(title)}"
+      style="color:#92400e;${strong?'font-weight:700;':''}text-decoration:underline">${text}</a>`;
+  const out=[];
+  if(s.url) out.push(a(s.url, `${esc(s.label)} ↗`, `Open the ${s.label} page this price came from`, true));
+  if(r.part_number){
+    if(s.kind!=='mouser')  out.push(a(q.mouser,'Mouser','Search Mouser for this tool'));
+    if(s.kind!=='digikey') out.push(a(q.digikey,'DigiKey','Search DigiKey for this tool'));
+    out.push(a(q.findchips,'🔍 FindChips','Compare prices across distributors (FindChips)'));
+  }
+  return out.join(' · ');
+}
+
 // The tool warning in Cost Summary links straight to the tool's own row, so the
 // price can be typed in without hunting for it: the row's drawing is expanded,
 // a search that hides it is cleared, and its Part Cost field takes the focus.
@@ -577,11 +656,18 @@ export async function renderSalesDesk(){
         ${miss.length?`<div style="font-size:13px;color:#92400e;background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;padding:8px 10px;margin-top:8px;line-height:1.4;font-weight:600">
             ⚠ Final price does NOT include manufacturing tools.<br>
             ${miss.length} tool${miss.length>1?'s':''} not in Stock — estimated <strong>${$(g.toolsTotal)}</strong>:
-            ${miss.map(r=>`<span style="white-space:nowrap"><a href="#" class="sd-tool-jump" data-i="${sdItems.indexOf(r)}"
-                title="Go to this tool's row and type its price" style="color:#92400e;text-decoration:underline">${esc(r.part_number||r.description||'tool')}</a>${
-              r.part_number?` <a href="https://www.findchips.com/search/${encodeURIComponent(r.part_number)}" target="_blank" rel="noopener"
-                title="Look up this tool's price online (FindChips)" style="text-decoration:none">🔍</a>`:''}</span>`).join(', ')}
-            <div style="font-weight:400;font-size:11px;margin-top:4px">Click a tool to jump to its price in the table · 🔍 to look it up online.</div>
+            ${miss.map(r=>{
+              const src=_sdPriceSource(r);
+              return `<div style="margin-top:7px;padding-top:6px;border-top:1px dashed #f59e0b;font-weight:400;font-size:12px;line-height:1.5">
+                <div><a href="#" class="sd-tool-jump" data-i="${sdItems.indexOf(r)}" title="Go to this tool's row and type or correct its price"
+                  style="color:#92400e;font-weight:700;text-decoration:underline">${esc(r.part_number||r.description||'tool')}</a>
+                  — <strong>${$(r.total)}</strong></div>
+                ${r.tool_for?`<div class="sd-tool-for">For connector <strong>${esc(r.tool_for)}</strong></div>`:''}
+                <div class="sd-tool-src" style="color:${src.verified?'#166534':'#b45309'}" title="${esc(_sdPriceSourceText(r))}">
+                  Price from: <strong>${esc(src.label)}</strong>${src.unit&&src.kind!=='ai'?` · ${$(src.unit)}/unit`:''}${src.brk?` · break ${src.brk}+`:''}</div>
+                <div class="sd-tool-links">${_sdToolLinksHTML(r)}</div>
+              </div>`;}).join('')}
+            <div style="font-weight:400;font-size:11px;margin-top:6px">Click a tool's part number to jump to its price in the table.</div>
           </div>`:''}
         ${owned.length?`<div style="font-size:11px;color:#1F8B4C;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:4px;padding:5px 8px;margin-top:6px">
             ✓ ${owned.length} tool${owned.length>1?'s':''} excluded — already in Stock: <strong>${esc(owned.map(r=>r.part_number||r.description||'tool').join(', '))}</strong>
@@ -849,6 +935,7 @@ export async function renderSalesDesk(){
           drawing_number:p.drawing_number||p.drawing_name||'',
           qty, unit:p.unit||p.units||'pcs',priority_price:parseFloat(p.priority_price)||0,
           mouser_price:parseFloat(p.mouser_price)||'', digikey_price:parseFloat(p.digikey_price)||'',
+          ..._sdTraceFields(p),
           total:0, labor_time:'', labor_total:0};
         _sdRecalcRow(item);
         sdItems.push(item);

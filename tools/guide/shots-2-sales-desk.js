@@ -20,6 +20,10 @@ const L=require('./lib.js');
   await page.waitForTimeout(7000);
   await L.mark(page,['#sd-search',{sel:'#sd-tbody tr:nth-child(7) td:nth-child(4)',pad:2},'.sd-in-units','.sd-in-tools',{sel:'.sd-btn-breakdown',pad:3},{sel:'.sd-in-minutes',at:'right'},'.sd-in-rate','.sd-in-profit','.summary-total']);
   await L.shot(page,'14-sd-loaded',{x:0,y:0,width:1200,height:560});
+  { const box=await page.$('.sd-tool-src'); const host=await box.evaluateHandle(e=>e.closest('div[style*="fffbeb"]')||e.parentElement);
+    await host.evaluate(e=>e.scrollIntoView({block:'center'})); await page.waitForTimeout(300);
+    await L.mark(page,[{sel:'.sd-tool-src',pad:2,at:'right'},{sel:'.sd-tool-links',pad:2,at:'right'}]);
+    await L.shot(page,'14b-sd-tool-ai',host); await page.evaluate(()=>window.scrollTo(0,0)); }
   const notes=await page.$('#sd-notes-panel'); 
   if(notes && await notes.isVisible()){ await L.mark(page,['#sd-notes-panel']); await L.shot(page,'14b-sd-notes','#sd-notes-panel'); }
   await page.click('.sd-btn-breakdown'); await page.waitForTimeout(800);
@@ -35,7 +39,7 @@ const L=require('./lib.js');
   await L.shot(page,'17-sd-priced',{x:0,y:0,width:1200,height:620});
   // tools warning close-up
   const warn=await page.$('text=Final price does NOT include');
-  if(warn){ await L.mark(page,[{sel:'.sd-tool-jump',pad:3,at:'bottom'},{sel:'.sd-tool-jump + a',pad:3,at:'right'}]); await L.shot(page,'18-sd-summary','#sd-summary-host'); }
+  if(warn){ await L.mark(page,[{sel:'.sd-tool-jump',pad:3,at:'right'},{sel:'.sd-tool-for',pad:2,at:'right'},{sel:'.sd-tool-src',pad:2,at:'right'},{sel:'.sd-tool-links',pad:2,at:'right'}]); await L.shot(page,'18-sd-summary','#sd-summary-host'); }
   // The Excel quotation for the same 50 cables — rendered to an image by excel_shot.py.
   { const [dl]=await Promise.all([page.waitForEvent('download'), page.click('#btn-sd-export')]);
     await dl.saveAs(require('path').join(__dirname,'.quote.xlsx')); console.log('saved .quote.xlsx'); }

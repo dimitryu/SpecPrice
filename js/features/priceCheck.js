@@ -328,6 +328,10 @@ export async function runFCCheckModal(items, mode){
       const matchFields={
         mouser_match:  matchCode(r.mouser),
         mouser_mpn:    r.mouser  ? (r.mouser.mpn||'')  : '',
+        // The product page and the price break the number came from, so a
+        // price can be traced back to where it was quoted (Sales Desk links it).
+        mouser_url:    r.mouser  ? String(r.mouser.url||'').slice(0,400) : '',
+        mouser_brk:    r.mouser  ? (parseInt(r.mouser.breakQty,10)||0) : 0,
         mouser_mfr:    r.mouser  ? (r.mouser.manufacturer||'') : '',
         mouser_alts:   r.mouser  ? (r.mouser.considered||1) : 0,
         mouser_desc:   r.mouser  ? String(r.mouser.desc||'').slice(0,160) : '',
@@ -340,6 +344,8 @@ export async function runFCCheckModal(items, mode){
                          price:+c.price||0})) : [],
         digikey_match: matchCode(r.digikey),
         digikey_mpn:   r.digikey ? (r.digikey.mpn||'') : '',
+        digikey_url:   r.digikey ? String(r.digikey.url||'').slice(0,400) : '',
+        digikey_brk:   r.digikey ? (parseInt(r.digikey.breakQty,10)||0) : 0,
         digikey_mfr:   r.digikey ? (r.digikey.manufacturer||'') : '',
         digikey_alts:  r.digikey ? (r.digikey.considered||1) : 0,
         digikey_desc:  r.digikey ? String(r.digikey.desc||'').slice(0,160) : '',

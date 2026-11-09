@@ -99,7 +99,7 @@ localStorage.setItem('ai_proxy','1');
 
 // ── mocked AI ────────────────────────────────────────────────────────────────
 const BOM_ROWS=[
- {item:'1',atlantium_pn:'CP-10021',part_number:'DCX-4P-90',description:'PLUG, 90 DEG, 4 CONTACTS, 14-12AWG',qty:'1',unit:'pcs',manufacturer:'ConnectaTech'},
+ {item:'1',atlantium_pn:'CP-10021',part_number:'DCX-4P-90',description:'PLUG, 90 DEG, 4 CONTACTS, 14-12AWG',qty:'1',unit:'pcs',manufacturer:'ConnectaTech',pin_count:'4'},
  {item:'2',atlantium_pn:'CP-10022',part_number:'WL-14-3C',description:'CABLE, POWER 14AWG 3 COND, UNSHIELDED',qty:'1',unit:'m',manufacturer:'WireLine'},
  {item:'3',atlantium_pn:'CP-10023',part_number:'TF-2.5-BU',description:'FERRULE 2.5MM2 BLUE',qty:'3',unit:'pcs',manufacturer:'ProCrimp'},
  {item:'4',atlantium_pn:'CP-10024',part_number:'HS-12-BK',description:'HEAT SHRINK 12MM BLACK',qty:'0.03',unit:'m',manufacturer:'ShrinkCo'},
@@ -140,6 +140,8 @@ function aiReply(body){
   return '{}';
 }
 const PRICE={}; PARTS.forEach(p=>{ PRICE[p[0]]={mo:p[8],mos:p[9],dk:p[10],dks:p[11],mfr:p[5],desc:p[4]}; });
+// The crimp tool the analysis adds for DCX-4P-90: Mouser has it, DigiKey does not.
+PRICE['PCT-2510']={mo:172.5,mos:14,dk:'',dks:null,mfr:'ProCrimp',desc:'CRIMP TOOL FOR TF-2.5 FERRULES'};
 
 async function open(opts={}){
   const b=await chromium.launch(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{});
@@ -163,8 +165,9 @@ async function open(opts={}){
     if(u.pathname==='/priceLookup'){
       const pn=u.searchParams.get('pn'), p=PRICE[pn];
       if(opts.priceDelay) await new Promise(res=>setTimeout(res,opts.priceDelay));
-      const v=(price,stock)=>price===''||price==null?null:{price,stock:String(stock),mpn:pn,manufacturer:p.mfr,breakQty:1,exactMatch:true,desc:p.desc};
-      return json({pn,qty:1,mouser:p?v(p.mo,p.mos):null,digikey:p?v(p.dk,p.dks):null,errors:[]});
+      const v=(price,stock,site)=>price===''||price==null?null:{price,stock:String(stock),mpn:pn,manufacturer:p.mfr,breakQty:1,exactMatch:true,desc:p.desc,
+        url: site==='m' ? `https://www.mouser.com/ProductDetail/${encodeURIComponent(p.mfr)}/${encodeURIComponent(pn)}` : `https://www.digikey.com/en/products/detail/${encodeURIComponent(p.mfr.toLowerCase())}/${encodeURIComponent(pn)}`};
+      return json({pn,qty:1,mouser:p?v(p.mo,p.mos,'m'):null,digikey:p?v(p.dk,p.dks,'d'):null,errors:[]});
     }
     if(u.pathname==='/priceProxy'){
       const cur=(decodeURIComponent(u.search).match(/([A-Z]{3})_USD/)||[])[1]||'ILS';

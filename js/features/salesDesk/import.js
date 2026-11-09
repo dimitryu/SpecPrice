@@ -9,7 +9,7 @@ import { saveBOMToPartStock } from '../../data/parts.js';
 import { _normalizeBOMRows, _normalizeExtractedRow, parseExcelSheetsStructured } from '../../domain/bom.js';
 import { _xlsConfirmMapping, showBOMPreview } from '../bomImport.js';
 import { _sdAutoMatchLabor } from './labor.js';
-import { _sdDrawingNotes, _sdRecalcRow, renderSalesDesk, sdItems } from './salesDesk.js';
+import { _sdDrawingNotes, _sdIsToolRow, _sdRecalcRow, _sdTraceFields, renderSalesDesk, sdItems } from './salesDesk.js';
 import { _isSpreadsheetFile, extractExcelText, readExcelSheets } from '../../io/excel.js';
 import { encodeImage } from '../../io/pdf.js';
 
@@ -367,8 +367,14 @@ export async function handleSDFiles(files){
       await saveBOMToPartStock(updatedRows);
       let added=0;
       let _sdRowIdx=-1;
+      // A synthesized tool row sits right after the connector it is for (the
+      // extraction prompt asks for exactly that), so the connector is the last
+      // non-tool row before it that has pins.
+      let _lastConnector='';
       for(const r of updatedRows){
         _sdRowIdx++;
+        const _isTool=_sdIsToolRow(r);
+        if(!_isTool && String(r.pin_count||'').trim()) _lastConnector=(r.part_number||'').trim();
         const pn=(r.part_number||'').trim().toLowerCase();
         const match=pn?S.allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
         const qty=parseFloat(r.qty)||1;
@@ -393,6 +399,8 @@ export async function handleSDFiles(files){
           alt_mpns:(r.alt_mpns||[]).length>1?r.alt_mpns:((match&&match.alt_mpns)||[]),
           priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
           mouser_price:match?parseFloat(match.mouser_price)||'':'',
+          ..._sdTraceFields(match),
+          tool_for: _isTool ? _lastConnector : '',
           digikey_price:match?parseFloat(match.digikey_price)||'':'',
           labor_time:'', labor_total:0,
           // Whether this tool is already owned (in Stock) is no longer decided

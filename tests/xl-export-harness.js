@@ -37,8 +37,10 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
       {drawing_number:'D1', part_number:'CON-1', description:'PLUG 4P', qty:1, unit:'pc',
        mouser_price:12.4, digikey_price:13.1, priority_price:''},
       {drawing_number:'D1', part_number:'LAB-1', description:'LABEL', qty:2, unit:'pc', manual_total:'3'},
-      {drawing_number:'D1', part_number:'TL-1', description:'CRIMP TOOL for CON-1', qty:1, unit:'pc', est_price:185},
+      {drawing_number:'D1', part_number:'TL-1', description:'CRIMP TOOL for CON-1', qty:1, unit:'pc', est_price:185, tool_for:'CON-1'},
       {drawing_number:'D2', part_number:'CON-2', description:'RECEPTACLE', qty:1, unit:'pc', digikey_price:17.75},
+      {drawing_number:'D2', part_number:'TL-2', description:'INSERTION TOOL for CON-2', qty:1, unit:'pc', tool_for:'CON-2',
+       est_price:120, mouser_price:96.5, mouser_brk:1, mouser_url:'https://www.mouser.com/ProductDetail/TL-2'},
     ];
     sdItems.forEach(_sdRecalcRow);
     _sdApplyUnits('D1',10); _sdDwgSet('D1').laborMinutes=12; _sdDwgSet('D1').laborRateMin=0.5; _sdDwgSet('D1').profitPct=30;`, ctx);
@@ -93,6 +95,20 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
   const tools=label(/^TOOLS TOTAL — D1/);
   ok('tools: their own total, outside the price', !!tools && near(right(tools).value.result, 185));
   ok('summary: D2 row points at its block', cells.some(c=>c.row<rowOf('CON-1') && c.col===8 && c.value && c.value.formula && near(c.value.result, d2.finalPerUnit)));
+
+  // Tools: which connector, where the price came from, and a link to it.
+  const toolRow=pn=>cells.filter(c=>c.col===2 && c.value===pn).map(c=>c.row).pop();
+  const t1=toolRow('TL-1'), t2=toolRow('TL-2');
+  ok('tool list: has its column heads', !!label && cells.some(c=>c.value==='For connector') && cells.some(c=>c.value==='Price from'));
+  ok('tool 1: for its connector', ws.getCell(t1,7).value==='CON-1');
+  ok('tool 1: priced by the AI estimate, and says so', ws.getCell(t1,9).value==='AI estimate — not verified');
+  ok('tool 1: links a Mouser search to check it', /mouser\.com\/c\/\?q=TL-1/.test(ws.getCell(t1,11).value.hyperlink||''));
+  ok('tool 2: priced from Mouser', ws.getCell(t2,9).value==='Mouser' && near(ws.getCell(t2,13).value.result,96.5));
+  ok('tool 2: links the product page the price came from', ws.getCell(t2,11).value.hyperlink==='https://www.mouser.com/ProductDetail/TL-2');
+  const S2=x=>vm.runInContext(`_sdPriceSource(sdItems.find(r=>r.part_number==='${x}'))`, ctx);
+  ok('source: the cheapest verified price wins over the estimate', S2('TL-2').kind==='mouser' && S2('TL-1').kind==='ai');
+  ok('source: a manual price is reported as such', S2('LAB-1').kind==='manual');
+  ok('source: only https links are trusted', vm.runInContext(`_sdSafeUrl('javascript:alert(1)')===''&&_sdSafeUrl('https://a.b/c')==='https://a.b/c'`, ctx));
 
   console.log(`\n  ${pass} passed, ${fail} failed\n`);
   fails.forEach(f=>console.log('  ✗ '+f));

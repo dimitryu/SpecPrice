@@ -3,7 +3,7 @@ import { logSystemAudit } from '../../core/audit.js';
 import { fmtDate, toast } from '../../core/ui.js';
 import { APP_VER } from '../../core/version.js';
 import { MM_PER_FOOT, MM_PER_METER } from '../../domain/pricing.js';
-import { _sdComputeSummary, _sdDwgSet, _sdIsToolRow, sdItems } from './salesDesk.js';
+import { _sdComputeSummary, _sdDwgSet, _sdIsToolRow, _sdPriceSource, _sdPriceSourceText, _sdSearchUrls, sdItems } from './salesDesk.js';
 import { _XL, _xlBoxed, loadExcelJS } from '../../io/excel.js';
 
 // ── Part Stock → Excel export (client-side via SheetJS) ───────────────────────
@@ -375,6 +375,7 @@ export async function exportSalesDeskExcel(){
             }
           }
           if(ci===12 && manual) c.note='Manual price typed in Sales Desk — kept as a price per unit, so it follows QTY.';
+          else if(ci===12 && isTool) c.note=_sdPriceSourceText(r);
           c.alignment={vertical:'middle',
                        horizontal: (ci===3||ci===4)?'left':(ci>=5?'right':'left'),
                        wrapText: ci===3};
@@ -456,19 +457,37 @@ export async function exportSalesDeskExcel(){
         }
         ws.getRow(row).height=22; row++;
         const toolRefs=[];
+        // Column heads for the tool list: what the tool is, which connector it
+        // is for, where its price came from, and a link to check it.
+        [[2,'Tool'],[3,'Description'],[7,'For connector'],[9,'Price from'],[11,'Link'],[13,'Price']].forEach(([c,h])=>{
+          const x=ws.getCell(row,c); x.value=h; x.font={bold:true,size:9,color:{argb:'FF92400E'}};
+        });
+        merge(row,3,6); merge(row,7,8); merge(row,9,10); merge(row,11,12);
+        for(let c=1;c<=LAST;c++){ const cell=ws.getCell(row,c); fill(cell,_XL.tool); cell.border=_xlBoxed; }
+        row++;
         g.missingToolRows.forEach(r=>{
+          const src=_sdPriceSource(r);
+          const q=_sdSearchUrls(r.part_number);
           ws.getCell(row,2).value=r.part_number||'';
-          merge(row,3,LAST-2);
-          ws.getCell(row,3).value=r.description||'';
+          merge(row,3,6);  ws.getCell(row,3).value=r.description||'';
+          merge(row,7,8);  ws.getCell(row,7).value=r.tool_for||'—';
+          merge(row,9,10); ws.getCell(row,9).value=src.label;
+          ws.getCell(row,9).note=_sdPriceSourceText(r);
+          merge(row,11,12);
+          const href=src.url || (r.part_number ? q.mouser : '');
+          if(href) ws.getCell(row,11).value={text: src.url ? `${src.label} page ↗` : 'Search Mouser ↗', hyperlink: href};
           const v=ws.getCell(row,LAST-1);
-          const src=toolCells.find(t=>t.r===r);
-          v.value = src ? F(src.cell, r.total||0) : +(r.total||0);
+          const tc=toolCells.find(t=>t.r===r);
+          v.value = tc ? F(tc.cell, r.total||0) : +(r.total||0);
           v.numFmt='$#,##0.00'; v.alignment={horizontal:'right'};
           toolRefs.push(A(row,LAST-1));
           for(let c=1;c<=LAST;c++){
             const cell=ws.getCell(row,c);
             fill(cell,_XL.tool); cell.border=_xlBoxed; cell.font={size:10,color:{argb:'FF92400E'}};
           }
+          ws.getCell(row,9).font={size:10,bold:true,color:{argb:src.verified?'FF166534':'FFB45309'}};
+          if(href) ws.getCell(row,11).font={size:10,underline:true,color:{argb:'FF1D4ED8'}};
+          ws.getCell(row,3).alignment={wrapText:true,vertical:'middle'};
           row++;
         });
         // A tools figure typed in Sales Desk wins over the sum, as it does there.
