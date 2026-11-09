@@ -2186,6 +2186,48 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('account: unknown error keeps its message', err({code:'x',message:'boom'}), 'boom');
 }
 
+// ─────────────────────────────────────────── crimp tools: known MIL tooling, no fake tool P/N (v1.64)
+{
+  const parse=G('_mil38999Parse'), known=G('_bomKnownTools'), bad=G('_bomBadToolPn'), fix=G('_bomFixToolRows'), norm=G('_normalizeBOMRows');
+  t('mil: D38999/26WC-35SN decoded', parse('D38999/26WC-35SN'), {slash:'26',finish:'W',shell:13,arrangement:'35',contact:'socket'});
+  t('mil: no dash, pin, M38999 prefix', [parse('M38999/20WB35PN').contact, parse('M38999/20WB35PN').shell], ['pin',11]);
+  t('mil: not a 38999 part', parse('DCX-4P-90'), null);
+  const k=known('D38999/26WC-35SN');
+  t('mil: 13-35 socket → frame, socket positioner, insertion tool', k.tools.map(x=>x.part_number), ['M22520/2-01','M22520/2-07','M81969/14-01']);
+  t('mil: ...22 contacts', k.pins, 22);
+  ok('mil: ...every tool row says which connector it is for', k.tools.every(x=>x.description.includes('D38999/26WC-35SN') && /TOOL/.test(x.description)));
+  t('mil: pin contacts take the pin positioner', known('D38999/20WC35PN').tools[1].part_number, 'M22520/2-09');
+  t('mil: other inserts are not guessed', known('D38999/26WC-98SN'), null);
+  t('mil: Series I/II slash numbers are not guessed', known('D38999/19WC-35SN'), null);
+  // bad tool numbers
+  ok('tool pn: connector + -TOOL is not a tool', bad('D38999/26WC-35SN-TOOL','D38999/26WC-35SN'));
+  ok('tool pn: the connector itself is not a tool', bad('D38999/26WC-35SN','D38999/26WC-35SN'));
+  ok('tool pn: empty is not a tool', bad('','X-1'));
+  ok('tool pn: a real tool number is fine', !bad('M22520/2-01','D38999/26WC-35SN') && !bad('63819-0000','43025-0400'));
+  ok('tool pn: a short connector pn is not matched inside a tool pn', !bad('CT-2000','CT-2'));
+  // the case from the screenshot
+  const rows=[{part_number:'D38999/26WC-35SN',description:'Plug (cable) 22pin FM SHL SIZE 13',qty:'1',unit:'pc',pin_count:'',drawing_number:'WLS-090-009'},
+              {part_number:'D38999/26WC-35SN-TOOL',description:'CRIMP TOOL for D38999/26WC-35SN',qty:'1',unit:'pc',price:'150',pin_count:''},
+              {part_number:'M27500-22',description:'WIRE 22AWG',qty:'500',unit:'mm'}];
+  norm(rows);
+  t('fix: the fake tool row is replaced by the real tools', rows.map(r=>r.part_number), ['D38999/26WC-35SN','M22520/2-01','M22520/2-07','M81969/14-01','M27500-22']);
+  t('fix: ...the plug gets its pin count', rows[0].pin_count, '22');
+  ok('fix: ...the tools carry tool_for and the drawing, no invented price', rows.slice(1,4).every(r=>r.tool_for==='D38999/26WC-35SN' && r.drawing_number==='WLS-090-009' && r.price===''));
+  // an unknown connector with a fake tool number
+  const r2=[{part_number:'ABC-123-4P',description:'CONNECTOR 4 POS',pin_count:'4'},{part_number:'ABC-123-4P-TOOL',description:'CRIMP TOOL for ABC',price:'90'}];
+  fix(r2);
+  t('fix: unknown connector — fake tool pn is cleared', [r2[1].part_number, r2[1].tool_for, r2[1].price], ['','ABC-123-4P','']);
+  ok('fix: ...and the description says it still has to be identified', /not identified/.test(r2[1].description) && /TOOL/.test(r2[1].description));
+  const r3=[{part_number:'43025-0400',description:'MICRO-FIT 4P',pin_count:'4'},{part_number:'63819-0000',description:'CRIMP TOOL for Micro-Fit',price:'350'}];
+  fix(r3);
+  t('fix: a real tool number from the AI is kept as is', [r3[1].part_number, r3[1].price, r3[1].tool_for], ['63819-0000','350','43025-0400']);
+  const r4=[{part_number:'D38999/26WC-35SN',pin_count:'22'},{part_number:'D38999/20WC-35SN',pin_count:'22'}];
+  norm(r4);
+  t('fix: two plugs, the same tools listed once', r4.map(r=>r.part_number), ['D38999/26WC-35SN','M22520/2-01','M22520/2-07','M81969/14-01','D38999/20WC-35SN']);
+  const links=G('_sdToolLinksHTML')({part_number:'',tool_for:'ABC-123-4P',description:'CRIMP TOOL'});
+  ok('links: a tool with no number searches by its connector', /ABC-123-4P%20crimp%20tool/.test(links) && /Find tool on Mouser/.test(links));
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

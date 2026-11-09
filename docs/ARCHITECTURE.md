@@ -77,6 +77,15 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
 החיפוש במדריך (`_guideSearch` / `_guideHighlight` ב-`features/guide.js`) עובד על אותו `content.json`:
 בלוק נחשב תוצאה כשכל המילים מופיעות בו (התאמה כחלק ממילה — בגלל תחיליות בעברית: ה/ו/ב/ל).
 
+## כלי לחיצה (Crimp Tools)
+
+`_normalizeBOMRows` (`domain/bom.js`) מריץ קודם `_bomFixToolRows` על שורות ה-AI:
+- מחבר שהכלים שלו ידועים (`_bomKnownTools`, כרגע MIL-DTL-38999 Series III בסידור 35 — מגעי 22D)
+  מקבל את הכלים מהתקן: `M22520/2-01` + Positioner `M22520/2-07` (Socket) / `M22520/2-09` (Pin) +
+  `M81969/14-01`. מקור: Glenair, Series III/IV contact crimp and installation tools. הרחבה = להוסיף לטבלה.
+- מק"ט כלי שהוא מק"ט המחבר (או המחבר + `-TOOL`) נמחק (`_bomBadToolPn`) — תא ריק ולא מק"ט מזויף.
+- כל שורת כלי מקבלת `tool_for`. בסיכום, `_sdToolLinksHTML` מציג לכל ספק את המחיר שלו וקישור לדף המוצר.
+
 ## חשבון משתמש ושמירה ל-DB עם התקדמות
 
 - **שכחתי סיסמה**: `web/index.html` → `sendPasswordResetEmail`. ההודעה זהה גם לאימייל שלא קיים

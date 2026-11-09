@@ -401,7 +401,7 @@ export async function handleSDFiles(files){
           priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
           mouser_price:match?parseFloat(match.mouser_price)||'':'',
           ..._sdTraceFields(match),
-          tool_for: _isTool ? _lastConnector : '',
+          tool_for: _isTool ? (r.tool_for||_lastConnector) : '',
           digikey_price:match?parseFloat(match.digikey_price)||'':'',
           labor_time:'', labor_total:0,
           // Whether this tool is already owned (in Stock) is no longer decided

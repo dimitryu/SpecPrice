@@ -311,11 +311,23 @@ export function _sdToolLinksHTML(r){
   const a=(href,text,title,strong)=>`<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="${esc(title)}"
       style="color:#92400e;${strong?'font-weight:700;':''}text-decoration:underline">${text}</a>`;
   const out=[];
-  if(s.url) out.push(a(s.url, `${esc(s.label)} ↗`, `Open the ${s.label} page this price came from`, true));
   if(r.part_number){
-    if(s.kind!=='mouser')  out.push(a(q.mouser,'Mouser','Search Mouser for this tool'));
-    if(s.kind!=='digikey') out.push(a(q.digikey,'DigiKey','Search DigiKey for this tool'));
+    // Each distributor that has the tool: its own price, linked to its product
+    // page. One that has no price for it: a search for the tool's number there.
+    // The source Part Cost is using is in bold.
+    for(const [k,label] of [['mouser','Mouser'],['digikey','DigiKey']]){
+      const price=+r[k+'_price']||0, url=_sdSafeUrl(r[k+'_url']), brk=+r[k+'_brk']||0;
+      if(price) out.push(a(url||q[k], `${label} $${price.toFixed(2)}${url?' ↗':''}`,
+        `${label}: $${price.toFixed(2)} per unit${brk?` (break ${brk}+)`:''}${url?' — opens the product page':' — search'}`, s.kind===k));
+      else out.push(a(q[k], label, `Search ${label} for ${r.part_number}`));
+    }
     out.push(a(q.findchips,'🔍 FindChips','Compare prices across distributors (FindChips)'));
+  } else if(r.tool_for){
+    // The tool is not identified yet: search the distributors for the tooling
+    // of the connector it is for, so the user can find the right part number.
+    const c=_sdSearchUrls(`${r.tool_for} crimp tool`);
+    out.push(a(c.mouser,'Find tool on Mouser',`Search Mouser for tools for ${r.tool_for}`));
+    out.push(a(c.digikey,'Find tool on DigiKey',`Search DigiKey for tools for ${r.tool_for}`));
   }
   return out.join(' · ');
 }

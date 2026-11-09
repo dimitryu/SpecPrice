@@ -203,7 +203,12 @@ that connector needs, using your knowledge of that connector manufacturer's
 tooling. Do this for every qualifying connector row, not just the first one
 you notice. Only add a tool row when you're reasonably confident of the exact
 tool part number (never invent a plausible-looking one — if genuinely unsure
-for a specific connector, skip just that one). For the tool row: "part_number"
+for a specific connector, skip just that one). The tool's part number is the
+number the TOOL is sold under — NEVER the connector's own part number, and
+never the connector's number with "-TOOL" or any other suffix added. For
+MIL-spec connectors (MIL-DTL-38999 / D38999, MIL-DTL-26482, MIL-DTL-83723 …)
+that is the military tool number, e.g. the crimp frame M22520/2-01 with its
+positioner, or M22520/1-01 for the larger contacts. For the tool row: "part_number"
 = the tool's manufacturer part number, "description" = a short description
 containing the word "TOOL" (e.g. "CRIMP TOOL for <connector series>"),
 "qty"="1", "unit"="pc", "price" = the tool's approximate USD list price

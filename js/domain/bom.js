@@ -1,11 +1,98 @@
 import { _sdIsToolRow } from '../features/salesDesk/salesDesk.js';
 
+// ── Crimp tools the system KNOWS (not guessed by the AI) ─────────────────────
+// MIL-DTL-38999 Series III connectors are crimped with the military-standard
+// tools, which are fixed by the contact size — so for them the tool does not
+// have to be remembered by the AI, it is looked up. Source: Glenair, "MIL-DTL-
+// 38999 Series III and IV contact crimp and installation tools" (catalog p.19-21).
+// Only insert arrangement 35 is decoded here: every contact in a "-35" insert
+// is size #22D, whatever the shell size. Other arrangements mix contact sizes
+// and are left to the AI (and to the user).
+export const _MIL38999_SERIES3=['20','21','23','24','25','26'];
+// Contacts in a "-35" insert, by shell size — fills an empty Pins cell.
+export const _MIL38999_35_PINS={9:6,11:13,13:22,15:37,17:55,19:66,21:79,23:100,25:128};
+export const _MIL38999_SHELL={A:9,B:11,C:13,D:15,E:17,F:19,G:21,H:23,J:25};
+// 'D38999/26WC-35SN' → {slash:'26', shell:13, arrangement:'35', contact:'socket'}
+export function _mil38999Parse(pn){
+  const m=String(pn||'').toUpperCase().replace(/\s+/g,'')
+    .match(/(?:^|[^A-Z0-9])(?:D|M|MIL-DTL-)38999\/(\d{2})([A-Z])([A-J])-?(\d{2})([PSAB])([A-EN])?/);
+  if(!m) return null;
+  return {slash:m[1], finish:m[2], shell:_MIL38999_SHELL[m[3]]||0, arrangement:m[4],
+          contact:/[PA]/.test(m[5])?'pin':'socket'};
+}
+// The tools a known connector needs, or null when the system does not know them.
+export function _bomKnownTools(pn){
+  const c=_mil38999Parse(pn);
+  if(!c || !_MIL38999_SERIES3.includes(c.slash) || c.arrangement!=='35') return null;
+  const conn=String(pn).trim(), kind=`#22D ${c.contact} contacts`;
+  return {connector:conn, contacts:kind, pins:_MIL38999_35_PINS[c.shell]||0, tools:[
+    {part_number:'M22520/2-01', manufacturer:'DMC (Daniels)',
+     description:`CRIMP TOOL FRAME M22520/2-01 (Daniels AFM8) for ${conn} — ${kind}`},
+    {part_number:c.contact==='pin'?'M22520/2-09':'M22520/2-07', manufacturer:'DMC (Daniels)',
+     description:`CRIMP TOOL POSITIONER ${c.contact==='pin'?'M22520/2-09 (Daniels K42)':'M22520/2-07 (Daniels K40)'} for M22520/2-01 — ${conn} ${kind}`},
+    {part_number:'M81969/14-01', manufacturer:'',
+     description:`INSERTION/EXTRACTION TOOL M81969/14-01 for ${conn} — ${kind}`},
+  ]};
+}
+export function _pnKey(s){ return String(s||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+// A tool part number that is really the connector's own number (as is, or with
+// "-TOOL" or similar stuck on) is not a tool part number: nobody sells it, so it
+// can never be priced, and its links lead nowhere.
+export function _bomBadToolPn(toolPn, connectorPn){
+  const t=_pnKey(toolPn), c=_pnKey(connectorPn);
+  if(!t) return true;
+  if(/^(TOOL|CRIMPTOOL|TBD|NA|UNKNOWN)$/.test(t)) return true;
+  if(/TOOL$/.test(t) && t.length>6) return true;
+  if(c && c.length>=5 && t.includes(c)) return true;
+  return false;
+}
+export function _isConnectorRow(r){ return !_sdIsToolRow(r) && (String(r.pin_count||'').trim()!=='' || !!_bomKnownTools(r.part_number)); }
+// Repairs the TOOL rows the AI added after each connector:
+//  • a connector whose tools the system knows (above) gets exactly those tools,
+//    in place of whatever the AI wrote — including when the AI added none;
+//  • any other tool row whose part number is the connector's own number keeps
+//    its place, but with an EMPTY part number and a description saying the tool
+//    still has to be identified — an empty cell is honest, a fake number is not.
+// Every tool row records the connector it is for in "tool_for".
+export function _bomFixToolRows(rows){
+  const out=[];
+  for(let i=0;i<rows.length;i++){
+    const r=rows[i];
+    if(!_isConnectorRow(r)){ out.push(r); continue; }
+    out.push(r);
+    const conn=String(r.part_number||'').trim();
+    let j=i+1; const after=[];
+    while(j<rows.length && _sdIsToolRow(rows[j])) after.push(rows[j++]);
+    const known=_bomKnownTools(conn);
+    if(known){
+      if(!String(r.pin_count||'').trim() && known.pins) r.pin_count=String(known.pins);
+      known.tools.forEach(t=>out.push({item:'', atlantium_pn:'', part_number:t.part_number, description:t.description,
+        qty:'1', unit:'pc', manufacturer:t.manufacturer, pin_count:'', price:'',
+        drawing_number:r.drawing_number||'', drawing_name:r.drawing_name||'', tool_for:conn, tool_source:'known'}));
+    } else {
+      after.forEach(t=>{
+        t.tool_for=t.tool_for||conn;
+        if(_bomBadToolPn(t.part_number, conn)){
+          t.part_number='';
+          t.description=`CRIMP TOOL for ${conn} — tool P/N not identified, check the connector maker's tooling list`;
+          t.price='';
+        }
+        out.push(t);
+      });
+    }
+    i=j-1;
+  }
+  rows.length=0; rows.push(...out);
+  return rows;
+}
+
 // ── BOM row normalization ─────────────────────────────────────────────────────
 // If drawing_number empty, fall back to drawing_name (per user requirement)
 export function _normalizeBOMRows(rows){
   rows.forEach(r=>{
     if(!r.drawing_number && r.drawing_name) r.drawing_number=r.drawing_name;
   });
+  _bomFixToolRows(rows);
   // A crimp/insertion TOOL row is synthesized fresh by the AI for EVERY
   // connector row that needs one (see _BOM_TEXT_PROMPT/_BOM_VISION_PROMPT rule
   // 5) — so a drawing with two different connectors that both happen to take

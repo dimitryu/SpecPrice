@@ -30,6 +30,7 @@ node shots-2-sales-desk.js        # 10–19 (+13b save progress) (also saves .qu
 node shots-3-cut-strip.js         # 20–33 (also writes .specs-db.json for script 4)
 node shots-4-mfg-settings-admin.js# 34–51
 node shots-5-guide.js             # 52 (search results)
+node shots-6-mil-tools.js         # 18b, 18c (MIL-DTL-38999 tools)
 python excel_shot.py              # 17b — the Excel quotation (needs LibreOffice + pdftoppm)
 python shrink_images.py           # optional: 256-colour PNGs, ~60% smaller
 ```
