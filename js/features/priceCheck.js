@@ -3,7 +3,7 @@ import { logSystemAudit } from '../core/audit.js';
 import { closeModal, esc, showModal, toast } from '../core/ui.js';
 import { mergePartDoc, updatePartFields } from '../data/parts.js';
 import { lookupPartPrices } from '../data/pricing.js';
-import { _priceTargetQty, _sdLineCost, _sdRecalcTotal } from '../domain/pricing.js';
+import { SD_NOMINAL_LABEL_PRICE, _priceTargetQty, _sdIsLabelRow, _sdLineCost, _sdRecalcTotal } from '../domain/pricing.js';
 import { renderPartStock } from './database.js';
 import { _sdApplyUnits, _sdDwgKey, _sdDwgUnits, renderSalesDesk, sdItems } from './salesDesk/salesDesk.js';
 
@@ -136,6 +136,7 @@ export async function runFCCheckModal(items, mode){
           <span><strong style="color:var(--green)">✓ ≈</strong> found under a differently formatted part number — hover to see which</span>
           <span><strong style="color:#B45309">◑</strong> in the catalogue, but no published price (non-stocked / quote-only)</span>
           <span><strong>Not found</strong> neither vendor lists this part number</span>
+          <span><strong style="color:#B45309">nominal $${SD_NOMINAL_LABEL_PRICE.toFixed(2)}</strong> a label/marker with no supplier price — Part Cost uses this fixed price per piece</span>
           <span><strong style="color:var(--red)">red text</strong> the lookup failed — hover for the reason</span>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:4px;border-top:1px dashed var(--border);padding-top:5px">
@@ -197,12 +198,6 @@ export async function runFCCheckModal(items, mode){
     setStatus(i,'⏳');
     const prPrice=parseFloat(it.priority_price)||0;
     try{
-      // Labels/markers aren't catalogue parts — no distributor lists them, so
-      // skip the network round-trip and use the agreed nominal price.
-      if(/\b(label|marker)\b/i.test(it.description||'')){
-        setStatus(i,'✓ nominal','var(--muted)','Labels/markers use a fixed $0.2 price');
-        return;
-      }
       const targetQty=_priceTargetQty(it.qty, it.unit);
 
       // ── Qualified Vendor List: price every approved alternative ──
@@ -283,8 +278,12 @@ export async function runFCCheckModal(items, mode){
       paintStock(`fc-ms-${i}`, mouserStock);
       paintStock(`fc-ds-${i}`, digikeyStock);
 
+      // A label or marker nobody prices (and no Priority price) is costed at the
+      // nominal label price — say so, rather than a bare "Not found".
+      const _nominal=_sdIsLabelRow(it) && !(prPrice>0) && !(r.best && r.best.price>0);
       if(!r.best){
-        setStatus(i,'Not found','var(--muted)',
+        if(_nominal) setStatus(i,`nominal $${SD_NOMINAL_LABEL_PRICE.toFixed(2)}`,'#B45309',`No supplier price for this label/marker — Part Cost uses the nominal label price, $${SD_NOMINAL_LABEL_PRICE.toFixed(2)} per piece. Type a price in Part Cost if you have a real one.`);
+        else setStatus(i,'Not found','var(--muted)',
           'Neither Mouser nor DigiKey lists this part number.');
         return;
       }
@@ -301,7 +300,8 @@ export async function runFCCheckModal(items, mode){
       if(savedVs>pick.price){
         tip=(tip?tip+'\n\n':'')+`Cheapest QVL alternative: ${moneyUnit(pick.price)}/unit vs ${moneyUnit(savedVs)}/unit for the dearest approved option.`;
       }
-      setStatus(i, glyph, noPrice?'#B45309':'var(--green)', tip);
+      if(_nominal) setStatus(i, `◑ nominal $${SD_NOMINAL_LABEL_PRICE.toFixed(2)}`, '#B45309', tip+'\n\n'+`No supplier price for this label/marker — Part Cost uses the nominal label price, $${SD_NOMINAL_LABEL_PRICE.toFixed(2)} per piece. Type a price in Part Cost if you have a real one.`);
+      else setStatus(i, glyph, noPrice?'#B45309':'var(--green)', tip);
 
       // The distributor knows the real manufacturer; our rows frequently don't
       // (a PDF BOM often omits it). Fill it in ONLY when we have nothing —

@@ -126,6 +126,18 @@ export function _sdLineCost(r, priceField){
 // per-metre and understate the line by ~3x.
 // r._costSource records which one won, so the UI can say where a number came
 // from instead of leaving the user to reverse-engineer it.
+// Labels and markers. Many are sold by Mouser/DigiKey (marker sleeves, printable
+// labels), so they are looked up like any part; only when no source has a price
+// does the agreed nominal price apply — per piece, or one label for a row that
+// is not counted in pieces.
+export const SD_NOMINAL_LABEL_PRICE=0.2;
+export function _sdIsLabelRow(r){ return /\b(labels?|markers?)\b/i.test(String(r && r.description || '')); }
+export function _sdNominalCost(r){
+  if(!_sdIsLabelRow(r)) return 0;
+  const unit=String(r.unit||'').trim().toLowerCase();
+  const qty=parseFloat(r.qty)||1;
+  return (unit==='mm'||unit==='gr') ? SD_NOMINAL_LABEL_PRICE : SD_NOMINAL_LABEL_PRICE*qty;
+}
 export function _sdRecalcTotal(r){
   if(r.manual_total!=null && r.manual_total!==''){
     r.total=parseFloat(r.manual_total)||0;
@@ -140,6 +152,11 @@ export function _sdRecalcTotal(r){
   // Only if no real source quoted this part: fall back to the AI's crimp-tool
   // estimate. Deliberately last — a real quote always beats a guess, however
   // close the guess looks.
+  // No real price: a label or marker takes the nominal label price.
+  if(!best){
+    const nom=_sdNominalCost(r);
+    if(nom>0){ best=nom; bestField='nominal'; }
+  }
   if(!best){
     const est=_sdLineCost(r,'est_price');
     if(est>0){ best=est; bestField='est_price'; }

@@ -2228,6 +2228,28 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   ok('links: a tool with no number searches by its connector', /ABC-123-4P%20crimp%20tool/.test(links) && /Find tool on Mouser/.test(links));
 }
 
+// ─────────────────────────────────────────── labels/markers: nominal price only when no source has one (v1.64.2)
+{
+  const isL=G('_sdIsLabelRow'), nom=G('_sdNominalCost'), rec=G('_sdRecalcTotal');
+  ok('label: LABEL / LABELS / MARKER / MARKERS are labels', ['LABEL 25MM','Labels, white','MARKER SLEEVE','heat shrink markers'].every(d=>isL({description:d})));
+  ok('label: other words are not', ['LABELLING MACHINE','REMARKERS','CABLE'].every(d=>!isL({description:d})));
+  t('label: nominal is per piece', nom({description:'LABEL',qty:4,unit:'pc'}), 0.8);
+  t('label: one label on a row not counted in pieces', nom({description:'MARKER',qty:300,unit:'mm'}), 0.2);
+  t('label: not a label, no nominal', nom({description:'CABLE',qty:4,unit:'pc'}), 0);
+  const a={description:'LABEL',qty:5,unit:'pc'}; rec(a);
+  t('label: no price → nominal', [+a.total.toFixed(4),a._costSource], [1,'nominal']);
+  const b={description:'LABEL',qty:5,unit:'pc',mouser_price:0.05}; rec(b);
+  t('label: a supplier price wins over nominal', [+b.total.toFixed(4),b._costSource], [0.25,'mouser_price']);
+  const c={description:'LABEL',qty:5,unit:'pc',priority_price:0.3}; rec(c);
+  t('label: a Priority price wins over nominal', c._costSource, 'priority_price');
+  const d={description:'LABEL',qty:5,unit:'pc',manual_total:'2'}; rec(d);
+  t('label: a typed price wins over everything', [d.total,d._costSource], [2,'manual']);
+  const e={description:'LABEL',qty:5,unit:'pc',est_price:9}; rec(e);
+  t('label: nominal beats an AI estimate', e._costSource, 'nominal');
+  const f={description:'CRIMP TOOL',qty:1,unit:'pc',est_price:9}; rec(f);
+  t('label: a non-label keeps its estimate', f._costSource, 'est_price');
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

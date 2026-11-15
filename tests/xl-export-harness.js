@@ -39,6 +39,8 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
       {drawing_number:'D1', part_number:'LAB-1', description:'LABEL', qty:2, unit:'pc', manual_total:'3'},
       {drawing_number:'D1', part_number:'TL-1', description:'CRIMP TOOL for CON-1', qty:1, unit:'pc', est_price:185, tool_for:'CON-1'},
       {drawing_number:'D2', part_number:'CON-2', description:'RECEPTACLE', qty:1, unit:'pc', digikey_price:17.75},
+      {drawing_number:'D2', part_number:'LAB-2', description:'LABEL, PRINTABLE', qty:3, unit:'pc'},
+      {drawing_number:'D2', part_number:'MRK-3', description:'MARKER SLEEVE', qty:2, unit:'pc', mouser_price:0.35},
       {drawing_number:'D2', part_number:'TL-2', description:'INSERTION TOOL for CON-2', qty:1, unit:'pc', tool_for:'CON-2',
        est_price:120, mouser_price:96.5, mouser_brk:1, mouser_url:'https://www.mouser.com/ProductDetail/TL-2'},
     ];
@@ -106,6 +108,11 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
   ok('tool 2: priced from Mouser', ws.getCell(t2,9).value==='Mouser' && near(ws.getCell(t2,13).value.result,96.5));
   ok('tool 2: links the product page the price came from', ws.getCell(t2,11).value.hyperlink==='https://www.mouser.com/ProductDetail/TL-2');
   const S2=x=>vm.runInContext(`_sdPriceSource(sdItems.find(r=>r.part_number==='${x}'))`, ctx);
+  // Labels/markers: a supplier price wins; with none, the nominal $0.20 per piece.
+  ok('label: no price → nominal $0.20 × 3 pieces', near(item('LAB-2').total,0.6) && S2('LAB-2').kind==='nominal');
+  ok('label: ...the same fallback as an Excel formula, with a note', /^IF\(.*,0\.2\*F\d+\)$/.test(pc('LAB-2').formula) && near(pc('LAB-2').result,0.6)
+     && /Nominal label price/.test(ws.getCell(rowOf('LAB-2'),13).note||''));
+  ok('label: a marker with a Mouser price uses that price', near(item('MRK-3').total,0.7) && S2('MRK-3').kind==='mouser');
   ok('source: the cheapest verified price wins over the estimate', S2('TL-2').kind==='mouser' && S2('TL-1').kind==='ai');
   ok('source: a manual price is reported as such', S2('LAB-1').kind==='manual');
   ok('source: only https links are trusted', vm.runInContext(`_sdSafeUrl('javascript:alert(1)')===''&&_sdSafeUrl('https://a.b/c')==='https://a.b/c'`, ctx));

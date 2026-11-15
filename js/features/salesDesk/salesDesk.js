@@ -5,7 +5,7 @@ import { logAudit } from '../../core/audit.js';
 import { loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../../core/table.js';
 import { debounce, esc, setActions, setContent, toast } from '../../core/ui.js';
 import { loadParts } from '../../data/parts.js';
-import { _SD_PRICE_SOURCES, _sdLaborQtyMultiplier, _sdRecalcTotal } from '../../domain/pricing.js';
+import { SD_NOMINAL_LABEL_PRICE, _SD_PRICE_SOURCES, _sdLaborQtyMultiplier, _sdRecalcTotal } from '../../domain/pricing.js';
 import { _PRICE_LEGEND_HTML, _priceCellHTML, _stockCellHTML } from '../database.js';
 import { _sdAskUnitsThenCheck } from '../priceCheck.js';
 import { exportSalesDeskExcel } from './export.js';
@@ -128,7 +128,7 @@ export function _sdCellHTML(k,r,i){
         : '';
       return `<input type="number" class="sd-manual-total" data-i="${i}" value="${r.total?+r.total.toFixed(2):''}"
              min="0" step="any" placeholder="0.00" title="${hasManual?'Manual price override — clear to go back to FC/Priority price':'No FC/Priority price — type one in manually'}"
-             style="width:78px;padding:2px 5px;border:1px solid ${noSourcePrice?'#06b6d4':'var(--border)'};border-radius:4px;font-size:12px;font-weight:700;text-align:right;${noSourcePrice?'background:#ecfeff;color:#0e7490':''}">${ownedNote}${_sdIsToolRow(r)&&!_sdIsToolOwned(r)?_sdToolSourceChip(r):''}`;
+             style="width:78px;padding:2px 5px;border:1px solid ${noSourcePrice?'#06b6d4':'var(--border)'};border-radius:4px;font-size:12px;font-weight:700;text-align:right;${noSourcePrice?'background:#ecfeff;color:#0e7490':''}">${ownedNote}${(_sdIsToolRow(r)&&!_sdIsToolOwned(r))||r._costSource==='nominal'?_sdToolSourceChip(r):''}`;
     }
     // Labor Time shows/edits the row's actual total minutes directly (what
     // used to be the separate read-only "Labor Total" column) — type a number
@@ -278,6 +278,8 @@ export function _sdPriceSource(r){
             url:_sdSafeUrl(r.digikey_url)||(pn?search.digikey:'')};
   if(src==='priority_price')
     return {kind:'priority', label:'Priority (our purchase price)', unit:+r.priority_price||0, verified:true, url:''};
+  if(src==='nominal')
+    return {kind:'nominal', label:'Nominal label price — no supplier price', unit:SD_NOMINAL_LABEL_PRICE, verified:false, url:''};
   if(src==='est_price')
     return {kind:'ai', label:'AI estimate — not verified', unit:+r.est_price||0, verified:false, url:''};
   return {kind:'none', label:'No price yet', verified:false, url:''};
@@ -285,7 +287,7 @@ export function _sdPriceSource(r){
 // Under a tool's Part Cost in the table: where that number came from, linked.
 export function _sdToolSourceChip(r){
   const s=_sdPriceSource(r);
-  const short={mouser:'Mouser',digikey:'DigiKey',priority:'Priority',ai:'AI est.',manual:'manual',none:'no price'}[s.kind];
+  const short={mouser:'Mouser',digikey:'DigiKey',priority:'Priority',ai:'AI est.',nominal:'nominal',manual:'manual',none:'no price'}[s.kind];
   const color=s.verified?'#166534':'#b45309';
   const body=s.url
     ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" style="color:${color};text-decoration:underline">${short} ↗</a>`
@@ -299,6 +301,7 @@ export function _sdPriceSourceText(r){
   if(s.kind==='mouser'||s.kind==='digikey')
     return `${s.label}: ${$(s.unit)} per unit${s.brk?` (price break ${s.brk}+)`:''}`;
   if(s.kind==='priority') return `${s.label}: ${$(s.unit)} per unit`;
+  if(s.kind==='nominal') return `${s.label}: ${$(s.unit)} per piece — type a price in Part Cost if you have a real one`;
   if(s.kind==='ai') return `${s.label}: approximate list price ${$(s.unit)} — run Check Price or confirm with the supplier`;
   if(s.kind==='manual') return `Typed in Sales Desk: ${$(r.total)}`;
   return 'No price yet';

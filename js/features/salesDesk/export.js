@@ -2,7 +2,7 @@ import { S } from '../../core/state.js';
 import { logSystemAudit } from '../../core/audit.js';
 import { fmtDate, toast } from '../../core/ui.js';
 import { APP_VER } from '../../core/version.js';
-import { MM_PER_FOOT, MM_PER_METER } from '../../domain/pricing.js';
+import { MM_PER_FOOT, MM_PER_METER, SD_NOMINAL_LABEL_PRICE, _sdIsLabelRow } from '../../domain/pricing.js';
 import { _sdComputeSummary, _sdDwgSet, _sdIsToolRow, _sdPriceSource, _sdPriceSourceText, _sdSearchUrls, sdItems } from './salesDesk.js';
 import { _XL, _xlBoxed, loadExcelJS } from '../../io/excel.js';
 
@@ -342,7 +342,11 @@ export async function exportSalesDeskExcel(){
           const b=`IF(N(J${n})>0,J${n}*F${n}*${K_DIST(n)},9E+99)`;
           const c=`IF(N(L${n})>0,L${n}*F${n}*${K_PRI(n)},9E+99)`;
           const est=_num(r.est_price);
-          const fb = est ? `${est}*F${n}*${K_DIST(n)}` : '0';
+          // Same order as the app: a label/marker with no price takes the
+          // nominal label price (per piece; one label on a row not counted in pieces).
+          const pcs=!['mm','gr'].includes(String(r.unit||'').trim().toLowerCase());
+          const fb = _sdIsLabelRow(r) ? (pcs ? `${SD_NOMINAL_LABEL_PRICE}*F${n}` : `${SD_NOMINAL_LABEL_PRICE}`)
+                   : est ? `${est}*F${n}*${K_DIST(n)}` : '0';
           cost=F(`IF(MIN(${a},${b},${c})<9E+98,MIN(${a},${b},${c}),${fb})`, r.total||0);
         }
         const vals=[itemNo, r.drawing_number||'', r.part_number||'', r.description||'',
@@ -376,6 +380,7 @@ export async function exportSalesDeskExcel(){
           }
           if(ci===12 && manual) c.note='Manual price typed in Sales Desk — kept as a price per unit, so it follows QTY.';
           else if(ci===12 && isTool) c.note=_sdPriceSourceText(r);
+          else if(ci===12 && r._costSource==='nominal') c.note=_sdPriceSourceText(r);
           c.alignment={vertical:'middle',
                        horizontal: (ci===3||ci===4)?'left':(ci>=5?'right':'left'),
                        wrapText: ci===3};
