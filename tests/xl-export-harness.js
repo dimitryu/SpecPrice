@@ -41,6 +41,7 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
       {drawing_number:'D2', part_number:'CON-2', description:'RECEPTACLE', qty:1, unit:'pc', digikey_price:17.75},
       {drawing_number:'D2', part_number:'LAB-2', description:'LABEL, PRINTABLE', qty:3, unit:'pc'},
       {drawing_number:'D2', part_number:'MRK-3', description:'MARKER SLEEVE', qty:2, unit:'pc', mouser_price:0.35},
+      {drawing_number:'D2', revision:'C', part_number:'CS-4', description:'CABLE FROM CUSTOMER', qty:3, unit:'pc', mouser_price:5, customer_supplied:true},
       {drawing_number:'D2', part_number:'TL-2', description:'INSERTION TOOL for CON-2', qty:1, unit:'pc', tool_for:'CON-2',
        est_price:120, mouser_price:96.5, mouser_brk:1, mouser_url:'https://www.mouser.com/ProductDetail/TL-2'},
     ];
@@ -112,6 +113,11 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
   ok('label: no price → nominal $0.20 × 3 pieces', near(item('LAB-2').total,0.6) && S2('LAB-2').kind==='nominal');
   ok('label: ...the same fallback as an Excel formula, with a note', /^IF\(.*,0\.2\*F\d+\)$/.test(pc('LAB-2').formula) && near(pc('LAB-2').result,0.6)
      && /Nominal label price/.test(ws.getCell(rowOf('LAB-2'),13).note||''));
+  ok('customer supplied: Part Cost is 0 in the app and in Excel, with a note',
+     item('CS-4').total===0 && pc('CS-4').formula==='0' && /Customer-supplied/.test(ws.getCell(rowOf('CS-4'),13).note||''));
+  ok('customer supplied: marked in the description and listed under the drawing',
+     /CUSTOMER SUPPLIED/.test(ws.getCell(rowOf('CS-4'),4).value) && !!find(/D2: 1 customer-supplied item\(s\).*CS-4/));
+  ok('revision: shown in the drawing heading', !!find(/^DRAWING D2\s+REV C/));
   ok('label: a marker with a Mouser price uses that price', near(item('MRK-3').total,0.7) && S2('MRK-3').kind==='mouser');
   ok('source: the cheapest verified price wins over the estimate', S2('TL-2').kind==='mouser' && S2('TL-1').kind==='ai');
   ok('source: a manual price is reported as such', S2('LAB-1').kind==='manual');

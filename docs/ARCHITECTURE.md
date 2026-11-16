@@ -86,6 +86,18 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
 - מק"ט כלי שהוא מק"ט המחבר (או המחבר + `-TOOL`) נמחק (`_bomBadToolPn`) — תא ריק ולא מק"ט מזויף.
 - כל שורת כלי מקבלת `tool_for`. בסיכום, `_sdToolLinksHTML` מציג לכל ספק את המחיר שלו וקישור לדף המוצר.
 
+## זהות השרטוט, חומר של הלקוח, שמירת הדסק ל-DB (v1.65)
+
+- **Drawing # / Name / Revision**: `aiReadTitleBlock` (`ai/bom.js`) קורא את טבלת הכותרת (טקסט אם יש שכבת טקסט,
+  אחרת תמונת העמוד). `_drawingIdentity` (`domain/bom.js`) — title block קודם, אחר כך שם הקובץ
+  (`_parseDrawingFileName`); רוויזיה = הגבוהה ביותר (`_maxRevision`) מטבלת הרוויזיות + שדה REV. חל על כל שורות הקובץ.
+- **Customer supplied**: שדה `customer_supplied` בשורה. `_sdRecalcTotal` מחזיר 0 (`_costSource='customer'`) לפני כל מקור
+  אחר. נקבע לכל הצעה; ב-DB נשמר לתיעוד בלבד ולא נטען ב-Add from Database. הפרומפטים מבקשים `customer_supplied`.
+- **Save to Database** (Sales Desk): `saveSalesDeskToDB` (`data/parts.js`) + `_sdDbPatch` — רק שדות ששונים; ערך ריק לא מוחק;
+  מחיר 0 = אין מחיר; QTY לא נשלח; מק"ט כפול נשמר פעם אחת.
+- **כלים ל-Add from Database**: `features/salesDesk/tools.js` — DB (`tool_for` / מק"ט המחבר בתיאור) → `_bomKnownTools` →
+  `aiFindToolsForParts` (קריאה אחת). `tool_source` = db / known / ai, מוצג כ-"Added by".
+
 ## חשבון משתמש ושמירה ל-DB עם התקדמות
 
 - **שכחתי סיסמה**: `web/index.html` → `sendPasswordResetEmail`. ההודעה זהה גם לאימייל שלא קיים

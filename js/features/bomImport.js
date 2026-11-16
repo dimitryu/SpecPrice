@@ -1,10 +1,10 @@
-import { _bomFromPDF, aiExtractBOM } from '../ai/bom.js';
+import { _bomFromPDF, aiExtractBOM, aiReadTitleBlock } from '../ai/bom.js';
 import { _aiReady } from '../ai/client.js';
 import { logAudit } from '../core/audit.js';
 import { closeModal, esc, progressPanel, showModal, toast } from '../core/ui.js';
 import { saveBOMToPartStock } from '../data/parts.js';
 import { appendRowsToDrawing } from '../data/projects.js';
-import { _XLS_MAP_FIELDS, _normalizeBOMRows, _normalizeExtractedRow, _xlsAnalyzeSheet, _xlsMapSignature, parseExcelSheetsStructured } from '../domain/bom.js';
+import { _XLS_MAP_FIELDS, _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, _xlsAnalyzeSheet, _xlsMapSignature, parseExcelSheetsStructured } from '../domain/bom.js';
 import { renderRFQDetail } from './rfq.js';
 import { _TOOL_TAG, _sdIsToolRow, _toolRowAttrs } from './salesDesk/salesDesk.js';
 import { showSettingsModal } from './settings.js';
@@ -90,7 +90,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
 
     try {
       let extractedRows = [];
-      let _pdfText='', _pdfTextLen=0, _pdfImages=[];
+      let _pdfText='', _pdfTextLen=0, _pdfImages=[], _imgForTb=null;
       if(isXls){
         setMsg('Reading spreadsheet…', 20);
         const sheets = await readExcelSheets(file);
@@ -122,23 +122,26 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
       } else {
         setMsg('Encoding image…', 20);
         const {b64, mimeType} = await encodeImage(file);
+        _imgForTb={b64, mimeType};
         setMsg('Sending to AI (vision)…', 50);
         extractedRows = await aiExtractBOM('', true, {b64, mimeType}, file.name);
       }
 
       _normalizeBOMRows(extractedRows);
-      // Parse filename: "303-49-00251-00 REV 01 _approved.pdf"
-      // → drawingName="303-49-00251-00", revision="REV 01 _approved"
-      const _fileBase = file.name.replace(/\.[^.]+$/,'');
-      const _spaceIdx = _fileBase.indexOf(' ');
-      const effectiveDwgName = (files.length===1 && drawingNameOverride)
-        ? drawingNameOverride
-        : (_spaceIdx>0 ? _fileBase.slice(0,_spaceIdx) : _fileBase);
-      const fileRevision = _spaceIdx>0 ? _fileBase.slice(_spaceIdx+1).trim() : '';
+      // Drawing #, name and revision: title block first, then the file name
+      // (see _drawingIdentity). A name typed for this RFQ drawing still wins.
+      let _tb=null;
+      if(extractedRows.length && !isXls && _aiReady()){
+        setMsg('Reading the title block…', 95);
+        const _tbText = isPDF && _pdfTextLen>200 ? _pdfText : '';
+        const _tbImg = _tbText ? null : (_pdfImages[0] ? {b64:_pdfImages[0], mimeType:'image/jpeg'} : (_imgForTb||null));
+        if(_tbText || _tbImg) _tb=await aiReadTitleBlock(_tbText, !_tbText, _tbImg);
+      }
+      const _dwgId=_drawingIdentity(_tb, file.name);
+      if(files.length===1 && drawingNameOverride) _dwgId.drawing_number=drawingNameOverride;
+      _applyDrawingIdentity(extractedRows, _dwgId);
       extractedRows.forEach(r=>{
-        if(!r.drawing_number) r.drawing_number=effectiveDwgName;
-        if(!r.drawing_name) r.drawing_name=effectiveDwgName;
-        if(!r.revision) r.revision=fileRevision;
+        r.customer_supplied=_isYes(r.customer_supplied);
         _normalizeExtractedRow(r);
       });
 
@@ -209,21 +212,41 @@ export function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
   // first sees them, and it's the only place they can be removed before they
   // reach the Database. Discovering a synthesized row later, in a quote, is far
   // more confusing than seeing it flagged at the point it's introduced.
-  const tBody = rows.map((r,i)=>`<tr data-i="${i}"${_toolRowAttrs(r)}>
-    ${PCOLS.map(k=>`<td contenteditable="true" data-k="${k}" data-i="${i}" style="min-width:70px">${esc(r[k]||'')}${
-      k==='description' && _sdIsToolRow(r) ? `<span data-tag contenteditable="false">${_TOOL_TAG}</span>` : ''}</td>`).join('')}
-    <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
-  </tr>`).join('');
+  // One editable row. Also used for rows the user adds (r = {}): every cell can
+  // be typed into, ✕ removes the row, and "Cust. supplied" marks material the
+  // customer provides (priced at 0 in the quote).
+  const rowHTML=(r,i)=>`<tr data-i="${i}"${_toolRowAttrs(r)}>
+    ${PCOLS.map(k=>`<td contenteditable="true" data-k="${k}" data-i="${i}" style="min-width:70px${k==='description'?';max-width:380px;white-space:normal':''}">${esc(r[k]||'')}${
+      k==='description' && _sdIsToolRow(r) ? `<span data-tag contenteditable="false">${_TOOL_TAG}</span>` : ''}</td>${
+      k==='description' ? `<td style="text-align:center"><input type="checkbox" class="pv-cust" title="Customer-supplied material — not purchased, priced at 0" ${r.customer_supplied?'checked':''}></td>` : ''}`).join('')}
+    <td><button class="btn btn-red btn-sm pv-del" title="Delete this row">✕</button></td>
+  </tr>`;
+  const tBody = rows.map(rowHTML).join('');
+  const hasTools = rows.some(r=>_sdIsToolRow(r));
 
   body.innerHTML = `
     <div class="ai-status" style="margin-bottom:10px">
       <div style="width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1">✓</div>
-      <span>${rows.length} rows extracted — click any cell to edit before saving</span>
+      <span>${rows.length} rows extracted — click any cell to edit, ✕ deletes a row, ➕ adds one</span>
     </div>
-    <div class="table-wrap" style="max-height:calc(85vh - 175px);overflow:auto"><table>
-      <thead><tr>${PLABELS.map(l=>`<th>${l}</th>`).join('')}<th></th></tr></thead>
+    ${hasTools?`<div class="pv-tool-note" style="font-size:12px;color:#92400e;background:#fffbeb;border:1px solid #f59e0b;border-radius:6px;padding:6px 10px;margin-bottom:8px">
+      ⚙ Rows marked <strong>TOOL</strong> were added by the system's analysis — they are <strong>not</strong> in the drawing's original BOM, and are never included in the cable price.</div>`:''}
+    <div class="table-wrap" style="max-height:calc(85vh - 205px);overflow:auto"><table>
+      <thead><tr>${PLABELS.map(l=>`<th>${l}</th>${l==='Description'?'<th title="Customer-supplied material — not purchased, priced at 0">Cust. supplied</th>':''}`).join('')}<th></th></tr></thead>
       <tbody id="preview-tbody">${tBody}</tbody>
-    </table></div>`;
+    </table></div>
+    <button type="button" class="btn btn-ghost btn-sm" id="pv-add-row" style="margin-top:8px">➕ Add row</button>`;
+  const ptb=document.getElementById('preview-tbody');
+  ptb.addEventListener('click',e=>{ const d=e.target.closest('.pv-del'); if(d) d.closest('tr').remove(); });
+  let _newIdx=rows.length;
+  document.getElementById('pv-add-row').addEventListener('click',()=>{
+    // A new row starts with this drawing's number, name and revision filled in.
+    const last=[...ptb.querySelectorAll('tr')].pop();
+    const val=k=>last?.querySelector(`[data-k="${k}"]`)?.textContent.trim()||'';
+    ptb.insertAdjacentHTML('beforeend', rowHTML({drawing_number:val('drawing_number'), revision:val('revision'), drawing_name:val('drawing_name')}, _newIdx++));
+    const tr=ptb.lastElementChild; tr.scrollIntoView({block:'nearest'});
+    tr.querySelector('[data-k="part_number"]')?.focus();
+  });
 
   foot.innerHTML = `
     <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
@@ -252,7 +275,13 @@ export function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
       // So do the manufacturing minutes the process analysis attributed to
       // this exact row (see handleSDFiles) — by position, never by part number.
       if(rows[origIdx] && rows[origIdx]._labor_min!=null) row._labor_min=rows[origIdx]._labor_min;
-      if(Object.values(row).some(v=>v)) updatedRows.push(row);
+      // Which connector a tool is for, and where the tool came from.
+      if(rows[origIdx] && rows[origIdx].tool_for) row.tool_for=rows[origIdx].tool_for;
+      if(rows[origIdx] && rows[origIdx].tool_source) row.tool_source=rows[origIdx].tool_source;
+      if(Object.values(row).some(v=>v)){
+        row.customer_supplied=!!tr.querySelector('.pv-cust')?.checked;
+        updatedRows.push(row);
+      }
     });
     if(!updatedRows.length){ toast('No rows to save','error'); return; }
     const btn=document.getElementById('btn-save-bom');

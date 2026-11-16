@@ -1,12 +1,12 @@
 import { S } from '../../core/state.js';
-import { _bomFromPDF, _findBOMPageIndex, aiExtractBOM } from '../../ai/bom.js';
+import { _bomFromPDF, _findBOMPageIndex, aiExtractBOM, aiReadTitleBlock } from '../../ai/bom.js';
 import { _aiReady } from '../../ai/client.js';
 import { aiAnalyzeCableProcess, aiExtractDrawingNotes } from '../../ai/process.js';
 import { logAudit } from '../../core/audit.js';
 import { parseBoolQuery, wireSearchClear, wireShiftCheck } from '../../core/table.js';
 import { closeModal, debounce, esc, fmtPrice, showModal, toast } from '../../core/ui.js';
 import { saveBOMToPartStock } from '../../data/parts.js';
-import { _normalizeBOMRows, _normalizeExtractedRow, parseExcelSheetsStructured } from '../../domain/bom.js';
+import { _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, parseExcelSheetsStructured } from '../../domain/bom.js';
 import { _xlsConfirmMapping, showBOMPreview } from '../bomImport.js';
 import { _sdAutoMatchLabor } from './labor.js';
 import { _sdDrawingNotes, _sdIsToolRow, _sdRecalcRow, _sdTraceFields, renderSalesDesk, sdItems } from './salesDesk.js';
@@ -232,16 +232,21 @@ export async function handleSDFiles(files){
       }
 
       _normalizeBOMRows(extractedRows);
-      // Parse filename: "303-49-00251-00 REV 01 _approved.pdf"
-      // → drawingName="303-49-00251-00", revision="REV 01 _approved"
-      const _fileBase=file.name.replace(/\.[^.]+$/,'');
-      const _spaceIdx=_fileBase.indexOf(' ');
-      const effectiveDwgName=_spaceIdx>0 ? _fileBase.slice(0,_spaceIdx) : _fileBase;
-      const fileRevision=_spaceIdx>0 ? _fileBase.slice(_spaceIdx+1).trim() : '';
+      // Drawing #, name and revision of THIS drawing: from its title block
+      // (DWG NO / TITLE / REV, and the latest entry of a revision table), and
+      // from the file name for whatever the title block does not show.
+      let _tb=null;
+      if(extractedRows.length && !isXls && _aiReady()){
+        setM('Reading the title block (drawing #, title, revision)…',92);
+        const _tbText = isPDF && _pdfTextLen>200 ? _pdfText : '';
+        const _tbImg = _tbText ? null : (_procImgData || (_pdfImages[0]?{b64:_pdfImages[0],mimeType:'image/jpeg'}:null));
+        if(_tbText || _tbImg) _tb=await aiReadTitleBlock(_tbText, !_tbText, _tbImg);
+      }
+      const _dwgId=_drawingIdentity(_tb, file.name);
+      const effectiveDwgName=_dwgId.drawing_number;
+      _applyDrawingIdentity(extractedRows, _dwgId);
       extractedRows.forEach(r=>{
-        if(!r.drawing_number) r.drawing_number=effectiveDwgName;
-        if(!r.drawing_name) r.drawing_name=effectiveDwgName;
-        if(!r.revision) r.revision=fileRevision;
+        r.customer_supplied=_isYes(r.customer_supplied);
         _normalizeExtractedRow(r);
       });
 
@@ -387,6 +392,9 @@ export async function handleSDFiles(files){
           // matches nothing. An empty cell is the truthful answer.
           part_number:r.part_number||'', description:r.description||'',
           drawing_number:r.drawing_number||match?.drawing_number||match?.drawing_name||'',
+          drawing_name:r.drawing_name||'', revision:r.revision||'', atlantium_pn:r.atlantium_pn||'',
+          pin_count:r.pin_count||'', customer_supplied:!!r.customer_supplied,
+          tool_source:_isTool ? (r.tool_source||'ai') : '',
           qty, unit:r.unit||match?.unit||match?.units||'pcs',
           // A crimp/insertion TOOL row is synthesized fresh by the AI during
           // drawing extraction (see _BOM_TEXT_PROMPT/_BOM_VISION_PROMPT rule 5)

@@ -31,6 +31,7 @@ node shots-3-cut-strip.js         # 20–33 (also writes .specs-db.json for scri
 node shots-4-mfg-settings-admin.js# 34–51
 node shots-5-guide.js             # 52 (search results)
 node shots-6-mil-tools.js         # 18b, 18c (MIL-DTL-38999 tools)
+node shots-7-sd-data.js           # 13c, 14c, 14d, 14e, 19b (title block, customer-supplied, Save to Database, tools for DB parts)
 python excel_shot.py              # 17b — the Excel quotation (needs LibreOffice + pdftoppm)
 python shrink_images.py           # optional: 256-colour PNGs, ~60% smaller
 ```

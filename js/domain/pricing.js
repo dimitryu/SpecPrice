@@ -139,6 +139,13 @@ export function _sdNominalCost(r){
   return (unit==='mm'||unit==='gr') ? SD_NOMINAL_LABEL_PRICE : SD_NOMINAL_LABEL_PRICE*qty;
 }
 export function _sdRecalcTotal(r){
+  // Material the customer supplies is not bought, so it costs nothing in every
+  // calculation — whatever prices the suppliers have for it.
+  if(r.customer_supplied){
+    r.total=0;
+    r._costSource='customer';
+    return 0;
+  }
   if(r.manual_total!=null && r.manual_total!==''){
     r.total=parseFloat(r.manual_total)||0;
     r._costSource='manual';

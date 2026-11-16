@@ -72,6 +72,7 @@ export function _bomFixToolRows(rows){
     } else {
       after.forEach(t=>{
         t.tool_for=t.tool_for||conn;
+        t.tool_source=t.tool_source||'ai';
         if(_bomBadToolPn(t.part_number, conn)){
           t.part_number='';
           t.description=`CRIMP TOOL for ${conn} — tool P/N not identified, check the connector maker's tooling list`;
@@ -620,4 +621,112 @@ export function _toolsScoreSheet(headers){
   if(_priorityFindCol(headers,_DESC_HEADER_HINTS)>=0) score+=10;
   score += Math.min(headers.length,20)*0.1;
   return score;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DRAWING IDENTITY — drawing number, title, revision
+// ------------------------------------------------------------------------------
+// Read from the drawing's own title block first (aiReadTitleBlock); whatever the
+// title block does not give comes from the file name. Every row of one drawing
+// carries the same three values.
+// ══════════════════════════════════════════════════════════════════════════════
+// Revision order: "-" / NC / blank (initial) < numbers (01, 02 …) < letters
+// (A … Z, AA …), and a trailing number after letters counts too (B1 < B2 < C).
+export function _revKey(rev){
+  const r=String(rev||'').trim().toUpperCase().replace(/^REV(ISION)?[\s.:_-]*/,'');
+  if(!r || r==='-' || r==='NC' || r==='N/C' || r==='0') return [0,0,'',0];
+  if(/^\d+(\.\d+)?$/.test(r)) return [1,parseFloat(r),'',0];
+  const m=r.match(/^([A-Z]+)[\s.-]?(\d*)$/);
+  if(m) return [2, m[1].length, m[1], parseInt(m[2]||'0',10)];
+  return [3,0,r,0];
+}
+export function _revCompare(a,b){
+  const x=_revKey(a), y=_revKey(b);
+  for(let i=0;i<4;i++){ if(x[i]<y[i]) return -1; if(x[i]>y[i]) return 1; }
+  return 0;
+}
+// The latest revision in a list (a revision table), or '' for an empty list.
+export function _maxRevision(list){
+  const v=(list||[]).map(x=>String(x||'').trim()).filter(Boolean);
+  if(!v.length) return '';
+  return v.reduce((best,x)=>_revCompare(x,best)>0?x:best, v[0]).replace(/^REV(ISION)?[\s.:_-]*/i,'');
+}
+// "303-49-00251-00 REV 01 _approved.pdf" → {drawing_number:'303-49-00251-00', revision:'01'}
+// "DEMO-100-01_RevB.pdf" → {drawing_number:'DEMO-100-01', revision:'B'}
+// "EL-004695-AC_B.pdf"  → {drawing_number:'EL-004695-AC_B', revision:''}  (no REV marker: not guessed)
+export function _parseDrawingFileName(name){
+  const base=String(name||'').replace(/^.*[\\/]/,'').replace(/\.[^.]+$/,'').trim();
+  const m=base.match(/^(.*?)[\s_.-]*\bREV(?:ISION)?[\s_.:-]*([A-Z0-9]{1,4})(?![A-Z0-9])/i)
+        || base.match(/^(.*?)[\s_.-]+REV(?:ISION)?[\s_.:-]*([A-Z0-9]{1,4})(?![A-Z0-9])/i)
+        || base.match(/^(.*?[^\s_.-])[\s_.-]*Rev([A-Z0-9]{1,4})(?![A-Za-z0-9])/);
+  if(m && m[1].trim()) return {drawing_number:m[1].trim().replace(/[\s_.-]+$/,''), revision:m[2].toUpperCase()};
+  const sp=base.indexOf(' ');
+  return {drawing_number: sp>0 ? base.slice(0,sp) : base, revision:''};
+}
+// The drawing number, title and revision for one imported file, and where each
+// came from ('title block' | 'file name'), applied to every row of that file.
+export function _drawingIdentity(tb, fileName){
+  const f=_parseDrawingFileName(fileName);
+  const t=tb||{};
+  const rev=_maxRevision([...(t.revisions||[]), t.revision].filter(Boolean));
+  return {
+    drawing_number: t.drawing_number || f.drawing_number,
+    drawing_name:   t.title || t.drawing_number || f.drawing_number,
+    revision:       rev || f.revision,
+    from:{drawing_number: t.drawing_number?'title block':'file name',
+          drawing_name:   t.title?'title block':(t.drawing_number?'title block (number)':'file name'),
+          revision:       rev?'title block':(f.revision?'file name':'')},
+  };
+}
+export function _applyDrawingIdentity(rows, id){
+  rows.forEach(r=>{ r.drawing_number=id.drawing_number; r.drawing_name=id.drawing_name; r.revision=id.revision; });
+  return rows;
+}
+// "yes" / true / "Y" / "✓" → true. The AI and spreadsheets say it many ways.
+export function _isYes(v){ return v===true || /^(y|yes|true|1|x|✓|v|customer|cfe|cfm|fbc|gfe)$/i.test(String(v==null?'':v).trim()); }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SALES DESK → DATABASE: only what differs
+// ------------------------------------------------------------------------------
+// The fields a Sales Desk row carries that the Database keeps too. QTY is not
+// one of them: the Database is a catalogue and always holds 1.
+// ══════════════════════════════════════════════════════════════════════════════
+export const _SD_DB_TEXT=['description','manufacturer','drawing_number','drawing_name','revision','atlantium_pn',
+  'pin_count','tool_for','mouser_url','digikey_url','mouser_match','digikey_match','mouser_mpn','digikey_mpn'];
+export const _SD_DB_NUM=['mouser_price','digikey_price','priority_price','mouser_stock','digikey_stock',
+  'mouser_brk','digikey_brk','est_price'];
+// The patch that brings `dbDoc` in line with `row`: only fields whose value on
+// screen differs from the Database. An EMPTY value on screen never clears a
+// Database value — a blank cell usually means "not known here", not "erase".
+export function _sdDbPatch(row, dbDoc){
+  const d=dbDoc||{}, patch={};
+  const txt=v=>String(v==null?'':v).trim();
+  for(const k of _SD_DB_TEXT){
+    const v=txt(row[k]);
+    if(v && v!==txt(d[k])) patch[k]=v;
+  }
+  for(const k of _SD_DB_NUM){
+    const raw=row[k];
+    if(raw==null || raw==='') continue;
+    const v=parseFloat(raw);
+    if(!isFinite(v)) continue;
+    // A price (or price break) of 0 on screen means "no price", not "free".
+    if(!k.endsWith('_stock') && !(v>0)) continue;
+    const cur=parseFloat(d[k]);
+    if(!(isFinite(cur) && Math.abs(cur-v)<1e-9)) patch[k]=(k.endsWith('_stock')?String(v):v);
+  }
+  const u=_dbNormalizeUnit(row.unit);
+  if(u && u!==_dbNormalizeUnit(d.unit)) patch.unit=u;
+  // Customer-supplied is a yes/no the screen always states, so it is written
+  // whenever it differs (a part with no record counts as "no").
+  if(!!row.customer_supplied !== !!d.customer_supplied) patch.customer_supplied=!!row.customer_supplied;
+  return patch;
+}
+// A new Database record from a Sales Desk row.
+export function _sdDbNewDoc(row){
+  const doc={part_number:String(row.part_number||'').trim(), qty:1, stock:'', price_description:'', rfq_names:[],
+             alt_mpns:(row.alt_mpns||[]).length>1?row.alt_mpns:[]};
+  Object.assign(doc, _sdDbPatch(row, {}));
+  doc.customer_supplied=!!row.customer_supplied;
+  return doc;
 }

@@ -4,7 +4,7 @@ import { arrayUnion, collection, db, deleteField, doc, getDoc, getDocs, serverTi
 import { PROTECTED_ROLE } from '../core/roles.js';
 import { companyId, currentUserRole } from '../core/session.js';
 import { toast } from '../core/ui.js';
-import { _dbNormalizeUnit } from '../domain/bom.js';
+import { _dbNormalizeUnit, _sdDbNewDoc, _sdDbPatch } from '../domain/bom.js';
 
 export async function loadParts(){
   if(S.allParts.length>0) return;
@@ -211,6 +211,11 @@ export async function saveBOMToPartStock(rows, rfqName='', onProgress){
         if(r.unit && !d.unit) patch.unit=_dbNormalizeUnit(r.unit);
         if(r.atlantium_pn && !d.atlantium_pn) patch.atlantium_pn=r.atlantium_pn;
         if(r.pin_count && !d.pin_count) patch.pin_count=r.pin_count;
+        if(r.revision && !d.revision) patch.revision=r.revision;
+        if(r.tool_for && !d.tool_for) patch.tool_for=r.tool_for;
+        // Customer-supplied records what the latest import said; it is never
+        // read back into a quote (that is decided per quote).
+        if(r.customer_supplied!=null && !!r.customer_supplied!==!!d.customer_supplied) patch.customer_supplied=!!r.customer_supplied;
         // Refresh the approved-alternatives list whenever an import supplies
         // one — a newer QVL may have added or withdrawn a manufacturer.
         if((r.alt_mpns||[]).length>1) patch.alt_mpns=r.alt_mpns;
@@ -228,7 +233,8 @@ export async function saveBOMToPartStock(rows, rfqName='', onProgress){
           part_number:pn, description:r.description||'',
           drawing_number:r.drawing_number||'', drawing_name:r.drawing_name||'', manufacturer:r.manufacturer||'',
           unit:_dbNormalizeUnit(r.unit)||'', atlantium_pn:r.atlantium_pn||'', qty:1,
-          pin_count:r.pin_count||'',
+          pin_count:r.pin_count||'', revision:r.revision||'', tool_for:r.tool_for||'',
+          customer_supplied:!!r.customer_supplied,
           alt_mpns:(r.alt_mpns||[]).length>1?r.alt_mpns:[],
           est_price:r.price?(parseFloat(r.price)||''):'', stock:'', price_description:'',
           rfq_names: rfqName ? [rfqName] : [],
@@ -332,4 +338,56 @@ export async function updatePartFields(id, patch){
 // the recycle bin included — callers pass deleted:false to bring it back).
 export async function mergePartDoc(key, fields){
   return setDoc(doc(db,'companies',companyId,'parts_cache',key), {...fields, updatedAt:serverTimestamp()}, {merge:true});
+}
+
+// ── Sales Desk → Database ─────────────────────────────────────────────────────
+// Everything on the Sales Desk right now, written to the Database. A part that
+// is already there gets ONLY the fields that differ (see _sdDbPatch); a new one
+// is created. A part number that appears on several rows is saved once, from
+// its first row. Returns what happened, per part, for the result window.
+export async function saveSalesDeskToDB(rows, onProgress){
+  await loadParts();
+  const res={created:0, updated:0, unchanged:0, skipped:0, duplicates:0, revived:0, fields:0, changes:[], errors:[]};
+  const seen=new Set(), list=[];
+  for(const r of rows){
+    const pn=String(r.part_number||'').trim();
+    if(!pn){ res.skipped++; continue; }
+    const k=pn.toLowerCase();
+    if(seen.has(k)){ res.duplicates++; continue; }
+    seen.add(k); list.push(r);
+  }
+  const byPn=new Map([...S.allParts, ...S.trashParts].map(p=>[String(p.part_number||'').trim().toLowerCase(), p]));
+  let done=0;
+  for(const r of list){
+    if(onProgress) onProgress(done, list.length);
+    done++;
+    const pn=String(r.part_number).trim();
+    const known=byPn.get(pn.toLowerCase());
+    const key=known ? known._id : pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
+    const ref=doc(db,'companies',companyId,'parts_cache',key);
+    try{
+      const snap=await getDoc(ref);
+      if(snap.exists()){
+        const d=snap.data();
+        const patch=_sdDbPatch(r, d);
+        const names=Object.keys(patch);
+        if(d.deleted===true){
+          Object.assign(patch,{deleted:false, deletedAt:deleteField(), deletedAtMs:deleteField(), deletedBy:deleteField()});
+          res.revived++;
+        }
+        if(!Object.keys(patch).length){ res.unchanged++; continue; }
+        await updateDoc(ref,{...patch, qty:1, updatedAt:serverTimestamp()});
+        res.updated++; res.fields+=names.length;
+        res.changes.push({pn, fields:names, revived:d.deleted===true});
+      } else {
+        await setDoc(ref,{..._sdDbNewDoc(r), updatedAt:serverTimestamp()});
+        res.created++;
+        res.changes.push({pn, created:true, fields:[]});
+      }
+    }catch(e){ res.errors.push(`${pn}: ${e.message}`); }
+  }
+  if(onProgress) onProgress(list.length, list.length);
+  S.allParts=[]; S.trashParts=[];
+  await loadParts();
+  return res;
 }

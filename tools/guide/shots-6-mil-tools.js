@@ -9,6 +9,7 @@ const PR={'M22520/2-01':{m:812.5,d:845.1},'M22520/2-07':{m:162.3,d:''},'M81969/1
     const u=new URL(r.request().url()); const json=o=>r.fulfill({status:200,contentType:'application/json',body:JSON.stringify(o)});
     if(u.pathname==='/aiProxy'){ if(r.request().method()==='GET') return json({configured:true});
       const txt=JSON.stringify(JSON.parse(r.request().postData()).messages);
+      if(/TITLE BLOCK of an engineering drawing/.test(txt)) return json({content:[{type:'text',text:'{"drawing_number":"DEMO-400-01","title":"MIL Signal Cable","revision":"A","revisions":[]}'}]});
       if(/Is there a PARTS LIST/.test(txt)) return json({content:[{type:'text',text:'{"found":false}'}]});
       if(/Bill of Materials|BOM/i.test(txt)) return json({content:[{type:'text',text:JSON.stringify(ROWS)}]});
       return json({content:[{type:'text',text:'{}'}]}); }
@@ -29,8 +30,8 @@ const PR={'M22520/2-01':{m:812.5,d:845.1},'M22520/2-07':{m:162.3,d:''},'M81969/1
   // the table rows of the connector and its three tools
   const t=await page.$('#sd-table'); const bb=await t.boundingBox();
   const rws=await page.$$('#sd-tbody tr'); const last=await rws[4].boundingBox();
-  await L.mark(page,[{sel:'#sd-tbody tr:nth-child(3) td:nth-child(3)',pad:2},{sel:'#sd-tbody tr:nth-child(3) td:nth-child(4)',pad:2},{sel:'#sd-tbody tr:nth-child(4) td:nth-child(3)',pad:2},{sel:'#sd-tbody tr:nth-child(5) td:nth-child(3)',pad:2}]);
-  await L.shot(page,'18b-sd-mil-tools',{x:bb.x,y:bb.y-4,width:Math.min(bb.width,1100),height:last.y+last.height-bb.y+12});
+  await L.mark(page,[{sel:'#sd-tbody tr:nth-child(3) td:nth-child(4)',pad:2},{sel:'#sd-tbody tr:nth-child(3) td:nth-child(6)',pad:2},{sel:'#sd-tbody tr:nth-child(4) td:nth-child(4)',pad:2},{sel:'#sd-tbody tr:nth-child(5) td:nth-child(4)',pad:2}]);
+  await L.shot(page,'18b-sd-mil-tools',{x:bb.x,y:bb.y-4,width:Math.min(bb.width,1300),height:last.y+last.height-bb.y+12});
   await L.unmark(page);
   const h=await page.$('#sd-summary-host'); const box=await page.$('.sd-tool-links');
   await L.mark(page,[{sel:'.sd-tool-links',idx:0,pad:2,at:'right'}]);

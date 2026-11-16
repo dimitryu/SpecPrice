@@ -157,6 +157,24 @@ const DAY=86400000;
     let threw=null; try{ await M.saveBOMToPartStock([{part_number:'P-PR-4',description:'D'}]); }catch(e){ threw=e; }
     ok('progress: the callback is optional', !threw && DB[PC]['P-PR-4']); }
 
+  // ── Sales Desk → Database: only the fields that differ ───────────────────
+  { DB[PC]['P-PR-1'].manufacturer='Molex'; DB[PC]['P-PR-1'].revision='A';
+    const before=JSON.stringify(DB[PC]['P-PR-2']);
+    const res=await M.saveSalesDeskToDB([
+      {part_number:'P-PR-1', description:'A', manufacturer:'', revision:'B', qty:40, atlantium_pn:'CP-9'},
+      {part_number:'P-PR-2', description:'B'},
+      {part_number:'p-pr-1', description:'repeat'},
+      {part_number:'SD-NEW-1', description:'From Sales Desk', unit:'pcs', qty:5, customer_supplied:true},
+      {part_number:'', description:'no number'}]);
+    ok('sd→db: one part updated, one created, one unchanged', res.updated===1 && res.created===1 && res.unchanged===1);
+    ok('sd→db: only the changed fields are listed', JSON.stringify(res.changes.find(c=>c.pn==='P-PR-1').fields.sort())===JSON.stringify(['atlantium_pn','revision']));
+    ok('sd→db: changed fields written, empty cell did not erase', DB[PC]['P-PR-1'].revision==='B' && DB[PC]['P-PR-1'].atlantium_pn==='CP-9' && DB[PC]['P-PR-1'].manufacturer==='Molex');
+    ok('sd→db: QTY stays 1', DB[PC]['P-PR-1'].qty===1);
+    ok('sd→db: an unchanged part is not touched', JSON.stringify(DB[PC]['P-PR-2'])===before);
+    ok('sd→db: a repeated part number is saved once', res.duplicates===1);
+    ok('sd→db: a new part is created with qty 1 and its fields', DB[PC]['SD-NEW-1'] && DB[PC]['SD-NEW-1'].qty===1 && DB[PC]['SD-NEW-1'].unit==='pc' && DB[PC]['SD-NEW-1'].customer_supplied===true);
+    ok('sd→db: a row with no part number is skipped', res.skipped===1); }
+
   // ── a big delete is audited in chunks that fit a Firestore document ─────
   const many={}; for(let i=0;i<250;i++) many['M'+i]={part_number:'M'+i, description:'x'.repeat(200)};
   Object.assign(DB[PC], many);

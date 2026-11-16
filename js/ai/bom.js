@@ -1,6 +1,7 @@
 import { S } from '../core/state.js';
 import { _AI_NO_KEY, _aiFetch, _aiReady, _csModel, _csModelRejected, _parseAIJson } from './client.js';
 import { logSystemAudit } from '../core/audit.js';
+import { _bomBadToolPn } from '../domain/bom.js';
 import { extractPDFPages } from '../io/pdf.js';
 
 // Rows from overlapping bands, joined: a row seen at the bottom of one band and
@@ -173,6 +174,7 @@ FIELD MAPPING (map by column name; names vary between systems):
 - "item" → the row's sequence number if the sheet has one, else ""
 - "drawing_number" / "drawing_name" → the top-level assembly part number / title if the report header states one (e.g. a "Part Number:" cell near the top), else ""
 - "pin_count" → number of pins/positions/contacts for connector components, if stated or reliably inferable from the part number/description of a known connector series. Else "".
+- "customer_supplied" → "yes" ONLY when the parts list marks this row as supplied/furnished by the customer (e.g. "CUSTOMER SUPPLIED", "SUPPLIED BY CUSTOMER", "CUSTOMER FURNISHED", "CFE", "CFM", "FBC", "GFE", or a "SUPPLIED BY: CUSTOMER" column). Otherwise "". Never guess.
 - "price" → always "" here (spreadsheet BOM exports don't carry pricing; the app prices parts separately). The ONLY exception is a synthesized crimp-tool row — see below.
 
 ${_BOM_TOOL_RULE_SECTION}
@@ -239,6 +241,7 @@ COLUMN MAPPING (column names may vary between drawings):
 - "qty" → quantity — look for: QTY, QUANTITY, NO. REQ'D, NO. OFF, AMOUNT. Return as a plain number string (e.g. "3", "2500"). This is REQUIRED for every row — do not leave it empty unless the drawing genuinely has no quantity column.
 - "unit" → unit of measure — look for: UNIT, UOM, U/M — the ONLY valid values are: "pc", "mm", "cm", "ea", "gm" (grams — also written "GR"), "M" (meters). If the column shows anything else, leave "unit" as empty string "" rather than inventing or guessing a unit.
 - "pin_count" → for connector parts only: the number of pins/positions/contacts (look for a POS, PINS, CONTACTS, WAY column, or a count embedded in the part number/description of a known connector series). Empty string "" if the row isn't a connector or the count isn't known — do not guess.
+- "customer_supplied" → "yes" ONLY when the parts list marks this row as supplied/furnished by the customer (e.g. "CUSTOMER SUPPLIED", "SUPPLIED BY CUSTOMER", "CUSTOMER FURNISHED", "CFE", "CFM", "FBC", "GFE", or a "SUPPLIED BY: CUSTOMER" column). Otherwise "". Never guess.
 - "price" → normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). The ONLY exception is a synthesized crimp-tool row — see rule 5 below.
 TWO PART-NUMBER COLUMNS: many parts lists carry the company's OWN number for each
 part AND the manufacturer's number, in two separate columns. Map them by what they ARE,
@@ -315,6 +318,7 @@ For each row extract:
 - "unit": unit of measure — the ONLY valid values are: pc, mm, M, cm, ea, gm (grams — also written GR). If it's anything else, use empty string "" instead of guessing.
 - "manufacturer": manufacturer name if shown, else empty string
 - "pin_count": for connector parts only — the number of pins/positions/contacts, read from a POS/PINS/CONTACTS/WAY column if the drawing has one, or inferred from a count embedded in the part number/description of a known connector series. Empty string "" if the row isn't a connector or the count isn't known — do not guess.
+- "customer_supplied" → "yes" ONLY when the parts list marks this row as supplied/furnished by the customer (e.g. "CUSTOMER SUPPLIED", "SUPPLIED BY CUSTOMER", "CUSTOMER FURNISHED", "CFE", "CFM", "FBC", "GFE", or a "SUPPLIED BY: CUSTOMER" column). Otherwise "". Never guess.
 - "price": normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). The ONLY exception is a synthesized crimp-tool row — see rule 5 below.
 TWO PART-NUMBER COLUMNS: many parts lists carry the company's OWN number for each
 part AND the manufacturer's number, in two separate columns. Map them by what they ARE,
@@ -402,4 +406,87 @@ export async function _anthropicBOM(text, isImage, imgData, filename, sourceType
     throw new Error(m);}
   const data=await resp.json();
   return _parseAIJson(data.content[0].text.trim());
+}
+
+
+// ── Title block: drawing number, title and revision of the DRAWING itself ────
+// The parts list says what the cable is made of; the title block says which
+// drawing this is. Read separately so the BOM prompt stays as it is.
+export const _TITLE_BLOCK_PROMPT=`You are reading the TITLE BLOCK of an engineering drawing (usually the box in the bottom-right corner of the sheet), and its REVISION table if it has one (often top-right, titled REVISIONS / REV / REVISION HISTORY / ECO).
+
+Return ONLY this JSON object:
+{"drawing_number":"","title":"","revision":"","revisions":[]}
+
+- "drawing_number": the number of THIS drawing — the title-block field labelled DWG NO, DWG. NO., DRAWING NO, DRAWING NUMBER, DOC NO, DOCUMENT NO or similar (sometimes PART NO / P/N of the assembly in the title block). Copy it exactly.
+- "title": the title-block field labelled TITLE (or DESCRIPTION / NAME of the drawing). Copy it as written, on one line.
+- "revision": the REV field of the title block.
+- "revisions": every revision letter/number listed in the REVISION table, in the order shown — e.g. ["A","B","C"] or ["01","02"]. [] when there is no revision table.
+
+Never take a number from the parts list / BOM table, from notes, or from a part's own drawing reference. Use "" for anything the drawing does not show — do not guess.`;
+export function _parseTitleBlockJson(raw){
+  const m=String(raw||'').match(/\{[\s\S]*\}/);
+  if(!m) return null;
+  try{
+    const o=JSON.parse(m[0]);
+    const str=v=>String(v==null?'':v).replace(/\s+/g,' ').trim();
+    return {drawing_number:str(o.drawing_number), title:str(o.title), revision:str(o.revision),
+            revisions:Array.isArray(o.revisions)?o.revisions.map(str).filter(Boolean):[]};
+  }catch{ return null; }
+}
+// {drawing_number,title,revision,revisions} or null (no key, failed, unreadable).
+export async function aiReadTitleBlock(text, isImage, imgData){
+  if(!_aiReady()) return null;
+  const _t0=Date.now();
+  try{
+    const messages = isImage ? [{role:'user',content:[
+      {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
+      {type:'text',text:_TITLE_BLOCK_PROMPT}]}]
+      : [{role:'user', content:_TITLE_BLOCK_PROMPT+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000)}];
+    const resp=await _aiFetch({body:JSON.stringify({model:isImage?_csModel():'claude-haiku-4-5-20251001',
+      max_tokens:400, temperature:0, messages})});
+    if(!resp.ok) throw new Error('Anthropic error '+resp.status);
+    const data=await resp.json();
+    const tb=_parseTitleBlockJson(data.content[0].text);
+    logSystemAudit('drawing_title_block',{found:!!(tb&&(tb.drawing_number||tb.title||tb.revision)),ms:Date.now()-_t0},true);
+    return tb;
+  }catch(e){
+    console.warn('[BOM] title block:', e.message);
+    logSystemAudit('drawing_title_block',{error:e.message,ms:Date.now()-_t0},false);
+    return null;
+  }
+}
+
+// ── Tools for parts added from the Database (no drawing to read) ─────────────
+export function _toolsForPartsPrompt(parts){
+  const list=parts.map((p,i)=>`${i}: ${p.part_number||''} | ${p.manufacturer||''} | ${p.description||''}`).join('\n');
+  return `You are a wire-harness tooling engineer. For each part below decide whether it is a connector or contact that needs a crimp tool and/or an insertion/extraction tool to be assembled. Parts that need no tool (cable, wire, heat-shrink, labels, hardware, pre-terminated parts) get nothing.
+
+Parts (index: manufacturer part number | manufacturer | description):
+${list}
+
+For each part that needs a tool, return one entry per tool — but ONLY when you are confident of the tool's exact part number from the connector maker's application-tooling documentation (or the military standard tool for MIL-spec connectors, e.g. M22520 crimp frames with their positioners, M81969 insertion/extraction tools). If you are not sure for a part, skip that part — never invent a plausible-looking number.
+
+The tool's "part_number" is the number the TOOL is sold under — NEVER the connector's own part number, and never the connector's number with "-TOOL" or any other suffix added.
+
+Return ONLY a JSON array, [] when no part needs a tool:
+[{"for_idx":0,"part_number":"63819-0000","description":"CRIMP TOOL for Micro-Fit 3.0 contacts","manufacturer":"Molex","price":"350"}]
+"description" must contain the word TOOL and name what it is for; "price" is the approximate USD list price (plain number).`;
+}
+// [{for_idx, part_number, description, manufacturer, price}] — already checked
+// so a "tool" that is really the connector's own number never gets through.
+export async function aiFindToolsForParts(parts){
+  if(!parts.length || !_aiReady()) return [];
+  const resp=await _aiFetch({body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:2048, temperature:0,
+    messages:[{role:'user',content:_toolsForPartsPrompt(parts)}]})});
+  if(!resp.ok){ let m=`Anthropic error ${resp.status}`; try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
+  const data=await resp.json();
+  return _cleanAiTools(_parseAIJson(data.content[0].text.trim()), parts);
+}
+export function _cleanAiTools(list, parts){
+  return (Array.isArray(list)?list:[]).map(t=>({
+      for_idx:parseInt(t.for_idx,10), part_number:String(t.part_number||'').trim(),
+      description:String(t.description||'').trim(), manufacturer:String(t.manufacturer||'').trim(),
+      price:String(t.price||'').replace(/[^0-9.]/g,'')}))
+    .filter(t=>parts[t.for_idx] && t.part_number && !_bomBadToolPn(t.part_number, parts[t.for_idx].part_number))
+    .map(t=>({...t, description:/\btool\b/i.test(t.description)?t.description:`TOOL for ${parts[t.for_idx].part_number}${t.description?' — '+t.description:''}`}));
 }

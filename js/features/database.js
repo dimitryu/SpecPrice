@@ -76,6 +76,7 @@ export const _PS_DEFAULT_COLS=[
   // Each vendor's stock sits immediately beside that vendor's price, because
   // a price you can't buy is worth knowing about at a glance.
   {k:'drawing_number',l:'Drawing #',       w:'100px'},
+  {k:'revision',      l:'Revision',        w:'60px'},
   {k:'part_number',   l:'MNF P/N',    w:'120px'},
   {k:'drawing_name',  l:'Drawing Name',    w:'130px'},
   {k:'atlantium_pn',  l:'Customer PN',     w:'100px'},
@@ -89,6 +90,9 @@ export const _PS_DEFAULT_COLS=[
   {k:'digikey_stock', l:'DigiKey Stock',    w:'85px'},
   {k:'priority_price',l:'Priority Price',   w:'95px'},
   {k:'own_stock',     l:'In Stock (ours)',  w:'95px'},
+  // Recorded from the latest quote or import that marked it — for reference
+  // only: each quote decides it again (Sales Desk → Cust. Supplied).
+  {k:'customer_supplied', l:'Cust. Supplied (last quote)', w:'95px'},
   {k:'rfq_names',     l:'RFQ',             w:'140px',wrap:true},
   {k:'pin_count',       l:'Pins',           w:'55px'},
   {k:'updatedAt',     l:'Updated',          w:'90px'},
@@ -233,6 +237,7 @@ export function _psCellHTML(k,p){
     case 'digikey_stock': return _stockCellHTML(p,k);
     case 'unit': return esc(p.unit||p.units||'');
     case 'rfq_names': return esc((p.rfq_names||[]).join(', '));
+    case 'customer_supplied': return p.customer_supplied?'<span style="color:#1E40AF;font-weight:700" title="Marked customer-supplied in the latest quote/import that saved this part">✓</span>':'';
     case 'updatedAt': return fmtDate(p.updatedAt);
     // A part with QVL alternatives shows how many were (or will be) compared;
     // otherwise the fact that the shown part number is a CHOICE is invisible.

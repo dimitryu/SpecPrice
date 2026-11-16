@@ -313,7 +313,8 @@ export async function exportSalesDeskExcel(){
     const blocks=[];
     let firstHeaderRow=0;
     groups.forEach(g=>{
-      secTitle(`DRAWING ${g.dwg}   —   ${g.rows.length} row${g.rows.length===1?'':'s'}`
+      const _rev=(g.rows.find(x=>String(x.revision||'').trim())||{}).revision||'';
+      secTitle(`DRAWING ${g.dwg}${_rev?`   REV ${_rev}`:''}   —   ${g.rows.length} row${g.rows.length===1?'':'s'}`
                + (g.units>1?`   —   ${g.units} cables   (QTY below is for all ${g.units})`:''),'FF334155');
       const hr=bomHeaderRow();
       if(!firstHeaderRow) firstHeaderRow=hr;
@@ -334,7 +335,10 @@ export async function exportSalesDeskExcel(){
         // QTY change still moves it. No price anywhere → the estimate (tools).
         let cost;
         const manual = r.manual_total!=null && r.manual_total!=='';
-        if(manual){
+        const custSup = !!r.customer_supplied && !isTool;
+        if(custSup){
+          cost=F('0',0);   // the customer provides it: nothing to buy
+        } else if(manual){
           const per=qty ? (parseFloat(r.manual_total)||0)/qty : 0;
           cost=F(`${_r6(per)}*F${n}`, r.total||0);
         } else {
@@ -378,7 +382,8 @@ export async function exportSalesDeskExcel(){
               c.note=`${cfg.name} lists this part but publishes no price (non-stocked / quote-only).`;
             }
           }
-          if(ci===12 && manual) c.note='Manual price typed in Sales Desk — kept as a price per unit, so it follows QTY.';
+          if(ci===12 && custSup) c.note='Customer-supplied material — not purchased, priced at $0.';
+          else if(ci===12 && manual) c.note='Manual price typed in Sales Desk — kept as a price per unit, so it follows QTY.';
           else if(ci===12 && isTool) c.note=_sdPriceSourceText(r);
           else if(ci===12 && r._costSource==='nominal') c.note=_sdPriceSourceText(r);
           c.alignment={vertical:'middle',
@@ -393,6 +398,7 @@ export async function exportSalesDeskExcel(){
           ws.getCell(row,1).border={..._xlBoxed,left:{style:'medium',color:{argb:_XL.toolEdge}}};
           ws.getCell(row,4).value=`${r.description||''}   [TOOL — not from customer BOM]`;
         }
+        if(custSup) ws.getCell(row,4).value=`${r.description||''}   [CUSTOMER SUPPLIED — not purchased]`;
         row++;
       });
       const lastRow=row-1;
@@ -447,6 +453,17 @@ export async function exportSalesDeskExcel(){
               {bold:true,size:12,bg:'FF1F8B4C',fg:'FFFFFFFF',height:22});
       }
       b.orderExpr = U>1 ? b.order : b.unit;
+
+      if(g.customerRows && g.customerRows.length){
+        merge(row,1,LAST);
+        const w=ws.getCell(row,1);
+        w.value=`ℹ  ${g.dwg}: ${g.customerRows.length} customer-supplied item(s) — not purchased, priced at $0: `
+               + g.customerRows.map(x=>x.part_number||x.description||'part').join(', ');
+        w.font={bold:true,size:10,color:{argb:'FF1E40AF'}};
+        w.alignment={vertical:'middle',indent:1,wrapText:true};
+        for(let c=1;c<=LAST;c++) fill(ws.getCell(row,c),'FFEFF6FF');
+        ws.getRow(row).height=20; row++;
+      }
 
       b.tools=null;
       if(g.missingToolRows.length){

@@ -3,14 +3,15 @@ import { _aiReady } from '../../ai/client.js';
 import { _NOTE_DOC_STD_RE } from '../../ai/process.js';
 import { logAudit } from '../../core/audit.js';
 import { loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../../core/table.js';
-import { debounce, esc, setActions, setContent, toast } from '../../core/ui.js';
-import { loadParts } from '../../data/parts.js';
+import { closeModal, debounce, esc, progressPanel, setActions, setContent, showModal, toast } from '../../core/ui.js';
+import { loadParts, saveSalesDeskToDB } from '../../data/parts.js';
 import { SD_NOMINAL_LABEL_PRICE, _SD_PRICE_SOURCES, _sdLaborQtyMultiplier, _sdRecalcTotal } from '../../domain/pricing.js';
 import { _PRICE_LEGEND_HTML, _priceCellHTML, _stockCellHTML } from '../database.js';
 import { _sdAskUnitsThenCheck } from '../priceCheck.js';
 import { exportSalesDeskExcel } from './export.js';
 import { openPartPickerModal, openSDFileModal } from './import.js';
 import { _sdAutoMatchLabor, openLaborBreakdownModal } from './labor.js';
+import { _sdAddToolsFor, _sdToolSourceLabel } from './tools.js';
 import { showSettingsModal } from '../settings.js';
 
 export let sdItems     = [];
@@ -22,7 +23,9 @@ export let sdItems     = [];
 // column list) so the same data reads the same way on every screen.
 export const _SD_DEFAULT_COLS=[
   {k:'drawing_number', l:'Drawing #',       w:'100px'},
+  {k:'revision',       l:'Revision',        w:'60px'},
   {k:'part_number',    l:'MNF P/N',          w:'110px'},
+  {k:'atlantium_pn',   l:'Customer PN',     w:'100px'},
   {k:'description',    l:'Description',     w:'190px',wrap:true},
   {k:'manufacturer',   l:'Manufacturer',    w:'120px'},
   {k:'qty',            l:'QTY',             w:'75px'},
@@ -32,6 +35,7 @@ export const _SD_DEFAULT_COLS=[
   {k:'digikey_price',  l:'DigiKey Cost',    w:'95px'},
   {k:'digikey_stock',  l:'DigiKey Stock',   w:'85px'},
   {k:'priority_price', l:'Priority Cost',  w:'95px'},
+  {k:'customer_supplied', l:'Cust. Supplied', w:'70px'},
   {k:'total',          l:'Part Cost',       w:'85px'},
   // No per-row Labor Time column. The minutes are still worked out per row and
   // summed into each drawing's Labor Time (min / cable); the 📋 button beside
@@ -100,6 +104,14 @@ export function _sdCellHTML(k,r,i){
            placeholder="Part #" style="width:100%;min-width:80px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
     case 'drawing_number': return `<input type="text" class="sd-drawing-number" data-i="${i}" value="${esc(r.drawing_number||'')}"
            style="width:100%;min-width:70px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
+    case 'revision': return `<input type="text" class="sd-revision" data-i="${i}" value="${esc(r.revision||'')}" placeholder="—"
+           style="width:100%;min-width:40px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
+    case 'atlantium_pn': return `<input type="text" class="sd-cust-pn" data-i="${i}" value="${esc(r.atlantium_pn||'')}" placeholder="—"
+           style="width:100%;min-width:80px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">`;
+    // Supplied by the customer → not bought → priced at 0 (see _sdRecalcTotal).
+    // Set per quote: the same part may be the customer's on one job and ours on the next.
+    case 'customer_supplied': return `<label style="display:flex;justify-content:center;cursor:pointer" title="Customer-supplied material — not purchased, priced at 0 in this quote">
+           <input type="checkbox" class="sd-cust-supplied" data-i="${i}" ${r.customer_supplied?'checked':''}></label>`;
     case 'description': return `<span style="display:flex;align-items:center;gap:4px"><input type="text" class="sd-description" data-i="${i}" value="${esc(r.description||'')}"
            style="flex:1;min-width:120px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;font-size:12px">${
            _sdIsToolRow(r)?_TOOL_TAG:''}</span>`;
@@ -128,7 +140,7 @@ export function _sdCellHTML(k,r,i){
         : '';
       return `<input type="number" class="sd-manual-total" data-i="${i}" value="${r.total?+r.total.toFixed(2):''}"
              min="0" step="any" placeholder="0.00" title="${hasManual?'Manual price override — clear to go back to FC/Priority price':'No FC/Priority price — type one in manually'}"
-             style="width:78px;padding:2px 5px;border:1px solid ${noSourcePrice?'#06b6d4':'var(--border)'};border-radius:4px;font-size:12px;font-weight:700;text-align:right;${noSourcePrice?'background:#ecfeff;color:#0e7490':''}">${ownedNote}${(_sdIsToolRow(r)&&!_sdIsToolOwned(r))||r._costSource==='nominal'?_sdToolSourceChip(r):''}`;
+             style="width:78px;padding:2px 5px;border:1px solid ${noSourcePrice?'#06b6d4':'var(--border)'};border-radius:4px;font-size:12px;font-weight:700;text-align:right;${noSourcePrice?'background:#ecfeff;color:#0e7490':''}">${ownedNote}${(_sdIsToolRow(r)&&!_sdIsToolOwned(r))||r._costSource==='nominal'||r._costSource==='customer'?_sdToolSourceChip(r):''}`;
     }
     // Labor Time shows/edits the row's actual total minutes directly (what
     // used to be the separate read-only "Labor Total" column) — type a number
@@ -268,6 +280,8 @@ export function _sdPriceSource(r){
   const src=r._costSource||'';
   const pn=r.part_number||'';
   const search=_sdSearchUrls(pn);
+  if(src==='customer')
+    return {kind:'customer', label:'Customer-supplied — not purchased', unit:0, verified:true, url:''};
   if(src==='manual')
     return {kind:'manual', label:'Typed in Sales Desk', verified:true, url:''};
   if(src==='mouser_price')
@@ -287,7 +301,7 @@ export function _sdPriceSource(r){
 // Under a tool's Part Cost in the table: where that number came from, linked.
 export function _sdToolSourceChip(r){
   const s=_sdPriceSource(r);
-  const short={mouser:'Mouser',digikey:'DigiKey',priority:'Priority',ai:'AI est.',nominal:'nominal',manual:'manual',none:'no price'}[s.kind];
+  const short={mouser:'Mouser',digikey:'DigiKey',priority:'Priority',ai:'AI est.',nominal:'nominal',customer:'cust. supplied',manual:'manual',none:'no price'}[s.kind];
   const color=s.verified?'#166534':'#b45309';
   const body=s.url
     ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" style="color:${color};text-decoration:underline">${short} ↗</a>`
@@ -301,6 +315,7 @@ export function _sdPriceSourceText(r){
   if(s.kind==='mouser'||s.kind==='digikey')
     return `${s.label}: ${$(s.unit)} per unit${s.brk?` (price break ${s.brk}+)`:''}`;
   if(s.kind==='priority') return `${s.label}: ${$(s.unit)} per unit`;
+  if(s.kind==='customer') return 'Customer-supplied material: not purchased, priced at $0.00 in this quote';
   if(s.kind==='nominal') return `${s.label}: ${$(s.unit)} per piece — type a price in Part Cost if you have a real one`;
   if(s.kind==='ai') return `${s.label}: approximate list price ${$(s.unit)} — run Check Price or confirm with the supplier`;
   if(s.kind==='manual') return `Typed in Sales Desk: ${$(r.total)}`;
@@ -511,7 +526,8 @@ export function _sdComputeGroups(){
             rate, laborCost, subtotal, profitPct, profit:final-subtotal, final,
             partsTotalPerUnit, autoLaborMinutesPerUnit, laborMinutesPerUnit,
             laborCostPerUnit, subtotalPerUnit, finalPerUnit,
-            ownedToolRows, missingToolRows};
+            ownedToolRows, missingToolRows,
+            customerRows: rows.filter(r=>r.customer_supplied && !_sdIsToolRow(r))};
   });
 }
 
@@ -678,14 +694,18 @@ export async function renderSalesDesk(){
                   style="color:#92400e;font-weight:700;text-decoration:underline">${esc(r.part_number||r.description||'tool')}</a>
                   — <strong>${$(r.total)}</strong></div>
                 ${r.tool_for?`<div class="sd-tool-for">For connector <strong>${esc(r.tool_for)}</strong></div>`:''}
+                <div class="sd-tool-origin" style="color:#92400e;font-size:11px">Added by: ${esc(_sdToolSourceLabel(r))}</div>
                 <div class="sd-tool-src" style="color:${src.verified?'#166534':'#b45309'}" title="${esc(_sdPriceSourceText(r))}">
                   Price from: <strong>${esc(src.label)}</strong>${src.unit&&src.kind!=='ai'?` · ${$(src.unit)}/unit`:''}${src.brk?` · break ${src.brk}+`:''}</div>
                 <div class="sd-tool-links">${_sdToolLinksHTML(r)}</div>
               </div>`;}).join('')}
             <div style="font-weight:400;font-size:11px;margin-top:6px">Click a tool's part number to jump to its price in the table.</div>
           </div>`:''}
+        ${g.customerRows.length?`<div class="sd-cust-note" style="font-size:11px;color:#1E40AF;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:4px;padding:5px 8px;margin-top:6px">
+            ${g.customerRows.length} customer-supplied item${g.customerRows.length>1?'s':''} — not purchased, priced at $0: <strong>${esc(g.customerRows.map(r=>r.part_number||r.description||'part').join(', '))}</strong>
+          </div>`:''}
         ${owned.length?`<div style="font-size:11px;color:#1F8B4C;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:4px;padding:5px 8px;margin-top:6px">
-            ✓ ${owned.length} tool${owned.length>1?'s':''} excluded — already in Stock: <strong>${esc(owned.map(r=>r.part_number||r.description||'tool').join(', '))}</strong>
+            ✓ ${owned.length} tool${owned.length>1?'s':''} excluded — from your existing tools (In Stock), no price: <strong>${esc(owned.map(r=>r.part_number||r.description||'tool').join(', '))}</strong>
           </div>`:''}
         `:''}
       </div>`;
@@ -809,6 +829,8 @@ export async function renderSalesDesk(){
     if(fEl) fEl.textContent = _sdFilterQ.trim() ? `${visibleIdx.length}/${sdItems.length} parts` : `${sdItems.length} parts`;
     _sdUpdateSummaryUI();
     _sdRenderNotesPanel();
+    const _tn=document.getElementById('sd-tool-note');
+    if(_tn) _tn.style.display = sdItems.some(r=>_sdIsToolRow(r)) ? 'block' : 'none';
 
     document.querySelectorAll('.sd-qty').forEach(inp=>inp.addEventListener('change',()=>{
       const i=+inp.dataset.i, qty=parseFloat(inp.value)||1;
@@ -830,6 +852,16 @@ export async function renderSalesDesk(){
     }));
     document.querySelectorAll('.sd-drawing-number').forEach(inp=>inp.addEventListener('change',()=>{
       sdItems[+inp.dataset.i].drawing_number=inp.value.trim();
+    }));
+    document.querySelectorAll('.sd-revision').forEach(inp=>inp.addEventListener('change',()=>{
+      sdItems[+inp.dataset.i].revision=inp.value.trim();
+    }));
+    document.querySelectorAll('.sd-cust-pn').forEach(inp=>inp.addEventListener('change',()=>{
+      sdItems[+inp.dataset.i].atlantium_pn=inp.value.trim();
+    }));
+    document.querySelectorAll('.sd-cust-supplied').forEach(cb=>cb.addEventListener('change',()=>{
+      const r=sdItems[+cb.dataset.i];
+      r.customer_supplied=cb.checked; _sdRecalcRow(r); renderSD();
     }));
     document.querySelectorAll('.sd-description').forEach(inp=>inp.addEventListener('change',()=>{
       sdItems[+inp.dataset.i].description=inp.value.trim();
@@ -861,6 +893,7 @@ export async function renderSalesDesk(){
           <button class="btn btn-blue" id="btn-sd-file">📎 New Drawing</button>
           <button class="btn btn-blue" id="btn-sd-newrow">➕ New Row</button>
           <button class="btn btn-green" id="btn-sd-fc" style="white-space:nowrap">🔍 Check Price</button>
+          <button class="btn btn-blue" id="btn-sd-savedb" style="white-space:nowrap" title="Save everything on this screen to the Database — existing parts get only the fields that changed">💾 Save to Database</button>
           <!-- Runs the same estimate the picker triggers, on demand. Needed
                because rows can arrive with no labor for several reasons (added
                before a key was configured, a failed call, manually created) and
@@ -888,6 +921,10 @@ export async function renderSalesDesk(){
           </table>
         </div>
         ${_PRICE_LEGEND_HTML}
+        <div id="sd-tool-note" style="display:none;font-size:12px;color:#92400e;background:#fffbeb;border-top:1px solid #f59e0b;padding:7px 11px">
+          ⚙ Rows marked <strong>TOOL</strong> were added by the system's analysis (drawing analysis, your existing tools in the Database,
+          the standard tooling table or AI) — they are <strong>not</strong> in the customer's original BOM, and are never included in the cable price.
+        </div>
         <div id="sd-notes-panel" style="display:none;padding:11px;border-top:1px solid var(--border)"></div>
         <!-- Labor estimation is a 5-15 second AI call. Without this the table
              just sits there and the button looks dead — the user has no way to
@@ -936,6 +973,7 @@ export async function renderSalesDesk(){
   document.getElementById('btn-sd-addpick').addEventListener('click',()=>{
     openPartPickerModal(async(parts,qtyOverride,hadSelection)=>{
       let added=0;
+      const newRows=[];
       for(const p of parts){
         const origQty=String(p.qty||'').trim();
         const qty = hadSelection ? ((qtyOverride!==1||!origQty) ? qtyOverride : (parseFloat(origQty)||1)) : (parseFloat(p.qty)||1);
@@ -948,17 +986,36 @@ export async function renderSalesDesk(){
           alt_mpns:(p.alt_mpns||[]),
           est_price:parseFloat(p.est_price)||0,
           drawing_number:p.drawing_number||p.drawing_name||'',
+          drawing_name:p.drawing_name||'', revision:p.revision||'', atlantium_pn:p.atlantium_pn||'',
+          pin_count:p.pin_count||'',
+          // Customer-supplied is decided per quote, never carried over from the Database.
+          customer_supplied:false,
           qty, unit:p.unit||p.units||'pcs',priority_price:parseFloat(p.priority_price)||0,
           mouser_price:parseFloat(p.mouser_price)||'', digikey_price:parseFloat(p.digikey_price)||'',
           ..._sdTraceFields(p),
           total:0, labor_time:'', labor_total:0};
         _sdRecalcRow(item);
         sdItems.push(item);
+        newRows.push(item);
         added++;
       }
       renderSalesDesk();
       toast(`Added ${added} part(s) to Sales Desk`,'success');
       logAudit('sales_desk_add_from_picker',{count:added},true);
+      // Crimp / insertion tools for what was just added: Database → standard
+      // table → AI (see tools.js). They arrive as TOOL rows under their connector.
+      _sdLaborBusy('Looking for the crimp / insertion tools these parts need…');
+      try{
+        const t=await _sdAddToolsFor(newRows, txt=>_sdLaborBusy(txt));
+        if(t.added){
+          renderSalesDesk();
+          const from=[t.db?`${t.db} from your existing tools in the Database`:'', t.known?`${t.known} from the standard tooling table`:'',
+                      t.ai?`${t.ai} suggested by AI`:''].filter(Boolean).join(', ');
+          toast(`Added ${t.added} tool row(s) — ${from}${t.owned?` · ${t.owned} already in Stock (no price)`:''}. Tools are the system's additions, not part of the BOM.`,'success');
+        }
+        if(t.aiError) toast('Tool check by AI failed: '+t.aiError,'warn');
+        logAudit('sales_desk_tools_for_picker',{added:t.added, db:t.db, known:t.known, ai:t.ai, owned:t.owned},!t.aiError);
+      }finally{ _sdLaborBusy(''); }
       // The labor estimate is an AI call, so it takes a moment. Without this
       // the Labor Time column just sits at 0 for a few seconds and looks broken
       // — which is exactly how the old empty stub looked.
@@ -974,7 +1031,7 @@ export async function renderSalesDesk(){
     renderSD();
   });
   document.getElementById('btn-sd-newrow').addEventListener('click',()=>{
-    sdItems.push({part_number:'',description:'',manufacturer:'',drawing_number:'',qty:1,unit:'',
+    sdItems.push({part_number:'',description:'',manufacturer:'',drawing_number:'',revision:'',atlantium_pn:'',customer_supplied:false,qty:1,unit:'',
       priority_price:0,total:0,labor_time:'',labor_total:0});
     renderSD();
   });
@@ -984,6 +1041,7 @@ export async function renderSalesDesk(){
   });
 
   document.getElementById('btn-sd-export').addEventListener('click',()=>exportSalesDeskExcel());
+  document.getElementById('btn-sd-savedb').addEventListener('click',()=>_sdSaveToDBModal(()=>renderSalesDesk()));
 
   // SD check-all toggle
   document.addEventListener('change',e=>{
@@ -1008,5 +1066,71 @@ export async function renderSalesDesk(){
   document.getElementById('btn-sd-file').addEventListener('click',()=>{
     if(!_aiReady()){ showSettingsModal(()=>document.getElementById('btn-sd-file')?.click()); return; }
     openSDFileModal();
+  });
+}
+
+// ── 💾 Save to Database ───────────────────────────────────────────────────────
+// Writes every row on the Sales Desk to the Database: a part already there gets
+// only the fields that are different on screen; a new part is created. The
+// window shows the count while it runs, then exactly what changed.
+export function _sdSaveRowsSummary(rows){
+  const withPn=rows.filter(r=>String(r.part_number||'').trim());
+  const uniq=new Set(withPn.map(r=>String(r.part_number).trim().toLowerCase()));
+  return {total:rows.length, parts:uniq.size, noPn:rows.length-withPn.length, dupes:withPn.length-uniq.size};
+}
+export function _sdSaveToDBModal(after){
+  if(!sdItems.length){ toast('No parts in Sales Desk','error'); return; }
+  const sum=_sdSaveRowsSummary(sdItems);
+  showModal(`<div class="modal modal-sm" style="width:min(94vw,620px)">
+    <div class="modal-head"><h3>💾 Save to Database</h3><button class="close-modal" id="sdb-x">✕</button></div>
+    <div class="modal-body" id="sdb-body">
+      <p style="font-size:13px;margin:0 0 8px">Save the <strong>${sum.parts}</strong> part${sum.parts===1?'':'s'} on the Sales Desk to the Database.</p>
+      <ul style="font-size:12px;color:var(--muted);margin:0 0 6px;padding-inline-start:18px;line-height:1.7">
+        <li>A part that is already in the Database gets <strong>only the fields that are different</strong> here — the rest of its record is left as it is.</li>
+        <li>An empty cell here never erases a value in the Database. QTY is not saved (the Database always holds 1).</li>
+        <li>A part that is not in the Database yet is created.</li>
+        ${sum.dupes?`<li>${sum.dupes} row(s) repeat a part number — each part is saved once, from its first row.</li>`:''}
+        ${sum.noPn?`<li style="color:#B45309">${sum.noPn} row(s) have no MNF P/N and are skipped.</li>`:''}
+      </ul>
+    </div>
+    <div class="modal-foot" id="sdb-foot">
+      <button class="btn btn-ghost" id="sdb-cancel">Cancel</button>
+      <button class="btn btn-green" id="sdb-go">💾 Save ${sum.parts} part${sum.parts===1?'':'s'}</button>
+    </div>
+  </div>`);
+  const close=()=>{ closeModal(); if(after) after(); };
+  document.getElementById('sdb-x').addEventListener('click',closeModal);
+  document.getElementById('sdb-cancel').addEventListener('click',closeModal);
+  document.getElementById('sdb-go').addEventListener('click',async()=>{
+    const go=document.getElementById('sdb-go'), cancel=document.getElementById('sdb-cancel');
+    go.disabled=true; cancel.disabled=true; go.textContent='Saving…';
+    const body=document.getElementById('sdb-body');
+    const prog=progressPanel(body,'Saving to Database…');
+    try{
+      const res=await saveSalesDeskToDB(sdItems,(d,t)=>prog.set(d,t,'Saving to Database…'));
+      prog.finish(`Done — ${res.updated} updated, ${res.created} created, ${res.unchanged} unchanged`);
+      logAudit('sales_desk_save_to_db',{updated:res.updated, created:res.created, unchanged:res.unchanged, fields:res.fields, errors:res.errors.length}, !res.errors.length);
+      const FIELD_NAMES={description:'Description',manufacturer:'Manufacturer',drawing_number:'Drawing #',drawing_name:'Drawing name',
+        revision:'Revision',atlantium_pn:'Customer PN',pin_count:'Pins',tool_for:'Tool for',unit:'Units',
+        mouser_price:'Mouser price',digikey_price:'DigiKey price',priority_price:'Priority price',mouser_stock:'Mouser stock',
+        digikey_stock:'DigiKey stock',est_price:'Estimate',customer_supplied:'Customer supplied',mouser_url:'Mouser link',
+        digikey_url:'DigiKey link',mouser_brk:'Mouser break',digikey_brk:'DigiKey break',mouser_match:'Mouser match',
+        digikey_match:'DigiKey match',mouser_mpn:'Mouser P/N',digikey_mpn:'DigiKey P/N'};
+      const lines=res.changes.slice(0,60).map(c=>`<li><strong>${esc(c.pn)}</strong> — ${c.created?'<span style="color:#1B6B3A">new part created</span>'
+        :esc(c.fields.map(f=>FIELD_NAMES[f]||f).join(', '))+(c.revived?' <span style="color:#1B6B3A">(restored from the recycle bin)</span>':'')}</li>`).join('');
+      body.insertAdjacentHTML('beforeend',`
+        <div class="sdb-result" style="margin-top:10px;font-size:12px">
+          <div><strong>${res.updated}</strong> updated (${res.fields} field${res.fields===1?'':'s'}), <strong>${res.created}</strong> created, <strong>${res.unchanged}</strong> already up to date.</div>
+          ${lines?`<ul style="margin:6px 0 0;padding-inline-start:18px;max-height:230px;overflow:auto;line-height:1.6">${lines}</ul>`:''}
+          ${res.changes.length>60?`<div style="color:var(--muted)">…and ${res.changes.length-60} more</div>`:''}
+          ${res.errors.length?`<div style="color:var(--red);margin-top:6px">${res.errors.length} could not be saved: ${esc(res.errors.slice(0,5).join(' · '))}</div>`:''}
+        </div>`);
+      document.getElementById('sdb-foot').innerHTML=`<button class="btn btn-green" id="sdb-close">Close</button>`;
+      document.getElementById('sdb-close').addEventListener('click',close);
+      toast(`Database: ${res.updated} updated, ${res.created} created`,'success');
+    }catch(e){
+      prog.el.remove(); go.disabled=false; cancel.disabled=false; go.textContent='💾 Save';
+      toast('Save error: '+e.message,'error');
+    }
   });
 }

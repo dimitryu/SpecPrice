@@ -2250,6 +2250,63 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('label: a non-label keeps its estimate', f._costSource, 'est_price');
 }
 
+// ─────────────────────────────────────────── v1.65: drawing identity, customer-supplied, Sales Desk → DB, tools
+{
+  const fn=G('_parseDrawingFileName'), mx=G('_maxRevision'), id=G('_drawingIdentity'), tb=G('_parseTitleBlockJson');
+  t('file: "REV 01" split off', fn('303-49-00251-00 REV 01 _approved.pdf'), {drawing_number:'303-49-00251-00', revision:'01'});
+  t('file: "_RevB"', fn('DEMO-100-01_RevB.pdf'), {drawing_number:'DEMO-100-01', revision:'B'});
+  t('file: no REV marker → nothing guessed', fn('EL-004695-AC_B.pdf'), {drawing_number:'EL-004695-AC_B', revision:''});
+  t('file: a word containing REV is not a revision', fn('PREVIEW-12.pdf').revision, '');
+  t('rev: letters after numbers, latest wins', [mx(['-','A','B','AA','C']), mx(['01','02','A']), mx(['B1','B2','B']), mx([])], ['AA','A','B2','']);
+  t('rev: "REV C" reads as C', mx(['REV C','REV D']), 'D');
+  const a=id({drawing_number:'WLS-1',title:'POWER CABLE',revision:'B',revisions:['A','B','C']},'x REV A.pdf');
+  t('identity: title block wins, latest revision of the table', [a.drawing_number,a.drawing_name,a.revision], ['WLS-1','POWER CABLE','C']);
+  const b2=id(null,'DEMO-9 REV 3.pdf');
+  t('identity: no title block → file name', [b2.drawing_number,b2.drawing_name,b2.revision,b2.from.drawing_number], ['DEMO-9','DEMO-9','3','file name']);
+  const c=id({drawing_number:'',title:'',revision:'',revisions:[]},'Q-1.pdf');
+  t('identity: empty title block → file name, no revision', [c.drawing_number,c.revision], ['Q-1','']);
+  t('title block: parsed from a reply', tb('ok: {"drawing_number":" X-1 ","title":"A   B","revision":"C","revisions":["A","C"]}'), {drawing_number:'X-1',title:'A B',revision:'C',revisions:['A','C']});
+  t('title block: unreadable → null', tb('no json'), null);
+  const yes=G('_isYes');
+  ok('customer supplied: yes / Y / CFE / true are yes', ['yes','Y','CFE',true,'x'].every(yes));
+  ok('customer supplied: empty / no are no', !['','no',false,null,'N'].some(yes));
+  const rec=G('_sdRecalcTotal');
+  const cs={qty:3,unit:'pc',mouser_price:2,manual_total:'9',customer_supplied:true}; rec(cs);
+  t('customer supplied: costs 0, whatever the prices or a typed price', [cs.total, cs._costSource], [0,'customer']);
+  // Sales Desk → DB diff
+  const patch=G('_sdDbPatch');
+  const dbDoc={description:'PLUG',manufacturer:'Amphenol',mouser_price:12.4,unit:'pc',revision:'A',customer_supplied:false};
+  t('db diff: nothing changed → empty patch', patch({description:'PLUG',manufacturer:'Amphenol',mouser_price:12.4,unit:'pcs',qty:7,priority_price:0},dbDoc), {});
+  t('db diff: only the changed fields', patch({description:'PLUG 22P',manufacturer:'Amphenol',mouser_price:12.4,revision:'B',atlantium_pn:'CP-1'},dbDoc),
+    {description:'PLUG 22P',revision:'B',atlantium_pn:'CP-1'});
+  t('db diff: an empty cell never erases', patch({description:'',manufacturer:'',revision:''},dbDoc), {});
+  t('db diff: a price that changed', patch({mouser_price:'11.9'},dbDoc), {mouser_price:11.9});
+  t('db diff: price 0 means no price', patch({digikey_price:0, priority_price:''},dbDoc), {});
+  t('db diff: stock 0 is a real value', patch({mouser_stock:0},{}), {mouser_stock:'0'});
+  t('db diff: customer supplied written when it differs', patch({customer_supplied:true},dbDoc), {customer_supplied:true});
+  t('db diff: QTY is never sent', 'qty' in patch({qty:5},{}), false);
+  const nd=G('_sdDbNewDoc')({part_number:' NEW-1 ',description:'X',qty:9,unit:'pcs'});
+  t('db new: qty 1, unit normalised, part number trimmed', [nd.part_number,nd.qty,nd.unit,nd.customer_supplied], ['NEW-1',1,'pc',false]);
+  const sum=G('_sdSaveRowsSummary')([{part_number:'A'},{part_number:'a'},{part_number:''},{part_number:'B'}]);
+  t('save summary: unique parts, repeats, no number', sum, {total:4, parts:2, noPn:1, dupes:1});
+  // tools for parts added from the Database
+  const dbt=G('_sdDbToolsFor');
+  const parts=[{part_number:'PCT-2420',description:'CRIMP TOOL FOR PC-24-S CONTACTS'},{part_number:'M22520/2-01',description:'CRIMP TOOL FRAME',tool_for:'D38999/26WC-35SN'},
+               {part_number:'PC-24-S',description:'CONTACT'},{part_number:'TL-X',description:'TOOL for ABC'}];
+  t('db tools: by the connector in the description', dbt('PC-24-S',parts).map(p=>p.part_number), ['PCT-2420']);
+  t('db tools: by tool_for', dbt('D38999/26WC-35SN',parts).map(p=>p.part_number), ['M22520/2-01']);
+  t('db tools: a short number is not matched inside descriptions', dbt('ABC',parts), []);
+  const clean=G('_cleanAiTools');
+  t('ai tools: fake tool numbers dropped, TOOL added to the description',
+    clean([{for_idx:0,part_number:'39-01-2040-TOOL'},{for_idx:0,part_number:'63819-0000',description:'Crimper',price:'$350'},{for_idx:5,part_number:'X'}],[{part_number:'39-01-2040'}]),
+    [{for_idx:0,part_number:'63819-0000',description:'TOOL for 39-01-2040 — Crimper',manufacturer:'',price:'350'}]);
+  const ti=G('_sdToolItem')({part_number:'PCT-2420',price:'99'},{part_number:'PC-24-S',drawing_number:'D1',revision:'B'},'db',parts);
+  t('tool row: from the Database record, for its connector', [ti.description,ti.tool_for,ti.drawing_number,ti.revision,ti.tool_in_db,ti.est_price], ['CRIMP TOOL FOR PC-24-S CONTACTS','PC-24-S','D1','B',true,0]);
+  t('tool row: source label', G('_sdToolSourceLabel')({tool_source:'known',tool_in_db:true}), 'Standard tooling table (MIL spec) · already in the Database');
+  ok('prompts: every BOM prompt asks for customer_supplied', ['_BOM_TEXT_PROMPT','_BOM_EXCEL_PROMPT'].every(k=>/"customer_supplied"/.test(G(k)('x.pdf'))) && /"customer_supplied"/.test(G('_BOM_VISION_PROMPT')));
+  ok('prompts: tools prompt forbids the connector number as a tool', /NEVER the connector's own part number/.test(G('_toolsForPartsPrompt')([{part_number:'A'}])));
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

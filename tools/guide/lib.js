@@ -122,6 +122,7 @@ function aiReply(body){
   const c=body.messages[0].content;
   const txt=typeof c==='string'?c:c.map(x=>x.text||'').join(' ');
   if(process.env.GDBG) console.log('AI>',txt.slice(0,150).replace(/\s+/g,' '));
+  if(/TITLE BLOCK of an engineering drawing/.test(txt)) return '{"drawing_number":"DEMO-100-01","title":"Power Cable 1000mm","revision":"B","revisions":["A","B"]}';
   if(/Is there a PARTS LIST/.test(txt)) return '{"found":true,"box":[0.02,0.62,0.45,0.97],"rows":6}';
   if(/THIS PASS IS THE CUTTING DATA ONLY/.test(txt)) return JSON.stringify(SPEC);
   if(/What is missing is the\s+wiring/.test(txt)) return JSON.stringify(DETAIL);
