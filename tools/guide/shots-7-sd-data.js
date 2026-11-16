@@ -13,7 +13,7 @@ const ROWS=[
     if(r.request().method()==='GET') return r.fallback();
     const txt=JSON.stringify(JSON.parse(r.request().postData()).messages);
     const json=o=>r.fulfill({status:200,contentType:'application/json',body:JSON.stringify({content:[{type:'text',text:o}],stop_reason:'end_turn'})});
-    if(/TITLE BLOCK of an engineering drawing/.test(txt)) return json('{"drawing_number":"DEMO-500-02","title":"POWER HARNESS 1.5M","revision":"B","revisions":["A","B","C"]}');
+    if(/TITLE BLOCK of an engineering drawing/.test(txt)) return json('{"drawing_number":"DEMO-100-01","title":"POWER HARNESS 1.5M","revision":"B","revisions":["A","B","C"]}');
     if(/wire-harness tooling engineer/.test(txt)) return json('[{"for_idx":0,"part_number":"63819-0000","description":"CRIMP TOOL for Mini-Fit Jr contacts","manufacturer":"Molex","price":"350"}]');
     if(/Is there a PARTS LIST|manufacturing process engineer|manufacturing steps|MANUFACTURING INSTRUCTIONS/.test(txt)) return r.fallback();
     if(/Bill of Materials|BOM/i.test(txt)) return json(JSON.stringify(ROWS));

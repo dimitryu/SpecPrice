@@ -231,18 +231,20 @@ export async function handleSDFiles(files){
         _procIsImage=true; _procImgData={b64,mimeType};
       }
 
-      _normalizeBOMRows(extractedRows);
+      _normalizeBOMRows(extractedRows, {text: isPDF ? _pdfText : ''});
       // Drawing #, name and revision of THIS drawing: from its title block
       // (DWG NO / TITLE / REV, and the latest entry of a revision table), and
       // from the file name for whatever the title block does not show.
       let _tb=null;
       if(extractedRows.length && !isXls && _aiReady()){
         setM('Reading the title block (drawing #, title, revision)…',92);
+        // Sheet 1 carries the revision record; its picture shows which value
+        // sits in which box, and the text layer (if any) the exact characters.
         const _tbText = isPDF && _pdfTextLen>200 ? _pdfText : '';
-        const _tbImg = _tbText ? null : (_procImgData || (_pdfImages[0]?{b64:_pdfImages[0],mimeType:'image/jpeg'}:null));
-        if(_tbText || _tbImg) _tb=await aiReadTitleBlock(_tbText, !_tbText, _tbImg);
+        const _tbImg = _pdfImages[0] ? {b64:_pdfImages[0],mimeType:'image/jpeg'} : (_procImgData||null);
+        if(_tbText || _tbImg) _tb=await aiReadTitleBlock(_tbText, !!_tbImg, _tbImg);
       }
-      const _dwgId=_drawingIdentity(_tb, file.name);
+      const _dwgId=_drawingIdentity(_tb, file.name, isPDF ? _pdfText : '');
       const effectiveDwgName=_dwgId.drawing_number;
       _applyDrawingIdentity(extractedRows, _dwgId);
       extractedRows.forEach(r=>{

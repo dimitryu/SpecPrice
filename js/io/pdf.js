@@ -5,7 +5,7 @@ export async function extractPDFPages(file){
     pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const ab = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({data:ab}).promise;
-  const pageTexts=[], pageImages=[];
+  const pageTexts=[], pageImages=[], pageLayouts=[];
   for(let i=1;i<=pdf.numPages;i++){
     const page = await pdf.getPage(i);
     // -- Text --
@@ -19,6 +19,11 @@ export async function extractPDFPages(file){
     }
     if(line) lines.push(line);
     pageTexts.push(lines.join('\n'));
+    // The same text with its columns kept: each piece placed at its own
+    // horizontal position (see _pdfLayoutText). In a parts list that sits beside
+    // the title block, the plain version runs table cells and title-block text
+    // together on one line; this one keeps every table column under its header.
+    pageLayouts.push(_pdfLayoutText(content.items));
     // -- Render page as JPEG, capped to a max dimension. An earlier version of
     // this rendered at a smaller size (1600px/q0.75) on the theory that an
     // oversized payload was causing "Failed to fetch" errors — that turned
@@ -60,7 +65,30 @@ export async function extractPDFPages(file){
     const page=await pdf.getPage(pageIdx+1);
     return _bomRenderBands(page, box);
   };
-  return {pageTexts, pageImages, crop, numPages:pdf.numPages};
+  return {pageTexts, pageImages, pageLayouts, crop, numPages:pdf.numPages};
+}
+// pdf.js text items → lines with their columns kept, like "pdftotext -layout":
+// items on the same baseline form a line, and each item starts at the column
+// matching its x position (one character ≈ 4.5 points).
+export const _PDF_LAYOUT_PT_PER_CHAR=4.5;
+export function _pdfLayoutText(items){
+  const cells=(items||[]).filter(it=>String(it.str||'').trim())
+    .map(it=>({x:it.transform[4], y:it.transform[5], str:String(it.str).replace(/\s+/g,' ').trim()}));
+  cells.sort((a,b)=>b.y-a.y||a.x-b.x);
+  const lines=[]; let cur=null;
+  for(const c of cells){
+    if(!cur || Math.abs(c.y-cur.y)>3){ cur={y:c.y, cells:[]}; lines.push(cur); }
+    cur.cells.push(c);
+  }
+  return lines.map(l=>{
+    let out='';
+    for(const c of l.cells.sort((a,b)=>a.x-b.x)){
+      const col=Math.max(0, Math.round(c.x/_PDF_LAYOUT_PT_PER_CHAR));
+      out += out.length<col ? ' '.repeat(col-out.length) : (out ? ' ' : '');
+      out += c.str;
+    }
+    return out.replace(/\s+$/,'');
+  }).join('\n');
 }
 
 // ── Reading a parts list that is a picture ─────────────────────────────────────

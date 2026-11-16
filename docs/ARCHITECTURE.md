@@ -90,7 +90,15 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
 
 - **Drawing # / Name / Revision**: `aiReadTitleBlock` (`ai/bom.js`) קורא את טבלת הכותרת (טקסט אם יש שכבת טקסט,
   אחרת תמונת העמוד). `_drawingIdentity` (`domain/bom.js`) — title block קודם, אחר כך שם הקובץ
-  (`_parseDrawingFileName`); רוויזיה = הגבוהה ביותר (`_maxRevision`) מטבלת הרוויזיות + שדה REV. חל על כל שורות הקובץ.
+  (`_parseDrawingFileName`); רוויזיה = האחרונה בטבלת הרוויזיות (`_maxRevision`), ושדה REV רק כשאין טבלה. נשלחים תמונת
+  הגיליון הראשון + שכבת הטקסט יחד (בשרטוטים רבים REV/DWG NO הם ציור, לא טקסט). חל על כל שורות הקובץ.
+- **עמודת מק"ט אחת**: `_bomFixSinglePnColumn` — כשכותרת הטבלה בשכבת הטקסט (`_bomTextHasPnHeader`) ואין עמודת מק"ט יצרן
+  (`_bomTextHasMfrPnColumn`), ערכי `atlantium_pn` מוחזרים ל-`part_number`. טבלה מצוירת (בלי כותרת בטקסט) לא נוגעים.
+- **שני מספרי שרטוט על הגיליון**: הפרומפט מחזיר `other_drawing_numbers`; `_drawingIdentity` בוחר את זה ששם הקובץ תואם.
+- **טקסט בסידור עמודות**: `extractPDFPages` מחזיר גם `pageLayouts` (`_pdfLayoutText`, כמו pdftotext -layout) — זה מה שנשלח
+  לקריאת BOM בטקסט (מגבלה 60k תווים). `_bomLayoutRowCount` סופר שורות ממוספרות מתחת לכותרת הטבלה; אם ה-AI החזיר פחות,
+  `_bomFromPDF` קורא גם מהתמונה (locate + crop) ולוקח את הקריאה עם יותר שורות. `pageTexts` לא השתנה (Cut & Strip וכו').
+- **מספר שרטוט משם הקובץ**: אם המספר שבשם הקובץ מופיע כמילה שלמה בטקסט הגיליון ושונה ממה שה-AI קרא — הוא נבחר.
 - **Customer supplied**: שדה `customer_supplied` בשורה. `_sdRecalcTotal` מחזיר 0 (`_costSource='customer'`) לפני כל מקור
   אחר. נקבע לכל הצעה; ב-DB נשמר לתיעוד בלבד ולא נטען ב-Add from Database. הפרומפטים מבקשים `customer_supplied`.
 - **Save to Database** (Sales Desk): `saveSalesDeskToDB` (`data/parts.js`) + `_sdDbPatch` — רק שדות ששונים; ערך ריק לא מוחק;

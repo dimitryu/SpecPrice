@@ -511,8 +511,8 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
 
   const lf=G('_bomTextLimitFor');
   t('textLimit: excel', lf('excel'), 100000);
-  t('textLimit: drawing', lf('drawing'), 30000);
-  t('textLimit: unknown', lf(''), 30000);
+  t('textLimit: drawing', lf('drawing'), 60000);   // the column-preserving text of a sheet is wider (v1.65.2)
+  t('textLimit: unknown', lf(''), 60000);
   ok('textLimit: excel budget is larger', lf('excel')>lf('drawing'));
 }
 
@@ -2261,11 +2261,48 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('rev: "REV C" reads as C', mx(['REV C','REV D']), 'D');
   const a=id({drawing_number:'WLS-1',title:'POWER CABLE',revision:'B',revisions:['A','B','C']},'x REV A.pdf');
   t('identity: title block wins, latest revision of the table', [a.drawing_number,a.drawing_name,a.revision], ['WLS-1','POWER CABLE','C']);
+  // 313-49-00250-00: REVISION RECORD shows REV 00; the sheet SIZE box says B.
+  const rr=id({drawing_number:'313-49-00250-00',title:'W250 - COM - GIB EXTEND SWITCH',revision:'B',revisions:['00']},'x.pdf');
+  t('identity: the revision table wins over a letter from the title block (SIZE B)', rr.revision, '00');
+  t('identity: no table → the title block REV, leading zeros kept', id({drawing_number:'A',title:'',revision:'00',revisions:[]},'x.pdf').revision, '00');
+  // 401-1201-038_rev_3.pdf: a top tab says 61F-39-01-2040, the title block 401-1201-038.
+  const two=id({drawing_number:'61F-39-01-2040',other_drawing_numbers:['401-1201-038'],title:'UHF Power Cable',revision:'',revisions:['1','2','3']},'401-1201-038_rev_3.pdf');
+  t('identity: the drawing number the file is named after wins when the sheet shows two', [two.drawing_number,two.revision], ['401-1201-038','3']);
+  t('identity: a title-block number is kept when the file name matches none', id({drawing_number:'A-1',other_drawing_numbers:['B-2']},'scan.pdf').drawing_number, 'A-1');
+  t('file: "_rev_3" → 3', fn('401-1201-038_rev_3.pdf'), {drawing_number:'401-1201-038', revision:'3'});
+  {
+    const fix=G('_bomFixSinglePnColumn'), has=G('_bomTextHasMfrPnColumn');
+    const one='ITEM NO. PART NUMBER\nDESCRIPTION QTY\nCABL-0053 DC Power Cable ... RHT-605-3599-3';
+    const rows=[{item:'1',part_number:'RHT-605-3599-3',atlantium_pn:'CABL-0053',description:'DC Power Cable Male connector L-3.5m, UHF Power Cable'},
+                {item:'2',part_number:'',atlantium_pn:'39012040',description:'CONN 4 PIN MINI FIT JR',pin_count:'4'},
+                {item:'3',part_number:'39-00-0047',atlantium_pn:'',description:'PIN 1.8MM'}];
+    t('single PN column: no manufacturer-P/N header in the text', [has(one), has('ITEM | B.B PART No. | MANUFACTURER PART No.'), has('MFR P/N'), has('Manufacturer  QTY')], [false,true,true,false]);
+    t('single PN column: the PART NUMBER values go back to MNF P/N', [fix(rows,one), rows.map(r=>r.part_number+'/'+r.atlantium_pn)],
+      [2, ['CABL-0053/','39012040/','39-00-0047/']]);
+    ok('single PN column: a number lifted from the description goes back into it', /UHF Power Cable, RHT-605-3599-3$/.test(rows[0].description));
+    const two2=[{part_number:'2126/19-2',atlantium_pn:'EL-000787',description:'Wire 26 awg'}];
+    t('two PN columns: left alone', [fix(two2,'B.B PART No. MANUFACTURER PART No.'), two2[0].part_number], [0,'2126/19-2']);
+    t('no drawing text: left alone', fix([{part_number:'',atlantium_pn:'X'}],''), 0);
+    t('BOM drawn as a picture (no header in the text): left alone', fix([{part_number:'MPN-1',atlantium_pn:'EL-1000',description:'Row'}],'B.B p/n:EL-006262 DESCRIPTION.:'), 0);
+    t('two PN columns named MNF P/N and CUST PN are recognised', [has('ITEM   CUST PN     MNF P/N     DESCRIPTION'), has('ITEM  CUSTOMER PART NO  DESCRIPTION'), has('ITEM NO. PART NUMBER DESCRIPTION')], [true,true,false]);
+    t('header detection', [G('_bomTextHasPnHeader')('ITEM NO. PART NUMBER'), G('_bomTextHasPnHeader')('P/N   DESCRIPTION'), G('_bomTextHasPnHeader')('B.B p/n:EL-1 DESCRIPTION')], [true,true,false]);
+    const nr=[{part_number:'',atlantium_pn:'39012040',description:'CONN 4 PIN',pin_count:'4'},{part_number:'39012040-TOOL',description:'CRIMP TOOL'}];
+    G('_normalizeBOMRows')(nr,{text:'ITEM NO. PART NUMBER'});
+    t('normalize: fixed before tools are checked — the tool row names the connector', [nr[0].part_number, nr[1].part_number, nr[1].tool_for], ['39012040','', '39012040']);
+    const nr2=[{part_number:'',description:'CONN 4 PIN MINI FIT',pin_count:'4'},{part_number:'CONN-4P-TOOL',description:'CRIMP TOOL'}];
+    G('_bomFixToolRows')(nr2);
+    ok('tools: a connector without a number is named by its description', /for CONN 4 PIN MINI FIT/.test(nr2[1].description));
+    ok('prompts: one PN column → part_number, never moved to atlantium_pn', /ONE PART-NUMBER COLUMN/.test(G('_BOM_TEXT_PROMPT')('x')) && /ONE PART-NUMBER COLUMN/.test(G('_BOM_VISION_PROMPT')));
+    ok('prompt: title block number preferred over a top tab', /INSIDE THE TITLE BLOCK/.test(G('_TITLE_BLOCK_PROMPT')) && /other_drawing_numbers/.test(G('_TITLE_BLOCK_PROMPT')));
+  }
+  t('file: "Rev00A0S2" → revision 00', fn('un313-49-00250-00Rev00A0S2.pdf'), {drawing_number:'un313-49-00250-00', revision:'00'});
+  t('file: "REV approved" is not a revision', fn('X-1 REV approved.pdf').revision, '');
+  ok('prompt: SIZE, CAGE CODE and SHEET are named as NOT a revision', /NOT a revision: the drawing SIZE box/.test(G('_TITLE_BLOCK_PROMPT')) && /CAGE CODE/.test(G('_TITLE_BLOCK_PROMPT')));
   const b2=id(null,'DEMO-9 REV 3.pdf');
   t('identity: no title block → file name', [b2.drawing_number,b2.drawing_name,b2.revision,b2.from.drawing_number], ['DEMO-9','DEMO-9','3','file name']);
   const c=id({drawing_number:'',title:'',revision:'',revisions:[]},'Q-1.pdf');
   t('identity: empty title block → file name, no revision', [c.drawing_number,c.revision], ['Q-1','']);
-  t('title block: parsed from a reply', tb('ok: {"drawing_number":" X-1 ","title":"A   B","revision":"C","revisions":["A","C"]}'), {drawing_number:'X-1',title:'A B',revision:'C',revisions:['A','C']});
+  t('title block: parsed from a reply', tb('ok: {"drawing_number":" X-1 ","title":"A   B","revision":"C","revisions":["A","C"]}'), {drawing_number:'X-1',title:'A B',revision:'C',revisions:['A','C'],other_drawing_numbers:[]});
   t('title block: unreadable → null', tb('no json'), null);
   const yes=G('_isYes');
   ok('customer supplied: yes / Y / CFE / true are yes', ['yes','Y','CFE',true,'x'].every(yes));
@@ -2305,6 +2342,31 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('tool row: source label', G('_sdToolSourceLabel')({tool_source:'known',tool_in_db:true}), 'Standard tooling table (MIL spec) · already in the Database');
   ok('prompts: every BOM prompt asks for customer_supplied', ['_BOM_TEXT_PROMPT','_BOM_EXCEL_PROMPT'].every(k=>/"customer_supplied"/.test(G(k)('x.pdf'))) && /"customer_supplied"/.test(G('_BOM_VISION_PROMPT')));
   ok('prompts: tools prompt forbids the connector number as a tool', /NEVER the connector's own part number/.test(G('_toolsForPartsPrompt')([{part_number:'A'}])));
+}
+
+// ─────────────────────────────────────────── v1.65.2: parts list read with its columns; missed rows noticed
+{
+  const lay=G('_pdfLayoutText'), cnt=G('_bomLayoutRowCount');
+  const it=(x,y,str)=>({transform:[1,0,0,1,x,y],str});
+  const page=lay([it(60,900,'ITEM NO'),it(130,900,'PART NUMBER'),it(260,900,'DESCRIPTION'),it(400,900,'QTY'),
+    it(560,890,'125'),
+    it(80,870,'1'),it(140,870,'39-01-2040'),it(250,870,'CONN 4 PIN MINI FIT JR FEMALE'),it(405,870,'1'),it(600,871,'UNLESS OTHERWISE SPECIFIED'),
+    it(80,840,'2'),it(140,840,'VERSAFIT-1/4-0SP'),it(250,840,'SHRINK TUBE'),it(405,840,'970mm'),
+    it(80,810,'3'),it(140,810,'7407I736A25D'),it(250,810,'LABEL'),it(405,810,'4'),
+    it(80,780,'4'),it(140,780,'ELEC-0066'),it(405,780,'1'),it(250,770,'PSL-24V-L=1m'),
+    it(80,750,'5'),it(140,750,'39-00-0047'),it(250,750,'PIN 1.8MM'),it(405,750,'2')]);
+  const L=page.split('\n');
+  ok('layout: a table row stays on one line, columns in order', /^\s+1\s+39-01-2040\s+CONN 4 PIN MINI FIT JR FEMALE\s+1\s+UNLESS/.test(L[2]));
+  ok('layout: a stray number above the table keeps its own line and column', /^\s{100,}125$/.test(L[1]));
+  ok('layout: columns line up under their header', L[0].indexOf('PART NUMBER')<=L[2].indexOf('39-01-2040')+2 && L[2].indexOf('39-01-2040')<=L[0].indexOf('PART NUMBER')+4);
+  t('row count: every numbered row under the header, a wrapped description is not a row', cnt([page]), 5);
+  t('row count: no parts-list header → 0', cnt(['NOTES\n1. strip 5 mm\n2. crimp']), 0);
+  ok('text limit for a drawing fits a column-preserving sheet', G('_bomTextLimitFor')('drawing')>=60000);
+  const id=G('_drawingIdentity');
+  t('identity: the file-name number printed on the sheet beats a leftover top tab',
+    id({drawing_number:'61F-39-01-2040',other_drawing_numbers:[],title:'Shelf 3 OUT',revisions:['1','2']},'401-1201-021_rev_2.pdf','DWG NO 61F-39-01-2040 ... 401-1201-021 REV 2').drawing_number, '401-1201-021');
+  t('identity: …but only as a whole word, never inside a part number',
+    id({drawing_number:'W-77'},'D38999.pdf','D38999/26WC-35SN plug').drawing_number, 'W-77');
 }
 
 // ─────────────────────────────────────────── report

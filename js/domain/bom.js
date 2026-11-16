@@ -60,7 +60,7 @@ export function _bomFixToolRows(rows){
     const r=rows[i];
     if(!_isConnectorRow(r)){ out.push(r); continue; }
     out.push(r);
-    const conn=String(r.part_number||'').trim();
+    const conn=String(r.part_number||'').trim() || String(r.atlantium_pn||'').trim() || String(r.description||'').trim().slice(0,40);
     let j=i+1; const after=[];
     while(j<rows.length && _sdIsToolRow(rows[j])) after.push(rows[j++]);
     const known=_bomKnownTools(conn);
@@ -89,10 +89,49 @@ export function _bomFixToolRows(rows){
 
 // ── BOM row normalization ─────────────────────────────────────────────────────
 // If drawing_number empty, fall back to drawing_name (per user requirement)
-export function _normalizeBOMRows(rows){
+// Does the drawing's text show a MANUFACTURER-part-number column header?
+// (or a customer / internal part-number column — either way the table has two)
+export function _bomTextHasMfrPnColumn(text){
+  const t=String(text||'');
+  return /\b(MANUFACTURER|MANUF\.?|MFR\.?|MFG\.?|MNF\.?|VENDOR|SUPPLIER)\s*(PART|P\s*\/\s*N|PN\b|NO\b|NUMBER)|\bMPN\b/i.test(t)
+      || /\b(CUST(OMER)?\.?|INTERNAL|CATALOG|CAT\.)\s*(PART|P\s*\/\s*N|PN\b|NO\b|NUMBER)/i.test(t);
+}
+// A parts list with ONE part-number column (no manufacturer-P/N column in the
+// drawing's text) has its numbers in that column, so they are the MNF P/N. When
+// the AI filed them as Customer PN anyway — and maybe lifted another number out
+// of the description into MNF P/N — they are put back where the drawing has
+// them. Only runs when the drawing's text is there to check against.
+// Is the parts-list header itself in the drawing's text (ITEM … PART NUMBER, or
+// PART NUMBER … DESCRIPTION)? Only then can the text say how many part-number
+// columns the table has — a table drawn as a picture leaves no header in the text.
+export function _bomTextHasPnHeader(text){
+  const PN='(?:PART\\s*(?:NUMBER|NO\\b\\.?)|\\bP\\s*\\/\\s*N\\b(?!\\s*:))';
+  const t=String(text||'');
+  return new RegExp('\\b(?:ITEM(?:\\s*NO\\.?)?|FIND\\s*NO\\.?)[\\s\\S]{0,40}'+PN,'i').test(t)
+      || new RegExp(PN+'[\\s\\S]{0,40}\\bDESCRIPTION\\b','i').test(t);
+}
+export function _bomFixSinglePnColumn(rows, text){
+  if(!_bomTextHasPnHeader(text) || _bomTextHasMfrPnColumn(text)) return 0;
+  let n=0;
+  for(const r of rows){
+    const cust=String(r.atlantium_pn||'').trim();
+    if(!cust || _sdIsToolRow(r)) continue;
+    // The one column's value is the part number. Whatever the AI had put in
+    // MNF P/N instead came from somewhere else on the row (the description),
+    // so it goes back into the description if it is no longer there.
+    const pn=String(r.part_number||'').trim();
+    if(pn && pn!==cust && !_pnKey(r.description).includes(_pnKey(pn)))
+      r.description=(String(r.description||'').trim()+', '+pn).replace(/^, /,'');
+    r.part_number=cust; r.atlantium_pn=''; n++;
+  }
+  return n;
+}
+// opts.text: the drawing's text layer, when there is one (see _bomFixSinglePnColumn).
+export function _normalizeBOMRows(rows, opts={}){
   rows.forEach(r=>{
     if(!r.drawing_number && r.drawing_name) r.drawing_number=r.drawing_name;
   });
+  if(opts.text) _bomFixSinglePnColumn(rows, opts.text);
   _bomFixToolRows(rows);
   // A crimp/insertion TOOL row is synthesized fresh by the AI for EVERY
   // connector row that needs one (see _BOM_TEXT_PROMPT/_BOM_VISION_PROMPT rule
@@ -656,19 +695,34 @@ export function _maxRevision(list){
 // "EL-004695-AC_B.pdf"  → {drawing_number:'EL-004695-AC_B', revision:''}  (no REV marker: not guessed)
 export function _parseDrawingFileName(name){
   const base=String(name||'').replace(/^.*[\\/]/,'').replace(/\.[^.]+$/,'').trim();
-  const m=base.match(/^(.*?)[\s_.-]*\bREV(?:ISION)?[\s_.:-]*([A-Z0-9]{1,4})(?![A-Z0-9])/i)
-        || base.match(/^(.*?)[\s_.-]+REV(?:ISION)?[\s_.:-]*([A-Z0-9]{1,4})(?![A-Z0-9])/i)
-        || base.match(/^(.*?[^\s_.-])[\s_.-]*Rev([A-Z0-9]{1,4})(?![A-Za-z0-9])/);
-  if(m && m[1].trim()) return {drawing_number:m[1].trim().replace(/[\s_.-]+$/,''), revision:m[2].toUpperCase()};
+  // "REV" not preceded by a letter (so PREVIEW is not one), then either a number
+  // ("01", "00" — letters may follow, as in "Rev00A0S2") or one/two letters with
+  // an optional digit ("B", "AA", "C2") that are not the start of a longer word.
+  const m=base.match(/^(.*?)[\s_.-]*(?<![A-Za-z])REV(?:ISION)?[\s_.:-]*(?:(\d{1,3})(?!\d)|([A-Z]{1,2}\d{0,2})(?![A-Z0-9]))/i);
+  if(m && m[1].trim()) return {drawing_number:m[1].trim().replace(/[\s_.-]+$/,''), revision:(m[2]||m[3]).toUpperCase()};
   const sp=base.indexOf(' ');
   return {drawing_number: sp>0 ? base.slice(0,sp) : base, revision:''};
 }
 // The drawing number, title and revision for one imported file, and where each
 // came from ('title block' | 'file name'), applied to every row of that file.
-export function _drawingIdentity(tb, fileName){
+export function _drawingIdentity(tb, fileName, sheetText=''){
   const f=_parseDrawingFileName(fileName);
-  const t=tb||{};
-  const rev=_maxRevision([...(t.revisions||[]), t.revision].filter(Boolean));
+  const t={...(tb||{})};
+  // Two different drawing numbers on one sheet (a tab left over from another
+  // drawing, say): the one the file is named after is the one being quoted.
+  const fk=_pnKey(f.drawing_number);
+  if(t.drawing_number && fk && _pnKey(t.drawing_number)!==fk){
+    const hit=(t.other_drawing_numbers||[]).find(x=>_pnKey(x)===fk || (fk.length>=6 && fk.includes(_pnKey(x)) && _pnKey(x).length>=6));
+    if(hit) t.drawing_number=hit;
+    // The file's number printed on the sheet (a cable label, the title block's
+    // text) also settles it: the number on the top tab was left over.
+    else if(fk.length>=6 && String(sheetText||'').split(/\s+/).some(w=>_pnKey(w)===fk)) t.drawing_number=f.drawing_number;
+  }
+  // The revision table is the record of revisions, so when the drawing has one
+  // its latest entry IS the revision; the title block's REV box is used only
+  // when there is no table. (Mixing the two let a stray letter read off the
+  // title block — e.g. the sheet SIZE "B" — outrank the table's "00".)
+  const rev=(t.revisions||[]).length ? _maxRevision(t.revisions) : String(t.revision||'').replace(/^REV(ISION)?[\s.:_-]*/i,'').trim();
   return {
     drawing_number: t.drawing_number || f.drawing_number,
     drawing_name:   t.title || t.drawing_number || f.drawing_number,

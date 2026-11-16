@@ -66,8 +66,11 @@ export function _bomParseLocate(text){
 // process analysis that follows looks at the same sheet).
 export async function _bomFromPDF(file, setMsg){
   setMsg('Reading PDF pages…', 15);
-  const {pageTexts, pageImages, crop}=await extractPDFPages(file);
+  const {pageTexts, pageImages, pageLayouts=[], crop}=await extractPDFPages(file);
   const pdfText=pageTexts.map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
+  // What the AI reads in text mode: the column-preserving version (see
+  // _pdfLayoutText) — the plain one mixes title-block text into table rows.
+  const layoutText=(pageLayouts.length?pageLayouts:pageTexts).map((t,i)=>`=== PAGE ${i+1} ===\n${t}`).join('\n\n');
   const textLen=pageTexts.join('').trim().length;
   const bomPageIdx=_findBOMPageIndex(pageTexts);
   const bomPageSparse=bomPageIdx>=0 && (pageTexts[bomPageIdx]||'').trim().length<400;
@@ -75,14 +78,22 @@ export async function _bomFromPDF(file, setMsg){
   let rows=[], page=-1, how='';
 
   // 1. The text layer, when it actually holds a parts list: exact and quick.
+  let textRows=0;
   if(textLen>50 && hasHeader){
     setMsg('Sending text to AI…', 40);
-    rows=await aiExtractBOM(pdfText, false, null, file.name);
+    rows=await aiExtractBOM(layoutText, false, null, file.name);
     if(rows.length){ how='text'; page=bomPageIdx; }
+    // Count the table's own rows in the text. If the AI returned fewer, it
+    // missed some: read the table from the picture as well and keep the
+    // reading with more rows.
+    textRows=_bomLayoutRowCount(pageLayouts.length?pageLayouts:pageTexts);
   }
+  const _partRows=list=>(list||[]).filter(r=>!/\btool\b/i.test(String(r.description||''))).length;
+  const textShort = how==='text' && textRows>_partRows(rows);
   // 2. Otherwise the picture: find the table on the sheet, then read just that
   //    region rendered sharp. Pages with a parts-list heading go first.
-  if((!rows.length || bomPageSparse) && _aiReady()){
+  if((!rows.length || bomPageSparse || textShort) && _aiReady()){
+    if(textShort) setMsg(`The text gave ${_partRows(rows)} of ${textRows} rows — reading the table from the drawing…`, 50);
     const order=pageImages.map((_,i)=>i);
     if(bomPageIdx>0){ order.splice(order.indexOf(bomPageIdx),1); order.unshift(bomPageIdx); }
     for(let k=0;k<order.length && (!rows.length || how!=='region');k++){
@@ -97,7 +108,7 @@ export async function _bomFromPDF(file, setMsg){
       const lists=[];
       for(const b64 of bands) lists.push(await aiExtractBOM('', true, {b64, mimeType:'image/jpeg'}, file.name));
       const got=_bomMergeBands(lists);
-      if(got.length && got.length>=rows.length){ rows=got; page=pi; how='region'; }
+      if(got.length && _partRows(got)>=_partRows(rows)){ rows=got; page=pi; how='region'; }
     }
     // 3. Nothing located: the whole sheet, as before.
     if(!rows.length){
@@ -114,10 +125,10 @@ export async function _bomFromPDF(file, setMsg){
   //    be a table the header test did not catch.
   if(!rows.length && textLen>50 && !hasHeader){
     setMsg('Sending text to AI…', 90);
-    rows=await aiExtractBOM(pdfText, false, null, file.name);
+    rows=await aiExtractBOM(layoutText, false, null, file.name);
     if(rows.length) how='text';
   }
-  logSystemAudit('drawing_bom_pdf',{filename:file.name, how, page:page+1, rows:rows.length, text_header:hasHeader},true);
+  logSystemAudit('drawing_bom_pdf',{filename:file.name, how, page:page+1, rows:rows.length, text_header:hasHeader, text_rows:textRows},true);
   const imgIdx = page>=0 ? page : (bomPageIdx>=0 ? bomPageIdx : 0);
   return {rows, pageTexts, pageImages, pdfText, textLen,
           imgData: pageImages[imgIdx] ? {b64:pageImages[imgIdx], mimeType:'image/jpeg'} : null,
@@ -259,6 +270,14 @@ MANUFACTURER PART No. | U/M | QTY with the row 3 | EL-000787 | Wire 26 awg RED |
 2126/19-2 | CM | 200 →
 {"item":"3","atlantium_pn":"EL-000787","part_number":"2126/19-2","description":"Wire 26 awg RED","manufacturer":"WEICO","unit":"cm","qty":"200"}
 Only when the table has a single part-number column does that column go in "part_number".
+ONE PART-NUMBER COLUMN: when the parts list has just one part-number column (headed PART
+NUMBER, PART NO., P/N or PN) and no separate manufacturer-part-number column, EVERY value in
+it goes in "part_number" exactly as printed — whatever the codes look like (CABL-0053,
+39012040, 39-00-0047) — and "atlantium_pn" stays "". Do not move that column to
+"atlantium_pn", and do not replace a row's part number with another number that appears
+inside its DESCRIPTION. Example, columns ITEM NO. | PART NUMBER | DESCRIPTION | QTY with the
+row 2 | 39012040 | CONN 4 PIN MINI FIT JR | 1 →
+{"item":"2","atlantium_pn":"","part_number":"39012040","description":"CONN 4 PIN MINI FIT JR","qty":"1"}
 THE SAME PART ON SEVERAL LINES: a parts list often gives one part more than one
 item number, because it is fitted in more than one place. Output EVERY one of
 those lines as its own row, in the order they appear, each keeping its own item
@@ -336,6 +355,14 @@ MANUFACTURER PART No. | U/M | QTY with the row 3 | EL-000787 | Wire 26 awg RED |
 2126/19-2 | CM | 200 →
 {"item":"3","atlantium_pn":"EL-000787","part_number":"2126/19-2","description":"Wire 26 awg RED","manufacturer":"WEICO","unit":"cm","qty":"200"}
 Only when the table has a single part-number column does that column go in "part_number".
+ONE PART-NUMBER COLUMN: when the parts list has just one part-number column (headed PART
+NUMBER, PART NO., P/N or PN) and no separate manufacturer-part-number column, EVERY value in
+it goes in "part_number" exactly as printed — whatever the codes look like (CABL-0053,
+39012040, 39-00-0047) — and "atlantium_pn" stays "". Do not move that column to
+"atlantium_pn", and do not replace a row's part number with another number that appears
+inside its DESCRIPTION. Example, columns ITEM NO. | PART NUMBER | DESCRIPTION | QTY with the
+row 2 | 39012040 | CONN 4 PIN MINI FIT JR | 1 →
+{"item":"2","atlantium_pn":"","part_number":"39012040","description":"CONN 4 PIN MINI FIT JR","qty":"1"}
 THE SAME PART ON SEVERAL LINES: a parts list often gives one part more than one
 item number, because it is fitted in more than one place. Output EVERY one of
 those lines as its own row, in the order they appear, each keeping its own item
@@ -386,7 +413,7 @@ export async function aiExtractBOM(text, isImage, imgData, filename, sourceType=
 export function _bomTextPromptFor(sourceType, filename){
   return sourceType==='excel' ? _BOM_EXCEL_PROMPT(filename) : _BOM_TEXT_PROMPT(filename);
 }
-export function _bomTextLimitFor(sourceType){ return sourceType==='excel' ? 100000 : 30000; }
+export function _bomTextLimitFor(sourceType){ return sourceType==='excel' ? 100000 : 60000; }
 
 export async function _anthropicBOM(text, isImage, imgData, filename, sourceType='drawing'){
   const messages = isImage ? [{role:'user',content:[
@@ -415,12 +442,15 @@ export async function _anthropicBOM(text, isImage, imgData, filename, sourceType
 export const _TITLE_BLOCK_PROMPT=`You are reading the TITLE BLOCK of an engineering drawing (usually the box in the bottom-right corner of the sheet), and its REVISION table if it has one (often top-right, titled REVISIONS / REV / REVISION HISTORY / ECO).
 
 Return ONLY this JSON object:
-{"drawing_number":"","title":"","revision":"","revisions":[]}
+{"drawing_number":"","other_drawing_numbers":[],"title":"","revision":"","revisions":[]}
 
-- "drawing_number": the number of THIS drawing — the title-block field labelled DWG NO, DWG. NO., DRAWING NO, DRAWING NUMBER, DOC NO, DOCUMENT NO or similar (sometimes PART NO / P/N of the assembly in the title block). Copy it exactly.
+- "drawing_number": the number of THIS drawing — the field labelled DWG NO, DWG. NO., DRAWING NO, DRAWING NUMBER, DOC NO, DOCUMENT NO or similar (sometimes PART NO / P/N of the assembly) INSIDE THE TITLE BLOCK in the bottom-right corner, next to SIZE / REV / SCALE / SHEET. Copy it exactly. A drawing number can also be printed elsewhere — e.g. a small tab on the top border, which is sometimes left over from another drawing; when the numbers differ, the title block's one is "drawing_number" and the others go in "other_drawing_numbers".
+- "other_drawing_numbers": every OTHER value found in a DWG NO / DRAWING NO field anywhere else on the sheet that differs from "drawing_number". [] when there is none.
 - "title": the title-block field labelled TITLE (or DESCRIPTION / NAME of the drawing). Copy it as written, on one line.
-- "revision": the REV field of the title block.
-- "revisions": every revision letter/number listed in the REVISION table, in the order shown — e.g. ["A","B","C"] or ["01","02"]. [] when there is no revision table.
+- "revision": the REV field of the title block — usually the box right after the DWG NO, sometimes without a label (e.g. "00", "01", "A"). Copy it exactly, leading zeros included.
+- "revisions": the values in the REV column of the REVISION table (titled REVISION RECORD / REVISIONS / REV / REVISION HISTORY / ECO), only rows that actually have a value, in the order shown — e.g. ["00"], ["A","B","C"] or ["01","02"]. [] when there is no revision table.
+
+NOT a revision: the drawing SIZE box (A, B, C, D, E — e.g. "SIZE B"), the CAGE CODE, the SHEET number ("SHEET 1 OF 3"), the zone letters and numbers printed around the border, and the SH box. Never put any of these in "revision" or "revisions".
 
 Never take a number from the parts list / BOM table, from notes, or from a part's own drawing reference. Use "" for anything the drawing does not show — do not guess.`;
 export function _parseTitleBlockJson(raw){
@@ -430,7 +460,8 @@ export function _parseTitleBlockJson(raw){
     const o=JSON.parse(m[0]);
     const str=v=>String(v==null?'':v).replace(/\s+/g,' ').trim();
     return {drawing_number:str(o.drawing_number), title:str(o.title), revision:str(o.revision),
-            revisions:Array.isArray(o.revisions)?o.revisions.map(str).filter(Boolean):[]};
+            revisions:Array.isArray(o.revisions)?o.revisions.map(str).filter(Boolean):[],
+            other_drawing_numbers:Array.isArray(o.other_drawing_numbers)?o.other_drawing_numbers.map(str).filter(Boolean):[]};
   }catch{ return null; }
 }
 // {drawing_number,title,revision,revisions} or null (no key, failed, unreadable).
@@ -438,11 +469,14 @@ export async function aiReadTitleBlock(text, isImage, imgData){
   if(!_aiReady()) return null;
   const _t0=Date.now();
   try{
-    const messages = isImage ? [{role:'user',content:[
+    // The picture shows which value sits in which box; the text layer, when the
+    // PDF has one, gives the exact characters. Both are sent when both exist.
+    const txt=String(text||'').trim() ? '\n\nDRAWING TEXT (the PDF text layer — exact characters, but not in reading order):\n'+String(text).slice(0,20000) : '';
+    const messages = (isImage && imgData) ? [{role:'user',content:[
       {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
-      {type:'text',text:_TITLE_BLOCK_PROMPT}]}]
-      : [{role:'user', content:_TITLE_BLOCK_PROMPT+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000)}];
-    const resp=await _aiFetch({body:JSON.stringify({model:isImage?_csModel():'claude-haiku-4-5-20251001',
+      {type:'text',text:_TITLE_BLOCK_PROMPT+txt}]}]
+      : [{role:'user', content:_TITLE_BLOCK_PROMPT+txt}];
+    const resp=await _aiFetch({body:JSON.stringify({model:(isImage&&imgData)?_csModel():'claude-haiku-4-5-20251001',
       max_tokens:400, temperature:0, messages})});
     if(!resp.ok) throw new Error('Anthropic error '+resp.status);
     const data=await resp.json();
@@ -489,4 +523,30 @@ export function _cleanAiTools(list, parts){
       price:String(t.price||'').replace(/[^0-9.]/g,'')}))
     .filter(t=>parts[t.for_idx] && t.part_number && !_bomBadToolPn(t.part_number, parts[t.for_idx].part_number))
     .map(t=>({...t, description:/\btool\b/i.test(t.description)?t.description:`TOOL for ${parts[t.for_idx].part_number}${t.description?' — '+t.description:''}`}));
+}
+
+// How many rows the parts list has, counted from the column-preserving text:
+// below a header line holding ITEM (or FIND NO) and PART NUMBER / P/N /
+// DESCRIPTION, every line whose item column holds a number is a row. 0 when no
+// such header is found. Used only to notice that a reading missed rows.
+export function _bomLayoutRowCount(pages){
+  let best=0;
+  for(const page of (pages||[])){
+    const lines=String(page||'').split('\n');
+    for(let h=0;h<lines.length;h++){
+      const L=lines[h];
+      const m=L.match(/\b(ITEM(?:\s*NO\.?)?|FIND\s*NO\.?)\s/i);
+      if(!m || !/(PART\s*(NUMBER|NO)|\bP\s*\/\s*N\b|\bPN\b|DESCRIPTION)/i.test(L)) continue;
+      const col=m.index, seen=new Set();
+      let miss=0;
+      for(let k=h+1;k<lines.length && miss<8;k++){
+        const cell=lines[k].slice(Math.max(0,col-3), col+m[1].length+3);
+        const n=cell.match(/^\s*(\d{1,3})\s*$/) || cell.match(/(?:^|\s)(\d{1,3})(?=\s|$)/);
+        if(n && lines[k].trim().length>n[1].length+2){ seen.add(n[1]); miss=0; }
+        else miss++;
+      }
+      best=Math.max(best, seen.size);
+    }
+  }
+  return best;
 }

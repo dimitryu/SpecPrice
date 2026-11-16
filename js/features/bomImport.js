@@ -127,17 +127,17 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
         extractedRows = await aiExtractBOM('', true, {b64, mimeType}, file.name);
       }
 
-      _normalizeBOMRows(extractedRows);
+      _normalizeBOMRows(extractedRows, {text: isPDF ? _pdfText : ''});
       // Drawing #, name and revision: title block first, then the file name
       // (see _drawingIdentity). A name typed for this RFQ drawing still wins.
       let _tb=null;
       if(extractedRows.length && !isXls && _aiReady()){
         setMsg('Reading the title block…', 95);
         const _tbText = isPDF && _pdfTextLen>200 ? _pdfText : '';
-        const _tbImg = _tbText ? null : (_pdfImages[0] ? {b64:_pdfImages[0], mimeType:'image/jpeg'} : (_imgForTb||null));
-        if(_tbText || _tbImg) _tb=await aiReadTitleBlock(_tbText, !_tbText, _tbImg);
+        const _tbImg = _pdfImages[0] ? {b64:_pdfImages[0], mimeType:'image/jpeg'} : (_imgForTb||null);
+        if(_tbText || _tbImg) _tb=await aiReadTitleBlock(_tbText, !!_tbImg, _tbImg);
       }
-      const _dwgId=_drawingIdentity(_tb, file.name);
+      const _dwgId=_drawingIdentity(_tb, file.name, isPDF ? _pdfText : '');
       if(files.length===1 && drawingNameOverride) _dwgId.drawing_number=drawingNameOverride;
       _applyDrawingIdentity(extractedRows, _dwgId);
       extractedRows.forEach(r=>{
