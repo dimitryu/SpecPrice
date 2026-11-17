@@ -336,9 +336,12 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
      calls[1].messages[calls[1].messages.length-1].role==='assistant'
      && calls[1].messages[calls[1].messages.length-1].content.endsWith('descrip'));
   ok('continuation: ...asking in bites, not one long mouthful', calls[0].max_tokens<=20000);
-  ok('continuation: the first pass is deterministic', calls[0].temperature===0);
-  ok('continuation: ...and the continuation runs slightly warm, to break a loop',
-     calls[1].temperature>0);
+  // A model that takes no temperature (claude-sonnet-5) is sent none — see
+  // _aiBodyForModel; the smaller model keeps the deterministic/warm passes.
+  const noTemp=c=>/sonnet-5|opus-5/.test(c.model) && !('temperature' in c);
+  ok('continuation: the first pass is deterministic (or no temperature for a model that refuses it)', calls[0].temperature===0 || noTemp(calls[0]));
+  ok('continuation: ...and the continuation runs slightly warm, to break a loop (same rule)',
+     calls[1].temperature>0 || noTemp(calls[1]));
 
   // The core pass must not even be offered the row-heavy keys, and the second
   // pass must be told which runs and connectors the first one found.
@@ -365,7 +368,10 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   const partial=await M.aiAnalyzeCutStrip('drawing text', false, null, 'en');
   ok('cut off: a sheet is still produced', !!partial && partial.drawing_number==='X1');
   ok('cut off: ...after reading the drawing a second time rather than giving up',
-     calls.filter(c=>c.messages.length===1 && c.temperature>0).length===1);
+     (()=>{ const fresh=calls.filter(c=>c.messages.length===1);
+       if(!noTemp(fresh[0])) return fresh.filter(c=>c.temperature>0).length===1;
+       const same=JSON.stringify(fresh[0].messages[0].content);
+       return fresh.filter(c=>JSON.stringify(c.messages[0].content)===same).length===2; })());
   ok('cut off: ...and nothing the first reading had is lost on the way',
      (partial.materials||[]).length>=1);
   ok('cut off: ...keeping the runs that arrived whole', _csSegCount(partial)>=1);
@@ -400,7 +406,7 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   Q=[[LOOP,'max_tokens'], [WHOLE,'end_turn'], ['{}','end_turn']];
   const rec=await M.aiAnalyzeCutStrip('drawing text', false, null, 'en');
   ok('recover: a looping first reading is read again', calls.length>=2);
-  ok('recover: ...the retry is sampled warm, to take another path', calls[1].temperature>0);
+  ok('recover: ...the retry is sampled warm, to take another path (no temperature for a model that refuses it)', calls[1].temperature>0 || noTemp(calls[1]));
   ok('recover: ...and the complete reading is the one kept', (rec.materials||[]).length===1);
   ok('recover: ...so the sheet is not marked partial', !rec._partial);
 

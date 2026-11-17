@@ -1,4 +1,5 @@
-import { _aiFetch, _aiReady, _csModel, _parseAIJson } from './client.js';
+import { _aiFetch, _aiReady, _csModel, _csModelRejected, _parseAIJson } from './client.js';
+import { S } from '../core/state.js';
 import { logSystemAudit } from '../core/audit.js';
 import { _bomBadToolPn } from '../domain/bom.js';
 
@@ -70,7 +71,12 @@ export async function aiFindCrimpTools(contacts){
       if(web) body.tools=[{...WEB_SEARCH_TOOL, max_uses:Math.min(12, (deep?5:3)*list.length+(deep?4:2))},
                           {...WEB_FETCH_TOOL, max_uses:Math.min(8, (deep?3:2)*list.length+(deep?2:1))}];
       const resp=await _aiFetch({body:JSON.stringify(body)}, 240000);
-      if(!resp.ok){ let m=`Anthropic error ${resp.status}`; try{ const e=await resp.json(); m=e.error?.message||m; }catch{} throw Object.assign(new Error(m),{status:resp.status}); }
+      if(!resp.ok){
+        let m=`Anthropic error ${resp.status}`; try{ const e=await resp.json(); m=e.error?.message||m; }catch{}
+        // The account cannot use the larger model: the smaller one, same turn.
+        if(_csModelRejected(resp.status, m)){ S._csModelDown=true; turn--; continue; }
+        throw Object.assign(new Error(m),{status:resp.status});
+      }
       const data=await resp.json();
       text+=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
       for(const b of (data.content||[])){

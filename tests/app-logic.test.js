@@ -2451,6 +2451,17 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('tool source label: typed in by the user', G('_sdToolSourceLabel')({tool_source:'manual'}), 'Typed in by you — Save to Database and it is used for this contact next time');
 }
 
+// ─────────────────────────────────────────── v1.66.5: no temperature for models that refuse it
+{
+  const f=G('_aiBodyForModel');
+  const b=m=>JSON.stringify({model:m, max_tokens:10, temperature:0, messages:[]});
+  ok('temperature dropped for claude-sonnet-5', !('temperature' in JSON.parse(f(b('claude-sonnet-5')))));
+  ok('temperature dropped for claude-opus-5-1', !('temperature' in JSON.parse(f(b('claude-opus-5-1')))));
+  ok('temperature kept for claude-haiku-4-5-20251001', JSON.parse(f(b('claude-haiku-4-5-20251001'))).temperature===0);
+  ok('temperature kept for claude-sonnet-4-20250514', JSON.parse(f(b('claude-sonnet-4-20250514'))).temperature===0);
+  t('body without temperature untouched', f('{"model":"claude-sonnet-5"}'), '{"model":"claude-sonnet-5"}');
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

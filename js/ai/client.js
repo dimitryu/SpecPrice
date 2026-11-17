@@ -55,7 +55,19 @@ export async function aiProbeProxy(){
 // One Claude Messages request. `opts.body` is the JSON string; the answer is a
 // normal fetch Response either way — same status codes, same JSON, same error
 // shape — so the code reading it does not know or care which road it took.
+// Newer models take no `temperature` (the API answers 400 "temperature is
+// deprecated for this model"). It is left out for them here, in the one place
+// every AI request passes, so no caller has to know which model takes what.
+export const _AI_NO_TEMPERATURE_RE=/^claude-(opus|sonnet|haiku)-(?:[5-9]|\d{2,})(?:[-.]|$)/i;
+export function _aiBodyForModel(body){
+  if(typeof body!=='string' || !body.includes('"temperature"')) return body;
+  let o; try{ o=JSON.parse(body); }catch{ return body; }
+  if(!o || o.temperature===undefined || !_AI_NO_TEMPERATURE_RE.test(String(o.model||''))) return body;
+  delete o.temperature;
+  return JSON.stringify(o);
+}
 export async function _aiFetch(opts, timeoutMs){
+  opts={...opts, body:_aiBodyForModel(opts.body)};
   if(S.aiProxy && auth.currentUser){
     const token=await auth.currentUser.getIdToken();
     return _fetchWithRetry(AI_PROXY_URL,{
