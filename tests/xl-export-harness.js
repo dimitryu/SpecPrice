@@ -102,7 +102,7 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
   // Tools: which connector, where the price came from, and a link to it.
   const toolRow=pn=>cells.filter(c=>c.col===2 && c.value===pn).map(c=>c.row).pop();
   const t1=toolRow('TL-1'), t2=toolRow('TL-2');
-  ok('tool list: has its column heads', !!label && cells.some(c=>c.value==='For connector') && cells.some(c=>c.value==='Price from'));
+  ok('tool list: has its column heads', !!label && cells.some(c=>c.value==='For part') && cells.some(c=>c.value==='Price from'));
   ok('tool 1: for its connector', ws.getCell(t1,7).value==='CON-1');
   ok('tool 1: priced by the AI estimate, and says so', ws.getCell(t1,9).value==='AI estimate — not verified');
   ok('tool 1: links a Mouser search to check it', /mouser\.com\/c\/\?q=TL-1/.test(ws.getCell(t1,11).value.hyperlink||''));

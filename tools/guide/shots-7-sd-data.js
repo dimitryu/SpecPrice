@@ -14,7 +14,6 @@ const ROWS=[
     const txt=JSON.stringify(JSON.parse(r.request().postData()).messages);
     const json=o=>r.fulfill({status:200,contentType:'application/json',body:JSON.stringify({content:[{type:'text',text:o}],stop_reason:'end_turn'})});
     if(/TITLE BLOCK of an engineering drawing/.test(txt)) return json('{"drawing_number":"DEMO-100-01","title":"POWER HARNESS 1.5M","revision":"B","revisions":["A","B","C"]}');
-    if(/wire-harness tooling engineer/.test(txt)) return json('[{"for_idx":0,"part_number":"63819-0000","description":"CRIMP TOOL for Mini-Fit Jr contacts","manufacturer":"Molex","price":"350"}]');
     if(/Is there a PARTS LIST|manufacturing process engineer|manufacturing steps|MANUFACTURING INSTRUCTIONS/.test(txt)) return r.fallback();
     if(/Bill of Materials|BOM/i.test(txt)) return json(JSON.stringify(ROWS));
     return r.fallback(); });
@@ -51,11 +50,11 @@ const ROWS=[
   // Add from Database: the plug, the Mini-Fit and a contact whose tool is in the Database
   await page.click('#btn-sd-clear'); await page.waitForTimeout(300);
   await page.click('#btn-sd-addpick'); await page.waitForSelector('#pp-tbody');
-  await page.evaluate(()=>{ for(const pn of ['39-01-2040','PC-24-S']){ const tr=[...document.querySelectorAll('#pp-tbody tr')].find(t=>t.children[1]?.textContent.trim()===pn); tr.querySelector('.pp-check').checked=true; } });
+  await page.evaluate(()=>{ for(const pn of ['RL-M6-6','PC-24-S']){ const tr=[...document.querySelectorAll('#pp-tbody tr')].find(t=>t.children[1]?.textContent.trim()===pn); tr.querySelector('.pp-check').checked=true; } });
   await page.click('#pp-add'); await page.waitForTimeout(6000);
   await page.evaluate(()=>document.querySelectorAll('.toast').forEach(t=>t.remove()));
   const ix=pn=>page.evaluate(pn=>[...document.querySelectorAll('#sd-tbody tr[data-i]')].findIndex(t=>t.querySelector('.sd-part-number')?.value===pn),pn);
-  const t1=await ix('PCT-2420'), t2=await ix('63819-0000');
+  const t1=await ix('PCT-2420'), t2=await ix('HT-RL6');
   await L.mark(page,[{sel:'#sd-tbody tr[data-i] td:nth-child(6)',idx:t1,pad:2},{sel:'.sd-tool-origin',idx:0,pad:2,at:'right'},
     {sel:'#sd-tbody tr[data-i] td:nth-child(6)',idx:t2,pad:2}]);
   await L.shot(page,'19b-sd-pick-tools',{x:0,y:0,width:1900,height:700});

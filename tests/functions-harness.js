@@ -121,6 +121,13 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
   ok(sent.model === req.model && sent.max_tokens === 16000 && sent.temperature === 0 && sent.messages[0].content === 'x', 'body forwarded');
   ok(!('stream' in sent) && !('tools' in sent), 'unexpected fields dropped');
 
+  // web search is the one tool allowed through, capped; anything else is dropped
+  r = await call(P, { token: 'tUser', body: { ...req, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 99, allowed_domains: ['x'] }, { type: 'computer_20250124', name: 'computer' }] } });
+  const sentWs = JSON.parse(upstreamCalls.pop().init.body);
+  ok(sentWs.tools.length === 1 && sentWs.tools[0].type === 'web_search_20250305' && sentWs.tools[0].max_uses === 12 && !('allowed_domains' in sentWs.tools[0]), 'web search forwarded, capped, nothing else');
+  r = await call(P, { token: 'tUser', body: { ...req, tools: [{ type: 'bash_20250124', name: 'bash' }, { name: 'my_fn', input_schema: {} }] } });
+  ok(!('tools' in JSON.parse(upstreamCalls.pop().init.body)), 'other tools are not forwarded');
+
   upstreamReply = { status: 529, body: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}' };
   r = await call(P, { token: 'tUser', body: req });
   ok(r.status === 529 && r.json.error.message === 'Overloaded', 'Anthropic error status + message passed through');

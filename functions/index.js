@@ -945,6 +945,20 @@ const AI_MAX_TOKENS = 32000;
 // The fields the app sends. Anything else (tools, streaming, metadata …) is
 // dropped rather than forwarded: the proxy only has to do what the app does.
 const AI_FIELDS = ['model', 'max_tokens', 'temperature', 'messages', 'system', 'stop_sequences', 'top_p', 'top_k'];
+// The ONE tool a request may carry: Anthropic's own server-side web search
+// (used to look up a crimp contact's tool in the maker's datasheet). It runs at
+// Anthropic and reaches no system of ours. Anything else under "tools" — client
+// tools, other server tools — is dropped, and the number of searches is capped.
+const AI_WEB_SEARCH_RE = /^web_search_\d{8}$/;
+const AI_WEB_SEARCH_MAX_USES = 12;
+function aiSafeTools(tools) {
+  if (!Array.isArray(tools)) return undefined;
+  const ok = tools.filter(t => t && typeof t === 'object' && AI_WEB_SEARCH_RE.test(String(t.type || '')) && t.name === 'web_search')
+    .slice(0, 1)
+    .map(t => ({ type: t.type, name: 'web_search',
+                 max_uses: Math.max(1, Math.min(AI_WEB_SEARCH_MAX_USES, parseInt(t.max_uses, 10) || 5)) }));
+  return ok.length ? ok : undefined;
+}
 // Under the function's own 540s limit, above the app's longest wait (300s).
 const AI_UPSTREAM_TIMEOUT_MS = 520000;
 
@@ -1048,6 +1062,8 @@ exports.aiProxy = onRequest(
 
     const body = {};
     for (const f of AI_FIELDS) if (src[f] !== undefined) body[f] = src[f];
+    const tools = aiSafeTools(src.tools);
+    if (tools) body.tools = tools;
 
     const t0 = Date.now();
     let upstream;

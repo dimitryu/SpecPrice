@@ -496,10 +496,9 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   const rule =G('_BOM_TOOL_RULE_SECTION');
   ok('prompt: tool rule shared by text prompt', textP.includes(rule));
   ok('prompt: tool rule shared by vision prompt', visP.includes(rule));
-  ok('prompt: tool rule demands the word TOOL in the description', /"TOOL"/.test(rule));
-  ok('prompt: tool rule pins qty to 1', /"qty"="1"/.test(rule));
-  ok('prompt: tool rule pins unit to pc', /"unit"="pc"/.test(rule));
-  ok('prompt: tool rule forbids inventing part numbers', /never invent/i.test(rule));
+  ok('prompt: the BOM prompts add no tool rows (tools are found per contact)', /Do NOT\s+add rows for crimp/.test(rule));
+  ok('prompt: no tool rows in the examples', !/CRIMP TOOL/.test(textP) && !/CRIMP TOOL/.test(visP) && !/CRIMP TOOL/.test(xlsP));
+  ok('prompt: never invent a row', /Never invent a row/i.test(rule));
   ok('prompt: text prompt names the file', textP.includes('dwg.pdf'));
   ok('prompt: excel prompt names the file', xlsP.includes('bom.xlsx'));
   ok('prompt: excel prompt is not the drawing prompt', xlsP!==textP);
@@ -2333,15 +2332,10 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('db tools: by the connector in the description', dbt('PC-24-S',parts).map(p=>p.part_number), ['PCT-2420']);
   t('db tools: by tool_for', dbt('D38999/26WC-35SN',parts).map(p=>p.part_number), ['M22520/2-01']);
   t('db tools: a short number is not matched inside descriptions', dbt('ABC',parts), []);
-  const clean=G('_cleanAiTools');
-  t('ai tools: fake tool numbers dropped, TOOL added to the description',
-    clean([{for_idx:0,part_number:'39-01-2040-TOOL'},{for_idx:0,part_number:'63819-0000',description:'Crimper',price:'$350'},{for_idx:5,part_number:'X'}],[{part_number:'39-01-2040'}]),
-    [{for_idx:0,part_number:'63819-0000',description:'TOOL for 39-01-2040 — Crimper',manufacturer:'',price:'350'}]);
   const ti=G('_sdToolItem')({part_number:'PCT-2420',price:'99'},{part_number:'PC-24-S',drawing_number:'D1',revision:'B'},'db',parts);
   t('tool row: from the Database record, for its connector', [ti.description,ti.tool_for,ti.drawing_number,ti.revision,ti.tool_in_db,ti.est_price], ['CRIMP TOOL FOR PC-24-S CONTACTS','PC-24-S','D1','B',true,0]);
   t('tool row: source label', G('_sdToolSourceLabel')({tool_source:'known',tool_in_db:true}), 'Standard tooling table (MIL spec) · already in the Database');
   ok('prompts: every BOM prompt asks for customer_supplied', ['_BOM_TEXT_PROMPT','_BOM_EXCEL_PROMPT'].every(k=>/"customer_supplied"/.test(G(k)('x.pdf'))) && /"customer_supplied"/.test(G('_BOM_VISION_PROMPT')));
-  ok('prompts: tools prompt forbids the connector number as a tool', /NEVER the connector's own part number/.test(G('_toolsForPartsPrompt')([{part_number:'A'}])));
 }
 
 // ─────────────────────────────────────────── v1.65.2: parts list read with its columns; missed rows noticed
@@ -2367,6 +2361,38 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
     id({drawing_number:'61F-39-01-2040',other_drawing_numbers:[],title:'Shelf 3 OUT',revisions:['1','2']},'401-1201-021_rev_2.pdf','DWG NO 61F-39-01-2040 ... 401-1201-021 REV 2').drawing_number, '401-1201-021');
   t('identity: …but only as a whole word, never inside a part number',
     id({drawing_number:'W-77'},'D38999.pdf','D38999/26WC-35SN plug').drawing_number, 'W-77');
+}
+
+// ─────────────────────────────────────────── v1.66: crimp tools for CONTACTS, looked up in the makers' datasheets
+{
+  const isC=G('_isCrimpContactRow');
+  const yes=['PIN 1.8MM 22-28AWG FEMALE','CONTACT, SOCKET, 24-20AWG, GOLD','CONN SOCKET 20-24AWG CRIMP TIN','CONN RING CIRC 16-22AWG M5 CRIMP','FERRULE 2.5MM2 BLUE','RING LUG M6, 6MM2','TERMINAL, FEMALE, 18AWG','MALE CRIMPING CONTACT PIN (2.5), UL'];
+  const no =['CONN 4 PIN MINI FIT JR FEMALE','CONN RCPT 4POS MINI-FIT','PLUG, 90 DEG, 4 CONTACTS, 14-12AWG','Circular MIL Spec Connector','CON.55POS FEMALE SIZE 17-35 CRIMP OLIVE','CRIMP TOOL FOR PC-24-S CONTACTS','CONN HEADER 4 PIN','LABEL','WIRE IDENTIFICATION HS-SLEEVE'];
+  yes.forEach(d=>ok('contact: '+d, isC({description:d})));
+  no.forEach(d=>ok('not a contact: '+d, !isC({description:d})));
+  const prompt=G('_crimpToolPrompt')([{part_number:'39-00-0047',manufacturer:'Molex',description:'PIN 1.8MM 22-28AWG FEMALE'}]);
+  ok('tool prompt: searches the contact number with maker and description', /39-00-0047/.test(prompt) && /datasheet/i.test(prompt) && /Application Tooling/.test(prompt));
+  ok('tool prompt: hand tool, never invented, never the contact number', /HAND crimp tool/.test(prompt) && /never invent/i.test(prompt) && /never the contact's own number/i.test(prompt));
+  ok('tool prompt without web search says so', !/Search the web/.test(G('_crimpToolPrompt')([{part_number:'X'}],false)));
+  const parse=G('_parseToolsReply');
+  t('tool reply: the JSON between the tags, citations and text around it ignored',
+    parse('Found it [1]. <tools_json>[{"for_idx":0,"part_number":"63819-0900"}]</tools_json> see [2]'), [{for_idx:0,part_number:'63819-0900'}]);
+  const clean=G('_cleanCrimpTools');
+  t('tool reply: cleaned — fake numbers out, https source kept, TOOL in the description',
+    clean([{for_idx:0,part_number:'63819-0900',description:'Hand crimper',source_url:'https://www.molex.com/x',kind:'crimp'},
+           {for_idx:0,part_number:'39-00-0047-TOOL'},{for_idx:0,part_number:'X1',source_url:'javascript:alert(1)',description:'TOOL'}],
+          [{part_number:'39-00-0047'}]),
+    [{for_idx:0,part_number:'63819-0900',manufacturer:'',description:'CRIMP TOOL for 39-00-0047 — Hand crimper',kind:'crimp',source_url:'https://www.molex.com/x'},
+     {for_idx:0,part_number:'X1',manufacturer:'',description:'TOOL',kind:'crimp',source_url:''}]);
+  const pf=G('_toolPriceFields')({mouser:{price:212.5,stock:'7',url:'https://m/x',breakQty:1,exact:true,mpn:'63819-0900'},digikey:null,best:{manufacturer:'Molex'}});
+  t('tool price: Mouser fields for the row', [pf.mouser_price,pf.mouser_stock,pf.mouser_url,pf.mouser_brk,pf.mouser_match,pf._mfr], [212.5,'7','https://m/x',1,'exact','Molex']);
+  t('tool source label: web', G('_sdToolSourceLabel')({tool_source:'web'}), 'Contact maker’s datasheet / web (AI) — verify');
+  const tfs=G('_titleFromSheet');
+  t('name: from a DESCRIPTION: field below/right of its label', tfs('      DESCRIPTION:\n\n                    UHF Power Cable\n   SIGNATURE   DATE   SIZE   REV'), 'UHF Power Cable');
+  t('name: TITLE: on the same line', tfs('TITLE:   W250 - COM - GIB EXTEND SWITCH      SIZE'), 'W250 - COM - GIB EXTEND SWITCH');
+  t('name: a parts-list DESCRIPTION header (no colon) is not it', tfs('ITEM  PART NUMBER  DESCRIPTION  QTY\n1  X  LABEL  4'), '');
+  t('identity: an empty AI title falls back to the sheet', G('_drawingIdentity')({drawing_number:'401-1201-038',title:''},'x.pdf','   DESCRIPTION:\n          UHF Power Cable').drawing_name, 'UHF Power Cable');
+  ok('title prompt: DESCRIPTION: is the name, never the drawing number', /DESCRIPTION: UHF Power Cable/.test(G('_TITLE_BLOCK_PROMPT')) && /never the drawing number/.test(G('_TITLE_BLOCK_PROMPT')));
 }
 
 // ─────────────────────────────────────────── report

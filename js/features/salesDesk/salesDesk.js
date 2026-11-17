@@ -693,8 +693,9 @@ export async function renderSalesDesk(){
                 <div><a href="#" class="sd-tool-jump" data-i="${sdItems.indexOf(r)}" title="Go to this tool's row and type or correct its price"
                   style="color:#92400e;font-weight:700;text-decoration:underline">${esc(r.part_number||r.description||'tool')}</a>
                   — <strong>${$(r.total)}</strong></div>
-                ${r.tool_for?`<div class="sd-tool-for">For connector <strong>${esc(r.tool_for)}</strong></div>`:''}
-                <div class="sd-tool-origin" style="color:#92400e;font-size:11px">Added by: ${esc(_sdToolSourceLabel(r))}</div>
+                ${r.tool_for?`<div class="sd-tool-for">For <strong>${esc(r.tool_for)}</strong></div>`:''}
+                <div class="sd-tool-origin" style="color:#92400e;font-size:11px">Added by: ${esc(_sdToolSourceLabel(r))}${
+                  _sdSafeUrl(r.tool_url)?` · <a href="${esc(_sdSafeUrl(r.tool_url))}" target="_blank" rel="noopener noreferrer" style="color:#92400e;text-decoration:underline" title="The page that names this tool for ${esc(r.tool_for||'the contact')}">source ↗</a>`:''}</div>
                 <div class="sd-tool-src" style="color:${src.verified?'#166534':'#b45309'}" title="${esc(_sdPriceSourceText(r))}">
                   Price from: <strong>${esc(src.label)}</strong>${src.unit&&src.kind!=='ai'?` · ${$(src.unit)}/unit`:''}${src.brk?` · break ${src.brk}+`:''}</div>
                 <div class="sd-tool-links">${_sdToolLinksHTML(r)}</div>
@@ -1010,11 +1011,11 @@ export async function renderSalesDesk(){
         if(t.added){
           renderSalesDesk();
           const from=[t.db?`${t.db} from your existing tools in the Database`:'', t.known?`${t.known} from the standard tooling table`:'',
-                      t.ai?`${t.ai} suggested by AI`:''].filter(Boolean).join(', ');
+                      t.web?`${t.web} from the contact makers' datasheets`:'', t.ai?`${t.ai} suggested by AI`:''].filter(Boolean).join(', ');
           toast(`Added ${t.added} tool row(s) — ${from}${t.owned?` · ${t.owned} already in Stock (no price)`:''}. Tools are the system's additions, not part of the BOM.`,'success');
         }
         if(t.aiError) toast('Tool check by AI failed: '+t.aiError,'warn');
-        logAudit('sales_desk_tools_for_picker',{added:t.added, db:t.db, known:t.known, ai:t.ai, owned:t.owned},!t.aiError);
+        logAudit('sales_desk_tools_for_picker',{added:t.added, db:t.db, known:t.known, web:t.web, ai:t.ai, owned:t.owned},!t.aiError);
       }finally{ _sdLaborBusy(''); }
       // The labor estimate is an AI call, so it takes a moment. Without this
       // the Labor Time column just sits at 0 for a few seconds and looks broken

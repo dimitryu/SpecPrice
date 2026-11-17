@@ -7,6 +7,7 @@ import { appendRowsToDrawing } from '../data/projects.js';
 import { _XLS_MAP_FIELDS, _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, _xlsAnalyzeSheet, _xlsMapSignature, parseExcelSheetsStructured } from '../domain/bom.js';
 import { renderRFQDetail } from './rfq.js';
 import { _TOOL_TAG, _sdIsToolRow, _toolRowAttrs } from './salesDesk/salesDesk.js';
+import { _addToolsToRows } from './salesDesk/tools.js';
 import { showSettingsModal } from './settings.js';
 import { _isSpreadsheetFile, extractExcelText, readExcelSheets } from '../io/excel.js';
 import { encodeImage } from '../io/pdf.js';
@@ -90,7 +91,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
 
     try {
       let extractedRows = [];
-      let _pdfText='', _pdfTextLen=0, _pdfImages=[], _imgForTb=null;
+      let _pdfText='', _pdfTextLen=0, _pdfImages=[], _imgForTb=null, _pdfLayout='';
       if(isXls){
         setMsg('Reading spreadsheet…', 20);
         const sheets = await readExcelSheets(file);
@@ -118,7 +119,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
         // See _bomFromPDF: the text layer when it holds a parts list, and
         // otherwise the table located on the sheet and read at full sharpness.
         const r=await _bomFromPDF(file, setMsg);
-        extractedRows=r.rows; _pdfImages=r.pageImages; _pdfText=r.pdfText; _pdfTextLen=r.textLen;
+        extractedRows=r.rows; _pdfImages=r.pageImages; _pdfText=r.pdfText; _pdfTextLen=r.textLen; _pdfLayout=r.layoutText||'';
       } else {
         setMsg('Encoding image…', 20);
         const {b64, mimeType} = await encodeImage(file);
@@ -133,17 +134,22 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
       let _tb=null;
       if(extractedRows.length && !isXls && _aiReady()){
         setMsg('Reading the title block…', 95);
-        const _tbText = isPDF && _pdfTextLen>200 ? _pdfText : '';
+        const _tbText = isPDF && _pdfTextLen>200 ? (_pdfLayout||_pdfText) : '';
         const _tbImg = _pdfImages[0] ? {b64:_pdfImages[0], mimeType:'image/jpeg'} : (_imgForTb||null);
         if(_tbText || _tbImg) _tb=await aiReadTitleBlock(_tbText, !!_tbImg, _tbImg);
       }
-      const _dwgId=_drawingIdentity(_tb, file.name, isPDF ? _pdfText : '');
+      const _dwgId=_drawingIdentity(_tb, file.name, isPDF ? (_pdfLayout||_pdfText) : '');
       if(files.length===1 && drawingNameOverride) _dwgId.drawing_number=drawingNameOverride;
       _applyDrawingIdentity(extractedRows, _dwgId);
       extractedRows.forEach(r=>{
         r.customer_supplied=_isYes(r.customer_supplied);
         _normalizeExtractedRow(r);
       });
+
+      if(extractedRows.length){
+        try{ await _addToolsToRows(extractedRows, msg=>setMsg(msg,98)); }
+        catch(e){ console.warn('[BOM] tool lookup failed:', e.message); }
+      }
 
       if(!extractedRows.length){
         errors.push(`"${file.name}" — no BOM rows detected`);
@@ -276,8 +282,11 @@ export function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
       // this exact row (see handleSDFiles) — by position, never by part number.
       if(rows[origIdx] && rows[origIdx]._labor_min!=null) row._labor_min=rows[origIdx]._labor_min;
       // Which connector a tool is for, and where the tool came from.
-      if(rows[origIdx] && rows[origIdx].tool_for) row.tool_for=rows[origIdx].tool_for;
-      if(rows[origIdx] && rows[origIdx].tool_source) row.tool_source=rows[origIdx].tool_source;
+      // Which connector/contact a tool is for, where it came from, and the
+      // prices and links found for it during the import.
+      for(const k of ['tool_for','tool_source','tool_url','tool_in_db','mouser_price','digikey_price','mouser_url','digikey_url',
+                      'mouser_stock','digikey_stock','mouser_brk','digikey_brk','mouser_match','digikey_match','mouser_mpn','digikey_mpn'])
+        if(rows[origIdx] && rows[origIdx][k]!=null && rows[origIdx][k]!=='') row[k]=rows[origIdx][k];
       if(Object.values(row).some(v=>v)){
         row.customer_supplied=!!tr.querySelector('.pv-cust')?.checked;
         updatedRows.push(row);

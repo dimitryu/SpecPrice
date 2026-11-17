@@ -1,26 +1,28 @@
 import { S } from '../../core/state.js';
-import { aiFindToolsForParts } from '../../ai/bom.js';
 import { _aiReady } from '../../ai/client.js';
-import { _bomKnownTools } from '../../domain/bom.js';
-import { _sdDwgKey, _sdIsToolOwned, _sdIsToolRow, _sdRecalcRow, _sdTraceFields, sdItems } from './salesDesk.js';
+import { aiFindCrimpTools } from '../../ai/tooling.js';
+import { lookupPartPrices } from '../../data/pricing.js';
+import { _bomKnownTools, _isCrimpContactRow } from '../../domain/bom.js';
+import { _sdIsToolOwned, _sdIsToolRow, _sdRecalcRow, sdItems } from './salesDesk.js';
 
 // ══════════════════════════════════════════════════════════════════════════════
-// TOOLS FOR PARTS ADDED FROM THE DATABASE
+// CRIMP TOOLS — for the CONTACTS (pins, sockets, terminals)
 // ------------------------------------------------------------------------------
-// A drawing's analysis adds crimp/insertion tools on its own (ai/bom.js). Parts
-// picked from the Database have no drawing behind them, so their tools are found
-// here, in this order:
-//   1. the Database — a tool already saved there for this connector
-//      (its "tool_for", or the connector's number in the tool's description);
-//   2. the standard tooling table (_bomKnownTools — MIL-DTL-38999 today);
-//   3. one AI question for all remaining parts together.
-// A tool that is already in the Database comes in with the Database's data; one
-// marked In Stock costs nothing (see _sdIsToolOwned). Each tool row says where
-// it came from (tool_source), and that it is not part of the customer's BOM.
+// Used after a drawing is read (the rows of the preview) and when parts are
+// added from the Database (rows already on the Sales Desk). For each row:
+//   • a MIL-DTL-38999 connector → the standard tooling table (_bomKnownTools);
+//   • a crimp contact (_isCrimpContactRow):
+//       1. a tool already in the Database for this contact (its "tool_for", or
+//          the contact's number in the tool's description);
+//       2. otherwise the AI looks it up in the contact maker's datasheet /
+//          product page with web search (aiFindCrimpTools — one request for all).
+// Every tool not priced in the Database is then priced at Mouser / DigiKey, so
+// the row arrives with the tool's part number, price, and links.
 // ══════════════════════════════════════════════════════════════════════════════
 export const _SD_TOOL_SOURCE_LABEL={
   'db':'Existing tool in the Database',
   known:'Standard tooling table (MIL spec)',
+  web:'Contact maker’s datasheet / web (AI) — verify',
   ai:'AI suggestion — verify before ordering',
 };
 export function _sdToolSourceLabel(r){
@@ -28,7 +30,7 @@ export function _sdToolSourceLabel(r){
   return r.tool_in_db && r.tool_source!=='db' ? base+' · already in the Database' : base;
 }
 const _key=s=>String(s||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
-// Tools in the Database that belong to this connector.
+// Tools in the Database that belong to this contact (or connector).
 export function _sdDbToolsFor(pn, parts){
   const k=_key(pn);
   if(k.length<4) return [];
@@ -39,70 +41,135 @@ function _dbPart(pn, parts){
   const k=String(pn||'').trim().toLowerCase();
   return k ? (parts||[]).find(p=>String(p.part_number||'').trim().toLowerCase()===k) : null;
 }
-// A Sales Desk tool row, for connector row `conn`.
-export function _sdToolItem(spec, conn, source, parts){
-  const db=_dbPart(spec.part_number, parts);
-  const it={
-    part_number:spec.part_number||'', description:(db&&db.description)||spec.description||'TOOL',
-    manufacturer:(db&&db.manufacturer)||spec.manufacturer||'',
+// Mouser / DigiKey fields of a lookupPartPrices answer, as stored on a row.
+export function _toolPriceFields(r){
+  if(!r) return {};
+  const f={};
+  for(const [k,v] of [['mouser',r.mouser],['digikey',r.digikey]]){
+    if(!v) continue;
+    f[k+'_price']=v.price>0?v.price:'';
+    f[k+'_stock']=String(parseInt(v.stock,10)||0);
+    f[k+'_url']=String(v.url||'').slice(0,400);
+    f[k+'_brk']=parseInt(v.breakQty,10)||0;
+    f[k+'_match']=!(v.price>0)?'noprice':(v.exact?'exact':'approx');
+    f[k+'_mpn']=v.mpn||'';
+  }
+  const mfr=(r.best&&r.best.manufacturer)||'';
+  if(mfr) f._mfr=mfr;
+  return f;
+}
+// Which tools each row needs. Returns {plan: Map(row → [{spec, source}]), stats}.
+export async function _findToolsFor(rows, onStatus){
+  const parts=S.allParts||[];
+  const plan=new Map(), askAi=[];
+  const stats={db:0, known:0, web:0, ai:0, contacts:0, aiError:''};
+  for(const r of rows){
+    if(_sdIsToolRow(r) || !String(r.part_number||'').trim()) continue;
+    const known=_bomKnownTools(r.part_number);
+    if(known){
+      if(!String(r.pin_count||'').trim() && known.pins) r.pin_count=String(known.pins);
+      plan.set(r, known.tools.map(t=>({spec:t, source:'known'}))); continue;
+    }
+    if(!_isCrimpContactRow(r)) continue;
+    stats.contacts++;
+    const fromDb=_sdDbToolsFor(r.part_number, parts);
+    if(fromDb.length){ plan.set(r, fromDb.map(p=>({spec:p, source:'db'}))); continue; }
+    askAi.push(r);
+  }
+  if(askAi.length && _aiReady()){
+    // One question per distinct contact; rows sharing a number share the answer.
+    const uniq=[], idxOf=new Map();
+    for(const r of askAi){ const k=_key(r.part_number); if(!idxOf.has(k)){ idxOf.set(k,uniq.length); uniq.push(r); } }
+    if(onStatus) onStatus(`Looking up the crimp tool for ${uniq.length} contact(s) in the makers' datasheets…`);
+    const res=await aiFindCrimpTools(uniq);
+    if(res.error) stats.aiError=res.error;
+    const src=res.web?'web':'ai';
+    for(const r of askAi){
+      const i=idxOf.get(_key(r.part_number));
+      const found=res.tools.filter(t=>t.for_idx===i);
+      if(found.length) plan.set(r, found.map(t=>({spec:t, source:src})));
+    }
+  }
+  // Prices: a tool the Database does not price is looked up at Mouser / DigiKey.
+  const toPrice=new Map();
+  for(const list of plan.values()) for(const x of list){
+    const db=_dbPart(x.spec.part_number, parts);
+    const priced=db && ((+db.mouser_price>0)||(+db.digikey_price>0)||(+db.priority_price>0));
+    if(!priced && x.spec.part_number) toPrice.set(_key(x.spec.part_number), x.spec);
+  }
+  if(toPrice.size){
+    if(onStatus) onStatus(`Checking the price of ${toPrice.size} tool(s) at Mouser / DigiKey…`);
+    const got=new Map();
+    for(const [k,spec] of toPrice){
+      try{ got.set(k, _toolPriceFields(await lookupPartPrices(spec.part_number, 1, spec.description||''))); }
+      catch(e){ console.warn('[tools] price', spec.part_number, e.message); }
+    }
+    for(const list of plan.values()) for(const x of list){
+      const f=got.get(_key(x.spec.part_number));
+      if(f) x.price=f;
+    }
+  }
+  for(const list of plan.values()) for(const x of list) stats[x.source]++;
+  return {plan, stats};
+}
+// The fields of one tool row (shared by the preview rows and Sales Desk rows).
+function _toolFields(x, conn, parts){
+  const db=_dbPart(x.spec.part_number, parts);
+  const p=x.price||{};
+  const out={
+    part_number:x.spec.part_number||'',
+    description:(db&&db.description)||x.spec.description||'TOOL',
+    manufacturer:(db&&db.manufacturer)||x.spec.manufacturer||p._mfr||'',
     drawing_number:conn.drawing_number||'', drawing_name:conn.drawing_name||'', revision:conn.revision||'',
-    atlantium_pn:'', customer_supplied:false,
-    qty:1, unit:'pc', tool_for:conn.part_number||'', tool_source:source, tool_in_db:!!db,
-    est_price: db ? (parseFloat(db.est_price)||0) : (parseFloat(spec.price)||0),
+    atlantium_pn:'', customer_supplied:false, qty:1, unit:'pc',
+    tool_for:conn.part_number||'', tool_source:x.source, tool_in_db:!!db, tool_url:x.spec.source_url||'',
+    est_price: db ? (parseFloat(db.est_price)||0) : 0,
     priority_price: db ? (parseFloat(db.priority_price)||0) : 0,
-    mouser_price: db ? (parseFloat(db.mouser_price)||'') : '',
-    digikey_price: db ? (parseFloat(db.digikey_price)||'') : '',
-    ...(db?_sdTraceFields(db):{}),
-    total:0, labor_time:'', labor_total:0,
+    mouser_price: db&&+db.mouser_price>0 ? +db.mouser_price : (p.mouser_price||''),
+    digikey_price: db&&+db.digikey_price>0 ? +db.digikey_price : (p.digikey_price||''),
   };
-  if(!_sdIsToolRow(it)) it.description=`TOOL — ${it.description}`;
+  for(const k of ['mouser_url','digikey_url','mouser_brk','digikey_brk','mouser_stock','digikey_stock','mouser_match','digikey_match','mouser_mpn','digikey_mpn'])
+    out[k]=(db&&db[k])||p[k]||(k.endsWith('_brk')?0:'');
+  if(!_sdIsToolRow(out)) out.description=`TOOL — ${out.description}`;
+  return out;
+}
+// A Sales Desk tool row, for row `conn` (kept for the Database picker).
+export function _sdToolItem(spec, conn, source, parts, price){
+  const it={..._toolFields({spec, source, price}, conn, parts), total:0, labor_time:'', labor_total:0};
   _sdRecalcRow(it);
   return it;
 }
-// Finds and inserts the tools for `added` (rows already in sdItems). Returns
-// counts for the message shown afterwards.
+// Inserts the planned tools under their rows in `list` (the preview rows, or
+// sdItems), once per drawing. `make` builds the row object.
+function _insertTools(list, plan, make){
+  let added=0; const per={db:0, known:0, web:0, ai:0};
+  for(const [conn, tools] of plan){
+    let at=list.indexOf(conn);
+    if(at<0) continue;
+    const dwg=String(conn.drawing_number||'').trim();
+    for(const x of tools){
+      const pnk=String(x.spec.part_number||'').trim().toLowerCase();
+      if(!pnk) continue;
+      if(list.some(r=>_sdIsToolRow(r) && String(r.part_number||'').trim().toLowerCase()===pnk
+                       && String(r.drawing_number||'').trim()===dwg)) continue;
+      list.splice(++at, 0, make(x, conn));
+      added++; per[x.source]++;
+    }
+  }
+  return {added, ...per};
+}
+// Drawing import: tool rows into the extracted rows, before the preview.
+export async function _addToolsToRows(rows, onStatus){
+  const parts=S.allParts||[];
+  const {plan, stats}=await _findToolsFor(rows, onStatus);
+  const r=_insertTools(rows, plan, (x,conn)=>({item:'', pin_count:'', price:'', ..._toolFields(x, conn, parts)}));
+  return {...r, contacts:stats.contacts, aiError:stats.aiError};
+}
+// Add from Database: tool rows into the Sales Desk under what was just added.
 export async function _sdAddToolsFor(added, onStatus){
   const parts=S.allParts||[];
-  const res={added:0, db:0, known:0, ai:0, owned:0, aiError:''};
-  const plan=new Map();   // connector row → [{spec, source}]
-  const askAi=[];
-  for(const conn of added){
-    if(_sdIsToolRow(conn) || !String(conn.part_number||'').trim()) continue;
-    const fromDb=_sdDbToolsFor(conn.part_number, parts);
-    if(fromDb.length){ plan.set(conn, fromDb.map(p=>({spec:p, source:'db'}))); continue; }
-    const known=_bomKnownTools(conn.part_number);
-    if(known){
-      if(!String(conn.pin_count||'').trim() && known.pins) conn.pin_count=String(known.pins);
-      plan.set(conn, known.tools.map(t=>({spec:t, source:'known'}))); continue;
-    }
-    askAi.push(conn);
-  }
-  if(askAi.length && _aiReady()){
-    if(onStatus) onStatus(`Checking which of ${askAi.length} part(s) need a crimp or insertion tool…`);
-    try{
-      const found=await aiFindToolsForParts(askAi);
-      for(const t of found){
-        const conn=askAi[t.for_idx];
-        if(!plan.has(conn)) plan.set(conn,[]);
-        plan.get(conn).push({spec:t, source:'ai'});
-      }
-    }catch(e){ res.aiError=e.message; }
-  }
-  // Insert each connector's tools right after it, once per drawing.
-  for(const [conn, list] of plan){
-    let at=sdItems.indexOf(conn);
-    if(at<0) continue;
-    for(const {spec, source} of list){
-      const pnk=String(spec.part_number||'').trim().toLowerCase();
-      if(!pnk) continue;
-      const dup=sdItems.some(r=>_sdIsToolRow(r) && String(r.part_number||'').trim().toLowerCase()===pnk
-                              && _sdDwgKey(r)===_sdDwgKey(conn));
-      if(dup) continue;
-      const it=_sdToolItem(spec, conn, source, parts);
-      sdItems.splice(++at, 0, it);
-      res.added++; res[source]++;
-      if(_sdIsToolOwned(it)) res.owned++;
-    }
-  }
-  return res;
+  const {plan, stats}=await _findToolsFor(added, onStatus);
+  const r=_insertTools(sdItems, plan, (x,conn)=>_sdToolItem(x.spec, conn, x.source, parts, x.price));
+  const owned=sdItems.filter(it=>_sdIsToolRow(it) && _sdIsToolOwned(it)).length;
+  return {...r, owned, contacts:stats.contacts, aiError:stats.aiError};
 }

@@ -1,7 +1,6 @@
 import { S } from '../core/state.js';
 import { _AI_NO_KEY, _aiFetch, _aiReady, _csModel, _csModelRejected, _parseAIJson } from './client.js';
 import { logSystemAudit } from '../core/audit.js';
-import { _bomBadToolPn } from '../domain/bom.js';
 import { extractPDFPages } from '../io/pdf.js';
 
 // Rows from overlapping bands, joined: a row seen at the bottom of one band and
@@ -130,7 +129,7 @@ export async function _bomFromPDF(file, setMsg){
   }
   logSystemAudit('drawing_bom_pdf',{filename:file.name, how, page:page+1, rows:rows.length, text_header:hasHeader, text_rows:textRows},true);
   const imgIdx = page>=0 ? page : (bomPageIdx>=0 ? bomPageIdx : 0);
-  return {rows, pageTexts, pageImages, pdfText, textLen,
+  return {rows, pageTexts, pageImages, pdfText, layoutText, textLen,
           imgData: pageImages[imgIdx] ? {b64:pageImages[imgIdx], mimeType:'image/jpeg'} : null,
           fromImage: how==='region' || how==='page'};
 }
@@ -186,7 +185,7 @@ FIELD MAPPING (map by column name; names vary between systems):
 - "drawing_number" / "drawing_name" → the top-level assembly part number / title if the report header states one (e.g. a "Part Number:" cell near the top), else ""
 - "pin_count" → number of pins/positions/contacts for connector components, if stated or reliably inferable from the part number/description of a known connector series. Else "".
 - "customer_supplied" → "yes" ONLY when the parts list marks this row as supplied/furnished by the customer (e.g. "CUSTOMER SUPPLIED", "SUPPLIED BY CUSTOMER", "CUSTOMER FURNISHED", "CFE", "CFM", "FBC", "GFE", or a "SUPPLIED BY: CUSTOMER" column). Otherwise "". Never guess.
-- "price" → always "" here (spreadsheet BOM exports don't carry pricing; the app prices parts separately). The ONLY exception is a synthesized crimp-tool row — see below.
+- "price" → always "" here (spreadsheet BOM exports don't carry pricing; the app prices parts separately). 
 
 ${_BOM_TOOL_RULE_SECTION}
 
@@ -208,24 +207,10 @@ SPREADSHEET (file: ${filename}):`;
 // rule can only ever be edited in one place (the two prompts must never drift
 // apart on how tools are detected/priced).
 export const _BOM_TOOL_RULE_SECTION =
-  `CRIMP/INSERTION TOOL ROWS — MANDATORY, CHECK EVERY ROW: this is a required
-step, not optional — after extracting the BOM, go back through EVERY row that
-has a "pin_count" value (any connector with pins/positions/contacts) and, for
-EACH one, add ONE EXTRA ROW right after it for the crimping/insertion tool
-that connector needs, using your knowledge of that connector manufacturer's
-tooling. Do this for every qualifying connector row, not just the first one
-you notice. Only add a tool row when you're reasonably confident of the exact
-tool part number (never invent a plausible-looking one — if genuinely unsure
-for a specific connector, skip just that one). The tool's part number is the
-number the TOOL is sold under — NEVER the connector's own part number, and
-never the connector's number with "-TOOL" or any other suffix added. For
-MIL-spec connectors (MIL-DTL-38999 / D38999, MIL-DTL-26482, MIL-DTL-83723 …)
-that is the military tool number, e.g. the crimp frame M22520/2-01 with its
-positioner, or M22520/1-01 for the larger contacts. For the tool row: "part_number"
-= the tool's manufacturer part number, "description" = a short description
-containing the word "TOOL" (e.g. "CRIMP TOOL for <connector series>"),
-"qty"="1", "unit"="pc", "price" = the tool's approximate USD list price
-(plain number, no currency symbol), "pin_count"="", "item"="".`;
+  `NO TOOL ROWS: return only the rows that are in the parts list itself. Do NOT
+add rows for crimp, insertion or extraction tools — the app finds the tools for
+the crimp contacts (pins, sockets, terminals) in a separate step, from each
+contact maker's datasheet. Never invent a row that the drawing does not show.`;
 
 export const _BOM_TEXT_PROMPT = (filename) =>
   `You are an expert at extracting Bill of Materials (BOM) tables from engineering drawings.
@@ -253,7 +238,7 @@ COLUMN MAPPING (column names may vary between drawings):
 - "unit" → unit of measure — look for: UNIT, UOM, U/M — the ONLY valid values are: "pc", "mm", "cm", "ea", "gm" (grams — also written "GR"), "M" (meters). If the column shows anything else, leave "unit" as empty string "" rather than inventing or guessing a unit.
 - "pin_count" → for connector parts only: the number of pins/positions/contacts (look for a POS, PINS, CONTACTS, WAY column, or a count embedded in the part number/description of a known connector series). Empty string "" if the row isn't a connector or the count isn't known — do not guess.
 - "customer_supplied" → "yes" ONLY when the parts list marks this row as supplied/furnished by the customer (e.g. "CUSTOMER SUPPLIED", "SUPPLIED BY CUSTOMER", "CUSTOMER FURNISHED", "CFE", "CFM", "FBC", "GFE", or a "SUPPLIED BY: CUSTOMER" column). Otherwise "". Never guess.
-- "price" → normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). The ONLY exception is a synthesized crimp-tool row — see rule 5 below.
+- "price" → normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). 
 TWO PART-NUMBER COLUMNS: many parts lists carry the company's OWN number for each
 part AND the manufacturer's number, in two separate columns. Map them by what they ARE,
 never by which one is called "PART No.":
@@ -303,10 +288,10 @@ RULES:
 2. Skip header rows, total/summary rows, and blank rows
 3. If a column is missing, leave it as empty string ""
 4. Keep descriptions exactly as written, but see QTY DISAMBIGUATION above — a trailing length+unit value belongs in "qty", not in "description"
-5. Apply CRIMP/INSERTION TOOL ROWS above to every connector row with a pin_count — this step is easy to skip, double-check before returning your answer
+5. NO TOOL ROWS (above): only the rows the parts list shows
 
 Return ONLY a valid JSON array, no explanations.
-Example: [{"item":"1","atlantium_pn":"EL0015700","part_number":"VN01 036 0005 1 C","drawing_number":"601-1201-021","drawing_name":"Main Assembly","description":"MALE CRIMPING CONTACT PIN (2.5), UL","qty":"3","unit":"pc","manufacturer":"AMPHENOL","pin_count":"4","price":""},{"item":"7","atlantium_pn":"","part_number":"2725-2828-BL-1000-T","drawing_number":"","drawing_name":"","description":"CABLE 4COND (1 Pair + 2) 28AWG BLK SHLD","qty":"230","unit":"mm","manufacturer":"CNC Tech","pin_count":"","price":""},{"item":"","atlantium_pn":"","part_number":"CT-2000","drawing_number":"601-1201-021","drawing_name":"Main Assembly","description":"CRIMP TOOL for VN01 series","qty":"1","unit":"pc","manufacturer":"AMPHENOL","pin_count":"","price":"85"}]
+Example: [{"item":"1","atlantium_pn":"EL0015700","part_number":"VN01 036 0005 1 C","drawing_number":"601-1201-021","drawing_name":"Main Assembly","description":"MALE CRIMPING CONTACT PIN (2.5), UL","qty":"3","unit":"pc","manufacturer":"AMPHENOL","pin_count":"4","price":""},{"item":"7","atlantium_pn":"","part_number":"2725-2828-BL-1000-T","drawing_number":"","drawing_name":"","description":"CABLE 4COND (1 Pair + 2) 28AWG BLK SHLD","qty":"230","unit":"mm","manufacturer":"CNC Tech","pin_count":"","price":""}]
 If no BOM is found, return: []
 
 PDF TEXT (file: ${filename}):`;
@@ -338,7 +323,7 @@ For each row extract:
 - "manufacturer": manufacturer name if shown, else empty string
 - "pin_count": for connector parts only — the number of pins/positions/contacts, read from a POS/PINS/CONTACTS/WAY column if the drawing has one, or inferred from a count embedded in the part number/description of a known connector series. Empty string "" if the row isn't a connector or the count isn't known — do not guess.
 - "customer_supplied" → "yes" ONLY when the parts list marks this row as supplied/furnished by the customer (e.g. "CUSTOMER SUPPLIED", "SUPPLIED BY CUSTOMER", "CUSTOMER FURNISHED", "CFE", "CFM", "FBC", "GFE", or a "SUPPLIED BY: CUSTOMER" column). Otherwise "". Never guess.
-- "price": normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). The ONLY exception is a synthesized crimp-tool row — see rule 5 below.
+- "price": normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). 
 TWO PART-NUMBER COLUMNS: many parts lists carry the company's OWN number for each
 part AND the manufacturer's number, in two separate columns. Map them by what they ARE,
 never by which one is called "PART No.":
@@ -384,10 +369,10 @@ RULES:
 2. Skip header rows (ITEM, PART NUMBER, DESCRIPTION, QTY, UNIT) and blank rows
 3. Read part numbers character by character — they are precise: do NOT guess or correct them
 4. If a column is missing or empty for a row, use empty string "" — but see QTY DISAMBIGUATION above before deciding QTY is actually missing
-5. Apply CRIMP/INSERTION TOOL ROWS above to every connector row with a pin_count — this step is easy to skip, double-check before returning your answer
+5. NO TOOL ROWS (above): only the rows the parts list shows
 
 Return ONLY a valid JSON array, no explanation.
-Example: [{"item":"1","part_number":"M27500-20SC2S23","drawing_number":"","drawing_name":"","description":"CABLE 20AWG TWISTED PAIR","qty":"10000","unit":"mm","manufacturer":"","atlantium_pn":"","pin_count":"","price":""},{"item":"","part_number":"CT-2000","drawing_number":"","drawing_name":"","description":"CRIMP TOOL for VN01 series","qty":"1","unit":"pc","manufacturer":"AMPHENOL","atlantium_pn":"","pin_count":"","price":"85"}]
+Example: [{"item":"1","part_number":"M27500-20SC2S23","drawing_number":"","drawing_name":"","description":"CABLE 20AWG TWISTED PAIR","qty":"10000","unit":"mm","manufacturer":"","atlantium_pn":"","pin_count":"","price":""}]
 If no BOM is found, return: []`;
 
 // sourceType: 'drawing' (default — PDF text or page image) or 'excel'
@@ -446,7 +431,7 @@ Return ONLY this JSON object:
 
 - "drawing_number": the number of THIS drawing — the field labelled DWG NO, DWG. NO., DRAWING NO, DRAWING NUMBER, DOC NO, DOCUMENT NO or similar (sometimes PART NO / P/N of the assembly) INSIDE THE TITLE BLOCK in the bottom-right corner, next to SIZE / REV / SCALE / SHEET. Copy it exactly. A drawing number can also be printed elsewhere — e.g. a small tab on the top border, which is sometimes left over from another drawing; when the numbers differ, the title block's one is "drawing_number" and the others go in "other_drawing_numbers".
 - "other_drawing_numbers": every OTHER value found in a DWG NO / DRAWING NO field anywhere else on the sheet that differs from "drawing_number". [] when there is none.
-- "title": the title-block field labelled TITLE (or DESCRIPTION / NAME of the drawing). Copy it as written, on one line.
+- "title": the NAME of the drawing, from the title block: the field labelled TITLE, DWG TITLE, NAME — or, in many title blocks, DESCRIPTION: (e.g. "DESCRIPTION: UHF Power Cable" → "UHF Power Cable"). Copy it as written, on one line. It is never the drawing number, and never taken from the parts list's DESCRIPTION column or from the notes.
 - "revision": the REV field of the title block — usually the box right after the DWG NO, sometimes without a label (e.g. "00", "01", "A"). Copy it exactly, leading zeros included.
 - "revisions": the values in the REV column of the REVISION table (titled REVISION RECORD / REVISIONS / REV / REVISION HISTORY / ECO), only rows that actually have a value, in the order shown — e.g. ["00"], ["A","B","C"] or ["01","02"]. [] when there is no revision table.
 
@@ -490,40 +475,6 @@ export async function aiReadTitleBlock(text, isImage, imgData){
   }
 }
 
-// ── Tools for parts added from the Database (no drawing to read) ─────────────
-export function _toolsForPartsPrompt(parts){
-  const list=parts.map((p,i)=>`${i}: ${p.part_number||''} | ${p.manufacturer||''} | ${p.description||''}`).join('\n');
-  return `You are a wire-harness tooling engineer. For each part below decide whether it is a connector or contact that needs a crimp tool and/or an insertion/extraction tool to be assembled. Parts that need no tool (cable, wire, heat-shrink, labels, hardware, pre-terminated parts) get nothing.
-
-Parts (index: manufacturer part number | manufacturer | description):
-${list}
-
-For each part that needs a tool, return one entry per tool — but ONLY when you are confident of the tool's exact part number from the connector maker's application-tooling documentation (or the military standard tool for MIL-spec connectors, e.g. M22520 crimp frames with their positioners, M81969 insertion/extraction tools). If you are not sure for a part, skip that part — never invent a plausible-looking number.
-
-The tool's "part_number" is the number the TOOL is sold under — NEVER the connector's own part number, and never the connector's number with "-TOOL" or any other suffix added.
-
-Return ONLY a JSON array, [] when no part needs a tool:
-[{"for_idx":0,"part_number":"63819-0000","description":"CRIMP TOOL for Micro-Fit 3.0 contacts","manufacturer":"Molex","price":"350"}]
-"description" must contain the word TOOL and name what it is for; "price" is the approximate USD list price (plain number).`;
-}
-// [{for_idx, part_number, description, manufacturer, price}] — already checked
-// so a "tool" that is really the connector's own number never gets through.
-export async function aiFindToolsForParts(parts){
-  if(!parts.length || !_aiReady()) return [];
-  const resp=await _aiFetch({body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:2048, temperature:0,
-    messages:[{role:'user',content:_toolsForPartsPrompt(parts)}]})});
-  if(!resp.ok){ let m=`Anthropic error ${resp.status}`; try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
-  const data=await resp.json();
-  return _cleanAiTools(_parseAIJson(data.content[0].text.trim()), parts);
-}
-export function _cleanAiTools(list, parts){
-  return (Array.isArray(list)?list:[]).map(t=>({
-      for_idx:parseInt(t.for_idx,10), part_number:String(t.part_number||'').trim(),
-      description:String(t.description||'').trim(), manufacturer:String(t.manufacturer||'').trim(),
-      price:String(t.price||'').replace(/[^0-9.]/g,'')}))
-    .filter(t=>parts[t.for_idx] && t.part_number && !_bomBadToolPn(t.part_number, parts[t.for_idx].part_number))
-    .map(t=>({...t, description:/\btool\b/i.test(t.description)?t.description:`TOOL for ${parts[t.for_idx].part_number}${t.description?' — '+t.description:''}`}));
-}
 
 // How many rows the parts list has, counted from the column-preserving text:
 // below a header line holding ITEM (or FIND NO) and PART NUMBER / P/N /

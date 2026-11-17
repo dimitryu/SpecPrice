@@ -725,12 +725,35 @@ export function _drawingIdentity(tb, fileName, sheetText=''){
   const rev=(t.revisions||[]).length ? _maxRevision(t.revisions) : String(t.revision||'').replace(/^REV(ISION)?[\s.:_-]*/i,'').trim();
   return {
     drawing_number: t.drawing_number || f.drawing_number,
-    drawing_name:   t.title || t.drawing_number || f.drawing_number,
+    drawing_name:   t.title || _titleFromSheet(sheetText) || t.drawing_number || f.drawing_number,
     revision:       rev || f.revision,
     from:{drawing_number: t.drawing_number?'title block':'file name',
           drawing_name:   t.title?'title block':(t.drawing_number?'title block (number)':'file name'),
           revision:       rev?'title block':(f.revision?'file name':'')},
   };
+}
+// The drawing's name from the column-preserving sheet text, when the AI gave
+// none: the value of a title-block TITLE: / DESCRIPTION: field (with a colon —
+// the parts list's DESCRIPTION column header has none), on the same line or
+// just below, to its right.
+export function _titleFromSheet(text){
+  const lines=String(text||'').split('\n');
+  for(let i=lines.length-1;i>=0;i--){
+    const m=lines[i].match(/\b(DWG\.?\s*TITLE|TITLE|DESCRIPTION)\s*:/i);
+    if(!m) continue;
+    const col=m.index, after=lines[i].slice(col+m[0].length);
+    const same=after.trim().split(/\s{3,}/)[0];
+    if(same && same.trim().length>=3 && !/:$/.test(same)) return same.trim();
+    for(let k=i+1;k<=Math.min(lines.length-1,i+3);k++){
+      const L=lines[k]; const re=/\S+(?:\s{1,2}\S+)*/g; let x;
+      while((x=re.exec(L))){
+        // Not a zone letter of the border, a label, or a column header.
+        if(x.index>=col-5 && x.index<=col+70 && x[0].length>=3 && /[A-Za-z]/.test(x[0]) && !/:$/.test(x[0])
+           && !/^(SIGNATURE|DATE|STATUS|SIZE|REV|SCALE|QTY|ITEM)$/i.test(x[0])) return x[0].trim();
+      }
+    }
+  }
+  return '';
 }
 export function _applyDrawingIdentity(rows, id){
   rows.forEach(r=>{ r.drawing_number=id.drawing_number; r.drawing_name=id.drawing_name; r.revision=id.revision; });
@@ -783,4 +806,22 @@ export function _sdDbNewDoc(row){
   Object.assign(doc, _sdDbPatch(row, {}));
   doc.customer_supplied=!!row.customer_supplied;
   return doc;
+}
+
+// ── Crimp contacts: the rows a crimp tool is found for ────────────────────────
+// Pins, sockets, contacts, terminals, ferrules, lugs, splices. A connector
+// housing ("CONN 4 PIN MINI FIT", "PLUG … CRIMP") is not one — its contacts are.
+// Ring / spade / fork / butt terminals are, even when called "CONN".
+export function _isCrimpContactRow(r){
+  if(!r || _sdIsToolRow(r)) return false;
+  const d=String(r.description||'').toUpperCase();
+  if(!/\b(PINS?|SOCKETS?|CONTACTS?|TERMINALS?|TERM\.?|FERRULES?|LUGS?|SPLICES?)\b/.test(d)
+     && !/\bRING\b[\s\S]*\bCRIMP\b|\bCRIMP\b[\s\S]*\bRING\b/.test(d)) return false;
+  if(/\b(RING|SPADE|FORK|BUTT|FLAG|QUICK.?DISCONNECT|FASTON|FERRULES?|LUGS?|SPLICES?)\b/.test(d)) return true;
+  // Distributor style for a single contact: "CONN SOCKET 22-28AWG CRIMP TIN" —
+  // a wire gauge and PIN/SOCKET that is not a count ("4 PIN" is a housing).
+  if(/AWG\b/.test(d) && /(^|[^\d\s]\s*)\b(PIN|SOCKET|CONTACT)\b/.test(d) && !/\d+\s*(POS|POSITIONS?|PINS?|WAY)\b/.test(d)) return true;
+  if(/\b(CONN|CONNECTOR|HOUSING|RECEPTACLE|RECEPT|PLUG|HEADER|SHELL|BACKSHELL|BOOT|CAP|CABLE|WIRE|SLEEVE|TUBING|LABEL)\b/.test(d)
+     && !/\b(CONTACTS?|TERMINALS?)\b/.test(d.replace(/\b\d+\s*(POS|PINS?|CONTACTS?)\b/g,''))) return false;
+  return true;
 }

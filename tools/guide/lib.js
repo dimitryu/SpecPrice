@@ -104,7 +104,6 @@ const BOM_ROWS=[
  {item:'3',atlantium_pn:'CP-10023',part_number:'TF-2.5-BU',description:'FERRULE 2.5MM2 BLUE',qty:'3',unit:'pcs',manufacturer:'ProCrimp'},
  {item:'4',atlantium_pn:'CP-10024',part_number:'HS-12-BK',description:'HEAT SHRINK 12MM BLACK',qty:'0.03',unit:'m',manufacturer:'ShrinkCo'},
  {item:'5',atlantium_pn:'CP-10025',part_number:'LB-25-WH',description:'LABEL, 25MM, WHITE, PRINTABLE',qty:'2',unit:'pcs',manufacturer:'MarkIt'},
- {item:'',atlantium_pn:'',part_number:'PCT-2510',description:'CRIMP TOOL FOR TF-2.5 FERRULES',qty:'1',unit:'pcs',manufacturer:'ProCrimp',price:'185'},
 ];
 const DETAIL={segments:[{id:'S1',conductors:SPEC.segments[0].conductors}],markers:SPEC.markers,
   engineering_notes:[{n:'1',text:'Strip 70 mm of jacket on side A so the conductors can bend inside the 90° plug',action:'strip'}]};
@@ -122,6 +121,15 @@ function aiReply(body){
   const c=body.messages[0].content;
   const txt=typeof c==='string'?c:c.map(x=>x.text||'').join(' ');
   if(process.env.GDBG) console.log('AI>',txt.slice(0,150).replace(/\s+/g,' '));
+  // Crimp tools for the contacts (the maker's datasheet, by web search in the app).
+  if(/HAND CRIMP TOOL its manufacturer specifies/.test(txt)){
+    const m=txt.match(/\n(\d+): ([^|\n]+)\|/g)||[];
+    const out=[];
+    m.forEach(line=>{ const [,i,pn]=line.match(/(\d+): ([^|]+)\|/); const p=pn.trim();
+      if(p==='TF-2.5-BU') out.push({for_idx:+i,part_number:'PCT-2510',manufacturer:'ProCrimp',description:'HAND CRIMP TOOL for TF-2.5 ferrules',kind:'crimp',source_url:'https://www.example.com/procrimp/tf-2.5-datasheet.pdf'});
+      if(p==='RL-M6-6') out.push({for_idx:+i,part_number:'HT-RL6',manufacturer:'ProCrimp',description:'HAND CRIMP TOOL for 6 mm2 ring lugs',kind:'crimp',source_url:'https://www.example.com/procrimp/ring-lugs.pdf'}); });
+    return 'From the makers\' datasheets: <tools_json>'+JSON.stringify(out)+'</tools_json>';
+  }
   if(/TITLE BLOCK of an engineering drawing/.test(txt)) return '{"drawing_number":"DEMO-100-01","title":"Power Cable 1000mm","revision":"B","revisions":["A","B"]}';
   if(/Is there a PARTS LIST/.test(txt)) return '{"found":true,"box":[0.02,0.62,0.45,0.97],"rows":6}';
   if(/THIS PASS IS THE CUTTING DATA ONLY/.test(txt)) return JSON.stringify(SPEC);
@@ -143,6 +151,7 @@ function aiReply(body){
 const PRICE={}; PARTS.forEach(p=>{ PRICE[p[0]]={mo:p[8],mos:p[9],dk:p[10],dks:p[11],mfr:p[5],desc:p[4]}; });
 // The crimp tool the analysis adds for DCX-4P-90: Mouser has it, DigiKey does not.
 PRICE['PCT-2510']={mo:172.5,mos:14,dk:'',dks:null,mfr:'ProCrimp',desc:'CRIMP TOOL FOR TF-2.5 FERRULES'};
+PRICE['HT-RL6']={mo:96.4,mos:22,dk:104.1,dks:9,mfr:'ProCrimp',desc:'HAND CRIMP TOOL RING LUGS 6MM2'};
 
 async function open(opts={}){
   const b=await chromium.launch(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{});

@@ -1,7 +1,8 @@
 import { S } from '../core/state.js';
-import { _BOM_EXCEL_PROMPT, _BOM_TEXT_PROMPT, _BOM_TOOL_RULE_SECTION, _BOM_VISION_PROMPT } from '../ai/bom.js';
+import { _BOM_EXCEL_PROMPT, _BOM_TEXT_PROMPT, _BOM_TOOL_RULE_SECTION, _BOM_VISION_PROMPT, _TITLE_BLOCK_PROMPT } from '../ai/bom.js';
 import { _csPrompt } from '../ai/cutstrip.js';
 import { _cableProcessPrompt, _notesPrompt } from '../ai/process.js';
+import { _crimpToolPrompt } from '../ai/tooling.js';
 import { logAudit } from '../core/audit.js';
 import { FB, auth, sendPasswordResetEmail } from '../core/firebase.js';
 import { ADMIN_AUTO_VIEWS, PROTECTED_ROLE, PROTECTED_VIEWS, ROLES_META_DOC, SEED_ROLE_VIEWS, _isRoleDocId, _mergedRoleKeys, roleOptions } from '../core/roles.js';
@@ -86,9 +87,15 @@ export function _aiPromptCatalog(){
     {id:'bom-excel',  title:'BOM extraction — Excel / CSV spreadsheet',
      note:'Used when the uploaded file is a spreadsheet (ERP/PLM BOM export). Understands hierarchical exports where only some row types are real components and vendor data sits on child rows.',
      text:_BOM_EXCEL_PROMPT('<bom-export>.xlsx')},
-    {id:'tool-rule',  title:'Crimp / insertion tool detection + pricing',
-     note:'Shared rule embedded inside BOTH BOM prompts above — makes the AI add a priced TOOL row for every connector that has a pin count.',
+    {id:'tool-rule',  title:'BOM prompts — no tool rows',
+     note:'Shared rule embedded inside BOTH BOM prompts above — the parts list is read as it is; tools are found in a separate step (next).',
      text:_BOM_TOOL_RULE_SECTION},
+    {id:'crimp-tools', title:'Crimp tools for contacts (pins, sockets, terminals) — web search',
+     note:'After a drawing is read, and when parts are added from the Database: for each crimp contact the AI looks up the hand crimp tool its maker specifies (datasheet / product page), with Anthropic web search. The tool prices then come from Mouser / DigiKey.',
+     text:_crimpToolPrompt([{part_number:'<contact P/N>',manufacturer:'<maker>',description:'<description>'}])},
+    {id:'title-block', title:'Title block — drawing #, title, revision',
+     note:'Reads DWG NO, TITLE / DESCRIPTION and REV from the title block, and the revision table. Sent with the image of the first sheet and the PDF text.',
+     text:_TITLE_BLOCK_PROMPT},
     {id:'labor',      title:'Cable manufacturing process → Labor Time',
      note:'Sales Desk only. Works out the manufacturing steps and per-unit minutes behind the auto Labor Time (and the Labor Breakdown modal).',
      text:_cableProcessPrompt('0: <BOM row description> (qty=1 pc)\n1: <BOM row description> (qty=230 mm)')},

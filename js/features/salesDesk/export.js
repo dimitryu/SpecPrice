@@ -481,7 +481,7 @@ export async function exportSalesDeskExcel(){
         const toolRefs=[];
         // Column heads for the tool list: what the tool is, which connector it
         // is for, where its price came from, and a link to check it.
-        [[2,'Tool'],[3,'Description'],[7,'For connector'],[9,'Price from'],[11,'Link'],[13,'Price']].forEach(([c,h])=>{
+        [[2,'Tool'],[3,'Description'],[7,'For part'],[9,'Price from'],[11,'Link'],[13,'Price']].forEach(([c,h])=>{
           const x=ws.getCell(row,c); x.value=h; x.font={bold:true,size:9,color:{argb:'FF92400E'}};
         });
         merge(row,3,6); merge(row,7,8); merge(row,9,10); merge(row,11,12);

@@ -10,6 +10,7 @@ import { _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _no
 import { _xlsConfirmMapping, showBOMPreview } from '../bomImport.js';
 import { _sdAutoMatchLabor } from './labor.js';
 import { _sdDrawingNotes, _sdIsToolRow, _sdRecalcRow, _sdTraceFields, renderSalesDesk, sdItems } from './salesDesk.js';
+import { _addToolsToRows } from './tools.js';
 import { _isSpreadsheetFile, extractExcelText, readExcelSheets } from '../../io/excel.js';
 import { encodeImage } from '../../io/pdf.js';
 
@@ -180,7 +181,7 @@ export async function handleSDFiles(files){
 
     try {
       let extractedRows=[];
-      let _pdfText='', _pdfTextLen=0, _pdfImages=[];
+      let _pdfText='', _pdfTextLen=0, _pdfImages=[], _pdfLayout='';
       let _procIsImage=false, _procImgData=null; // whichever image (if any) ended up being used — reused below for the cable-process analysis
 
       if(isXls){
@@ -211,7 +212,7 @@ export async function handleSDFiles(files){
       } else if(isPDF){
         // See _bomFromPDF — shared with the RFQ import.
         const r=await _bomFromPDF(file, setM);
-        extractedRows=r.rows; _pdfImages=r.pageImages; _pdfText=r.pdfText; _pdfTextLen=r.textLen;
+        extractedRows=r.rows; _pdfImages=r.pageImages; _pdfText=r.pdfText; _pdfTextLen=r.textLen; _pdfLayout=r.layoutText||'';
         const _bomPageIdx=_findBOMPageIndex(r.pageTexts);
         if(r.fromImage && r.imgData){ _procIsImage=true; _procImgData=r.imgData; }
         // Fall back to the detected BOM sheet's own image (or page 1 if none
@@ -240,11 +241,11 @@ export async function handleSDFiles(files){
         setM('Reading the title block (drawing #, title, revision)…',92);
         // Sheet 1 carries the revision record; its picture shows which value
         // sits in which box, and the text layer (if any) the exact characters.
-        const _tbText = isPDF && _pdfTextLen>200 ? _pdfText : '';
+        const _tbText = isPDF && _pdfTextLen>200 ? (_pdfLayout||_pdfText) : '';
         const _tbImg = _pdfImages[0] ? {b64:_pdfImages[0],mimeType:'image/jpeg'} : (_procImgData||null);
         if(_tbText || _tbImg) _tb=await aiReadTitleBlock(_tbText, !!_tbImg, _tbImg);
       }
-      const _dwgId=_drawingIdentity(_tb, file.name, isPDF ? _pdfText : '');
+      const _dwgId=_drawingIdentity(_tb, file.name, isPDF ? (_pdfLayout||_pdfText) : '');
       const effectiveDwgName=_dwgId.drawing_number;
       _applyDrawingIdentity(extractedRows, _dwgId);
       extractedRows.forEach(r=>{
@@ -345,6 +346,15 @@ export async function handleSDFiles(files){
         }catch(e){ console.warn('[SD] notes extraction failed:', e.message); }
       }
 
+      // Crimp tools for the pins / sockets / terminals: the Database, the
+      // standard table, then the contact makers' datasheets (web) — priced.
+      if(extractedRows.length){
+        try{
+          const t=await _addToolsToRows(extractedRows, msg=>setM(msg,98));
+          if(t.aiError) toast('Crimp-tool lookup: '+t.aiError,'warn');
+        }catch(e){ console.warn('[SD] tool lookup failed:', e.message); }
+      }
+
       if(!extractedRows.length){
         errors.push(`"${file.name}" — no BOM rows detected`);
       } else {
@@ -411,8 +421,13 @@ export async function handleSDFiles(files){
           priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
           mouser_price:match?parseFloat(match.mouser_price)||'':'',
           ..._sdTraceFields(match),
+          // A tool found and priced during the import carries its own prices
+          // and links (see _addToolsToRows) — they win over an empty record.
+          ...(_isTool ? _sdToolRowPrices(r) : {}),
           tool_for: _isTool ? (r.tool_for||_lastConnector) : '',
           digikey_price:match?parseFloat(match.digikey_price)||'':'',
+          ...(_isTool && +r.digikey_price>0 ? {digikey_price:+r.digikey_price} : {}),
+          tool_url:r.tool_url||'', tool_in_db:!!r.tool_in_db,
           labor_time:'', labor_total:0,
           // Whether this tool is already owned (in Stock) is no longer decided
           // here once at import time — see _sdIsToolOwned, which checks the
@@ -455,4 +470,14 @@ export async function handleSDFiles(files){
       // call above already refreshes.
     }
   );
+}
+
+// The prices and links a tool row brought from the import (only what is set).
+export function _sdToolRowPrices(r){
+  const out={};
+  for(const k of ['mouser_price','digikey_price']) if(+r[k]>0) out[k]=+r[k];
+  for(const k of ['mouser_url','digikey_url','mouser_stock','digikey_stock','mouser_match','digikey_match','mouser_mpn','digikey_mpn'])
+    if(r[k]!=null && r[k]!=='') out[k]=r[k];
+  for(const k of ['mouser_brk','digikey_brk']) if(+r[k]>0) out[k]=+r[k];
+  return out;
 }

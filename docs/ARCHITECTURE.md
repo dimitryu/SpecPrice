@@ -103,8 +103,11 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
   אחר. נקבע לכל הצעה; ב-DB נשמר לתיעוד בלבד ולא נטען ב-Add from Database. הפרומפטים מבקשים `customer_supplied`.
 - **Save to Database** (Sales Desk): `saveSalesDeskToDB` (`data/parts.js`) + `_sdDbPatch` — רק שדות ששונים; ערך ריק לא מוחק;
   מחיר 0 = אין מחיר; QTY לא נשלח; מק"ט כפול נשמר פעם אחת.
-- **כלים ל-Add from Database**: `features/salesDesk/tools.js` — DB (`tool_for` / מק"ט המחבר בתיאור) → `_bomKnownTools` →
-  `aiFindToolsForParts` (קריאה אחת). `tool_source` = db / known / ai, מוצג כ-"Added by".
+- **כלי לחיצה למגעים (v1.66)**: פרומפטי ה-BOM לא מוסיפים שורות כלים. `features/salesDesk/tools.js` (`_findToolsFor`) רץ אחרי קריאת
+  שרטוט (`_addToolsToRows`) וב-Add from Database (`_sdAddToolsFor`): מחברי 38999 → `_bomKnownTools`; שורות מגע
+  (`_isCrimpContactRow`) → כלי קיים ב-DB → `aiFindCrimpTools` (`ai/tooling.js`, Anthropic web search, fallback בלי חיפוש) →
+  מחיר מ-`lookupPartPrices`. `tool_source` = db / known / web / ai, `tool_url` = מקור. ה-aiProxy מעביר רק את כלי web_search
+  (`aiSafeTools`, עד 12 חיפושים) — דורש deploy של functions והפעלת Web search ב-Anthropic Console.
 
 ## חשבון משתמש ושמירה ל-DB עם התקדמות
 
