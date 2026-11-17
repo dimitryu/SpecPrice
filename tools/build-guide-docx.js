@@ -10,7 +10,7 @@ const fs=require('fs'), path=require('path');
 let D; try{ D=require('docx'); }catch{ D=require(path.join(__dirname,'..','tests','node_modules','docx')); }
 const { Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell, WidthType,
         AlignmentType, HeadingLevel, ShadingType, BorderStyle, LevelFormat, PageBreak, Footer, Header,
-        PageNumber, Bookmark, InternalHyperlink, TableLayoutType } = D;
+        PageNumber, Bookmark, InternalHyperlink, ExternalHyperlink, TableLayoutType } = D;
 
 const ROOT=path.join(__dirname,'..');
 const GUIDE=path.join(ROOT,'web','guide');
@@ -25,7 +25,7 @@ const IMG_MAX_W=640, IMG_MAX_H=760;                            // px at 96 dpi
 // ── text ─────────────────────────────────────────────────────────────────────
 function runs(text, base={}){
   const out=[];
-  const re=/(\*\*.+?\*\*|`.+?`)/g;
+  const re=/(\*\*.+?\*\*|`.+?`|\[[^\]]+?\]\(https:\/\/[^\s)]+\))/g;
   let last=0, m;
   const s=String(text||'');
   const push=(t,o={})=>{ if(t) out.push(new TextRun({text:t, font:FONT, rightToLeft:true, size:base.size||22,
@@ -34,7 +34,12 @@ function runs(text, base={}){
   while((m=re.exec(s))){
     push(s.slice(last,m.index));
     const tok=m[0];
-    if(tok.startsWith('**')) push(tok.slice(2,-2),{bold:true});
+    if(tok.startsWith('[')){
+      const [, label, url]=tok.match(/^\[([^\]]+?)\]\((.+)\)$/);
+      out.push(new ExternalHyperlink({link:url, children:[new TextRun({text:label, style:'Hyperlink', font:FONT, rightToLeft:true,
+        size:base.size||22, sizeComplexScript:base.size||22, color:'2563EB', underline:{}})]}));
+    }
+    else if(tok.startsWith('**')) push(tok.slice(2,-2),{bold:true});
     else push(' '+tok.slice(1,-1)+' ',{bold:true,color:'0F172A',shading:{type:ShadingType.CLEAR,fill:'E2E8F0',color:'auto'}});
     last=m.index+tok.length;
   }

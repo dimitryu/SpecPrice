@@ -945,19 +945,29 @@ const AI_MAX_TOKENS = 32000;
 // The fields the app sends. Anything else (tools, streaming, metadata …) is
 // dropped rather than forwarded: the proxy only has to do what the app does.
 const AI_FIELDS = ['model', 'max_tokens', 'temperature', 'messages', 'system', 'stop_sequences', 'top_p', 'top_k'];
-// The ONE tool a request may carry: Anthropic's own server-side web search
-// (used to look up a crimp contact's tool in the maker's datasheet). It runs at
-// Anthropic and reaches no system of ours. Anything else under "tools" — client
-// tools, other server tools — is dropped, and the number of searches is capped.
-const AI_WEB_SEARCH_RE = /^web_search_\d{8}$/;
-const AI_WEB_SEARCH_MAX_USES = 12;
+// The only tools a request may carry: Anthropic's own server-side web search
+// and web fetch (used to look up a crimp contact's tool in the maker's product
+// page or datasheet). They run at Anthropic and reach no system of ours.
+// Anything else under "tools" — client tools, other server tools — is dropped;
+// one of each at most, with the number of uses and the page size capped.
+const AI_WEB_TOOLS = {
+  web_search: { re: /^web_search_\d{8}$/, max: 12 },
+  web_fetch:  { re: /^web_fetch_\d{8}$/,  max: 8 },
+};
+const AI_WEB_SEARCH_MAX_USES = AI_WEB_TOOLS.web_search.max;
+const AI_WEB_FETCH_MAX_CONTENT = 40000;
 function aiSafeTools(tools) {
   if (!Array.isArray(tools)) return undefined;
-  const ok = tools.filter(t => t && typeof t === 'object' && AI_WEB_SEARCH_RE.test(String(t.type || '')) && t.name === 'web_search')
-    .slice(0, 1)
-    .map(t => ({ type: t.type, name: 'web_search',
-                 max_uses: Math.max(1, Math.min(AI_WEB_SEARCH_MAX_USES, parseInt(t.max_uses, 10) || 5)) }));
-  return ok.length ? ok : undefined;
+  const out = [];
+  for (const [name, rule] of Object.entries(AI_WEB_TOOLS)) {
+    const t = tools.find(x => x && typeof x === 'object' && x.name === name && rule.re.test(String(x.type || '')));
+    if (!t) continue;
+    const safe = { type: t.type, name, max_uses: Math.max(1, Math.min(rule.max, parseInt(t.max_uses, 10) || 5)) };
+    if (name === 'web_fetch')
+      safe.max_content_tokens = Math.max(1000, Math.min(AI_WEB_FETCH_MAX_CONTENT, parseInt(t.max_content_tokens, 10) || AI_WEB_FETCH_MAX_CONTENT));
+    out.push(safe);
+  }
+  return out.length ? out : undefined;
 }
 // Under the function's own 540s limit, above the app's longest wait (300s).
 const AI_UPSTREAM_TIMEOUT_MS = 520000;

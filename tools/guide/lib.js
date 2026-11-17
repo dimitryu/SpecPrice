@@ -128,7 +128,13 @@ function aiReply(body){
     m.forEach(line=>{ const [,i,pn]=line.match(/(\d+): ([^|]+)\|/); const p=pn.trim();
       if(p==='TF-2.5-BU') out.push({for_idx:+i,part_number:'PCT-2510',manufacturer:'ProCrimp',description:'HAND CRIMP TOOL for TF-2.5 ferrules',kind:'crimp',source_url:'https://www.example.com/procrimp/tf-2.5-datasheet.pdf'});
       if(p==='RL-M6-6') out.push({for_idx:+i,part_number:'HT-RL6',manufacturer:'ProCrimp',description:'HAND CRIMP TOOL for 6 mm2 ring lugs',kind:'crimp',source_url:'https://www.example.com/procrimp/ring-lugs.pdf'}); });
-    return 'From the makers\' datasheets: <tools_json>'+JSON.stringify(out)+'</tools_json>';
+    out.forEach(t=>t.confidence='confirmed');
+    return {text:'From the makers\' datasheets: <tools_json>'+JSON.stringify(out)+'</tools_json>',
+      // What the app sees when the search really ran: the searches and the pages opened.
+      blocks:[{type:'server_tool_use',id:'s1',name:'web_search',input:{query:'TF-2.5-BU ProCrimp crimp tool'}},
+              {type:'web_search_tool_result',tool_use_id:'s1',content:[]},
+              {type:'server_tool_use',id:'s2',name:'web_fetch',input:{url:'https://www.example.com/procrimp/tf-2.5-datasheet.pdf'}},
+              {type:'web_fetch_tool_result',tool_use_id:'s2',content:{type:'web_fetch_tool_result_error',error_code:'unavailable'}}]};
   }
   if(/TITLE BLOCK of an engineering drawing/.test(txt)) return '{"drawing_number":"DEMO-100-01","title":"Power Cable 1000mm","revision":"B","revisions":["A","B"]}';
   if(/Is there a PARTS LIST/.test(txt)) return '{"found":true,"box":[0.02,0.62,0.45,0.97],"rows":6}';
@@ -170,7 +176,9 @@ async function open(opts={}){
       if(m==='GET') return json({configured:true});
       const body=JSON.parse(r.request().postData());
       if(opts.aiDelay) await new Promise(res=>setTimeout(res,opts.aiDelay));
-      return json({content:[{type:'text',text:aiReply(body)}],stop_reason:'end_turn'});
+      const rep=aiReply(body);
+      if(rep && typeof rep==='object') return json({content:[...(body.tools?rep.blocks:[]),{type:'text',text:rep.text}],stop_reason:'end_turn'});
+      return json({content:[{type:'text',text:rep}],stop_reason:'end_turn'});
     }
     if(u.pathname==='/priceLookup'){
       const pn=u.searchParams.get('pn'), p=PRICE[pn];

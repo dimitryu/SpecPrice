@@ -19,8 +19,11 @@ import { APP_VER } from '../core/version.js';
 export let _guideData=null;
 export let _guideQuery='';
 
+export const _GUIDE_LINK_RE=/\[([^\]]+?)\]\((https:\/\/[^\s)]+)\)/g;
 export function _guideInline(s){
   return esc(String(s==null?'':s))
+    // [text](https://…) — a link that opens in a new tab (https only).
+    .replace(_GUIDE_LINK_RE,'<a class="gd-link" href="$2" target="_blank" rel="noopener noreferrer">$1 ↗</a>')
     .replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')
     .replace(/`(.+?)`/g,'<span class="gd-key">$1</span>');
 }
@@ -64,7 +67,7 @@ export function _guideChapterText(ch){
 // Plain text of one block, the way a reader sees it (markdown marks removed).
 export function _guideBlockText(b){
   return [b.text,b.caption,...(b.items||[]),...(b.callouts||[]),...(b.head||[]),...((b.rows||[]).flat())]
-    .filter(Boolean).join(' ').replace(/\*\*|`/g,'');
+    .filter(Boolean).join(' ').replace(_GUIDE_LINK_RE,'$1').replace(/\*\*|`/g,'');
 }
 // The words searched for: every word must appear in a block for it to count.
 export function _guideTerms(q){

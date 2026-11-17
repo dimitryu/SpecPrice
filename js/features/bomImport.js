@@ -287,7 +287,7 @@ export function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
       // Which connector a tool is for, and where the tool came from.
       // Which connector/contact a tool is for, where it came from, and the
       // prices and links found for it during the import.
-      for(const k of ['tool_for','tool_source','tool_url','tool_in_db','mouser_price','digikey_price','mouser_url','digikey_url',
+      for(const k of ['tool_for','tool_source','tool_url','tool_in_db','tool_note','tool_pages','mouser_price','digikey_price','mouser_url','digikey_url',
                       'mouser_stock','digikey_stock','mouser_brk','digikey_brk','mouser_match','digikey_match','mouser_mpn','digikey_mpn'])
         if(rows[origIdx] && rows[origIdx][k]!=null && rows[origIdx][k]!=='') row[k]=rows[origIdx][k];
       if(Object.values(row).some(v=>v)){

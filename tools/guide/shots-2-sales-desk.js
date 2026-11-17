@@ -29,7 +29,7 @@ const L=require('./lib.js');
   await L.shot(page,'14-sd-loaded',{x:0,y:0,width:1200,height:560});
   { const box=await page.$('.sd-tool-src'); const host=await box.evaluateHandle(e=>e.closest('div[style*="fffbeb"]')||e.parentElement);
     await host.evaluate(e=>e.scrollIntoView({block:'center'})); await page.waitForTimeout(300);
-    await L.mark(page,[{sel:'.sd-tool-src',pad:2,at:'right'},{sel:'.sd-tool-links',pad:2,at:'right'}]);
+    await L.mark(page,[{sel:'.sd-tool-search',pad:2,at:'right'},{sel:'.sd-tool-src',pad:2,at:'right'},{sel:'.sd-tool-links',pad:2,at:'right'}]);
     await L.shot(page,'14b-sd-tool-ai',host); await page.evaluate(()=>window.scrollTo(0,0)); }
   const notes=await page.$('#sd-notes-panel'); 
   if(notes && await notes.isVisible()){ await L.mark(page,['#sd-notes-panel']); await L.shot(page,'14b-sd-notes','#sd-notes-panel'); }
@@ -42,8 +42,19 @@ const L=require('./lib.js');
   await page.fill('.su-units','50'); await page.click('#su-go');
   await page.waitForTimeout(3500);
   await page.click('#fc-close-x').catch(()=>{}); await page.waitForTimeout(1500);
+  // The price columns sit right of the table's visible part: scroll them into view first.
+  const exp=await page.evaluate(()=>{
+    const th=document.querySelector('#sd-table thead th[data-col="mouser_price"]');
+    let w=th; while(w && w!==document.body && !(w.scrollWidth>w.clientWidth+2 && getComputedStyle(w).overflowX!=='visible')) w=w.parentElement;
+    if(w && w!==document.body) w.scrollLeft=Math.max(0, th.offsetLeft-260);
+    const b=document.querySelector('#btn-sd-export'); const r=b&&b.getBoundingClientRect();
+    return r?{top:r.top,bottom:r.bottom,left:r.left}:null;
+  });
+  if(process.env.GDBG) console.log('export button at', exp);
+  await page.evaluate(()=>{ const f=document.getElementById('btn-support-fab'); if(f) f.style.visibility='hidden'; });
   await L.mark(page,[{sel:'#sd-table thead th[data-col="mouser_price"]',pad:2},'.summary-total','.summary-order','#btn-sd-export']);
-  await L.shot(page,'17-sd-priced',{x:0,y:0,width:1200,height:620});
+  await L.shot(page,'17-sd-priced',{x:0,y:0,width:1200,height:Math.max(620, Math.ceil((exp&&exp.bottom||0)+12))});
+  await page.evaluate(()=>{ const f=document.getElementById('btn-support-fab'); if(f) f.style.visibility=''; });
   // tools warning close-up
   const warn=await page.$('text=Final price does NOT include');
   if(warn){ await L.mark(page,[{sel:'.sd-tool-jump',pad:3,at:'right'},{sel:'.sd-tool-for',pad:2,at:'right'},{sel:'.sd-tool-src',pad:2,at:'right'},{sel:'.sd-tool-links',pad:2,at:'right'}]); await L.shot(page,'18-sd-summary','#sd-summary-host'); }

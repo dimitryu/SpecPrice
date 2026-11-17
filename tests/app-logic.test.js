@@ -2372,7 +2372,8 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   no.forEach(d=>ok('not a contact: '+d, !isC({description:d})));
   const prompt=G('_crimpToolPrompt')([{part_number:'39-00-0047',manufacturer:'Molex',description:'PIN 1.8MM 22-28AWG FEMALE'}]);
   ok('tool prompt: searches the contact number with maker and description', /39-00-0047/.test(prompt) && /datasheet/i.test(prompt) && /Application Tooling/.test(prompt));
-  ok('tool prompt: hand tool, never invented, never the contact number', /HAND crimp tool/.test(prompt) && /never invent/i.test(prompt) && /never the contact's own number/i.test(prompt));
+  ok('tool prompt: hand tool, never made up, never the contact number', /HAND crimp tool/.test(prompt) && /never a made-up number/i.test(prompt) && /never the contact's own number/i.test(prompt));
+  ok('tool prompt: opens the maker\'s page with web_fetch, confirmed vs likely', /web_fetch/.test(prompt) && /"confirmed"/.test(prompt) && /"likely"/.test(prompt) && !/63819-0900/.test(prompt));
   ok('tool prompt without web search says so', !/Search the web/.test(G('_crimpToolPrompt')([{part_number:'X'}],false)));
   const parse=G('_parseToolsReply');
   t('tool reply: the JSON between the tags, citations and text around it ignored',
@@ -2382,8 +2383,10 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
     clean([{for_idx:0,part_number:'63819-0900',description:'Hand crimper',source_url:'https://www.molex.com/x',kind:'crimp'},
            {for_idx:0,part_number:'39-00-0047-TOOL'},{for_idx:0,part_number:'X1',source_url:'javascript:alert(1)',description:'TOOL'}],
           [{part_number:'39-00-0047'}]),
-    [{for_idx:0,part_number:'63819-0900',manufacturer:'',description:'CRIMP TOOL for 39-00-0047 — Hand crimper',kind:'crimp',source_url:'https://www.molex.com/x'},
-     {for_idx:0,part_number:'X1',manufacturer:'',description:'TOOL',kind:'crimp',source_url:''}]);
+    [{for_idx:0,part_number:'63819-0900',manufacturer:'',description:'CRIMP TOOL for 39-00-0047 — Hand crimper',kind:'crimp',source_url:'https://www.molex.com/x',confidence:''},
+     {for_idx:0,part_number:'X1',manufacturer:'',description:'TOOL',kind:'crimp',source_url:'',confidence:''}]);
+  t('tool reply: confidence — confirmed kept, anything else is likely',
+    clean([{for_idx:0,part_number:'A1',confidence:'Confirmed'},{for_idx:0,part_number:'A2',confidence:'probably'}],[{part_number:'39-00-0047'}]).map(x=>x.confidence), ['confirmed','likely']);
   const pf=G('_toolPriceFields')({mouser:{price:212.5,stock:'7',url:'https://m/x',breakQty:1,exact:true,mpn:'63819-0900'},digikey:null,best:{manufacturer:'Molex'}});
   t('tool price: Mouser fields for the row', [pf.mouser_price,pf.mouser_stock,pf.mouser_url,pf.mouser_brk,pf.mouser_match,pf._mfr], [212.5,'7','https://m/x',1,'exact','Molex']);
   t('tool source label: web', G('_sdToolSourceLabel')({tool_source:'web'}), 'Contact maker’s datasheet / web (AI) — verify');
@@ -2414,6 +2417,26 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
     [r1.added, r1.none, list.length, list[2].part_number, list[2].tool_for, G('_sdIsToolRow')(list[2])], [1,1,3,'','39-00-0047',true]);
   const r2=ins(list, new Map([[pin, ph]]), mk);
   t('placeholder TOOL row: only once per contact and drawing', [r2.added, list.length], [0,3]);
+}
+
+// ─────────────────────────────────────────── v1.66.2: links in the guide
+{
+  const inl=G('_guideInline');
+  t('guide link: https opens in a new tab', inl('ב-[Claude Console](https://platform.claude.com/) עכשיו'),
+    'ב-<a class="gd-link" href="https://platform.claude.com/" target="_blank" rel="noopener noreferrer">Claude Console ↗</a> עכשיו');
+  ok('guide link: only https — javascript: stays plain text', !/<a /.test(inl('[x](javascript:alert(1))')));
+  t('guide link: search text keeps the label, not the address', G('_guideBlockText')({t:'p',text:'ב-[Claude Console](https://platform.claude.com/)'}), 'ב-Claude Console');
+}
+
+// ─────────────────────────────────────────── v1.66.3: what the web lookup did stays on the tool row
+{
+  const n=G('_toolSearchNote');
+  t('search note: searches and the sites opened',
+    n({web:true, searches:['39-00-0047 Molex crimp tool','39-00-0047 datasheet'], opened:['https://www.molex.com/a','https://www.molex.com/b.pdf']}),
+    'Web: 2 search(es) — "39-00-0047 Molex crimp tool", "39-00-0047 datasheet" · opened 2 page(s): molex.com');
+  t('search note: searched, nothing opened', n({web:true, searches:['q'], opened:[]}), 'Web: 1 search(es) — "q" · no page opened');
+  t('search note: no web — the reason', n({web:false, error:'Web search did not run (x)'}), 'Web search did not run (x)');
+  ok('Sales Desk legend explains the nominal tag', /nominal/.test(G('_SD_COST_LEGEND_HTML')()) && /\$0\.20 per piece/.test(G('_SD_COST_LEGEND_HTML')()));
 }
 
 // ─────────────────────────────────────────── report

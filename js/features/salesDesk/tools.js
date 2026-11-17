@@ -59,11 +59,21 @@ export function _toolPriceFields(r){
   if(mfr) f._mfr=mfr;
   return f;
 }
+// What the lookup did, in one line kept on the tool row — so it can be seen
+// later whether the web was searched, for what, and which pages were opened.
+export function _toolSearchNote(res){
+  if(!res) return '';
+  if(!res.web) return res.error || 'Answered from the AI\u2019s knowledge (no web search)';
+  const host=u=>{ try{ return new URL(u).hostname.replace(/^www\./,''); }catch{ return ''; } };
+  const q=(res.searches||[]).slice(0,4).map(s=>`"${s}"`).join(', ');
+  const o=[...new Set((res.opened||[]).map(host).filter(Boolean))].slice(0,4).join(', ');
+  return `Web: ${(res.searches||[]).length} search(es)${q?` — ${q}`:''}${o?` · opened ${(res.opened||[]).length} page(s): ${o}`:' · no page opened'}`;
+}
 // Which tools each row needs. Returns {plan: Map(row → [{spec, source}]), stats}.
 export async function _findToolsFor(rows, onStatus){
   const parts=S.allParts||[];
   const plan=new Map(), askAi=[];
-  const stats={db:0, known:0, web:0, ai:0, none:0, contacts:0, aiError:'', notFound:[]};
+  const stats={db:0, known:0, web:0, ai:0, none:0, contacts:0, aiError:'', notFound:[], searches:[], opened:[]};
   for(const r of rows){
     if(_sdIsToolRow(r) || !String(r.part_number||'').trim()) continue;
     const known=_bomKnownTools(r.part_number);
@@ -84,13 +94,19 @@ export async function _findToolsFor(rows, onStatus){
     if(onStatus) onStatus(`Looking up the crimp tool for ${uniq.length} contact(s) in the makers' datasheets…`);
     const res=await aiFindCrimpTools(uniq);
     if(res.error) stats.aiError=res.error;
-    const src=res.web?'web':'ai';
+    stats.searches=res.searches||[]; stats.opened=res.opened||[];
+    const note=_toolSearchNote(res), pages=(res.opened||[]).filter(u=>/^https:\/\//i.test(u)).slice(0,3);
     for(const r of askAi){
       const i=idxOf.get(_key(r.part_number));
       const found=res.tools.filter(t=>t.for_idx===i);
-      if(found.length) plan.set(r, found.map(t=>({spec:t, source:src})));
+      // From the web only when a page states it; a "likely" answer is the AI's.
+      if(found.length) plan.set(r, found.map(t=>({spec:t, source:res.web && t.confidence!=='likely' ? 'web' : 'ai', note, pages})));
+      else r._toolNote={note, pages};
     }
-  }else if(askAi.length) stats.aiError='AI is not set up, so the crimp tools were not looked up';
+  }else if(askAi.length){
+    stats.aiError='AI is not set up, so the crimp tools were not looked up';
+    for(const r of askAi) r._toolNote={note:stats.aiError, pages:[]};
+  }
   // A contact still needs a crimp tool even when none was found: it gets a
   // TOOL row without a part number, so the quote shows it and the user types
   // the tool's P/N into it.
@@ -98,8 +114,9 @@ export async function _findToolsFor(rows, onStatus){
     if(plan.has(r)) continue;
     const pn=String(r.part_number).trim();
     if(!stats.notFound.includes(pn)) stats.notFound.push(pn);
+    const tn=r._toolNote||{note:'', pages:[]}; delete r._toolNote;
     plan.set(r, [{spec:{part_number:'', manufacturer:'', source_url:'',
-      description:`CRIMP TOOL for ${pn} — not identified yet, check the contact maker's tooling list`}, source:'none'}]);
+      description:`CRIMP TOOL for ${pn} — not identified yet, check the contact maker's tooling list`}, source:'none', note:tn.note, pages:tn.pages}]);
   }
   // Prices: a tool the Database does not price is looked up at Mouser / DigiKey.
   const toPrice=new Map();
@@ -134,6 +151,7 @@ function _toolFields(x, conn, parts){
     drawing_number:conn.drawing_number||'', drawing_name:conn.drawing_name||'', revision:conn.revision||'',
     atlantium_pn:'', customer_supplied:false, qty:1, unit:'pc',
     tool_for:conn.part_number||'', tool_source:x.source, tool_in_db:!!db, tool_url:x.spec.source_url||'',
+    tool_note:x.note||'', tool_pages:Array.isArray(x.pages)?x.pages:[],
     est_price: db ? (parseFloat(db.est_price)||0) : 0,
     priority_price: db ? (parseFloat(db.priority_price)||0) : 0,
     mouser_price: db&&+db.mouser_price>0 ? +db.mouser_price : (p.mouser_price||''),
@@ -145,8 +163,8 @@ function _toolFields(x, conn, parts){
   return out;
 }
 // A Sales Desk tool row, for row `conn` (kept for the Database picker).
-export function _sdToolItem(spec, conn, source, parts, price){
-  const it={..._toolFields({spec, source, price}, conn, parts), total:0, labor_time:'', labor_total:0};
+export function _sdToolItem(spec, conn, source, parts, price, extra={}){
+  const it={..._toolFields({spec, source, price, ...extra}, conn, parts), total:0, labor_time:'', labor_total:0};
   _sdRecalcRow(it);
   return it;
 }
@@ -177,7 +195,7 @@ export async function _addToolsToRows(rows, onStatus){
   const parts=S.allParts||[];
   const {plan, stats}=await _findToolsFor(rows, onStatus);
   const r=_insertTools(rows, plan, (x,conn)=>({item:'', pin_count:'', price:'', ..._toolFields(x, conn, parts)}));
-  return {...r, contacts:stats.contacts, aiError:stats.aiError, notFound:stats.notFound};
+  return {...r, contacts:stats.contacts, aiError:stats.aiError, notFound:stats.notFound, searches:stats.searches, opened:stats.opened};
 }
 // One line for the user after a lookup: how many contacts got a tool, which did
 // not, and why the web search did not run when it did not.
@@ -186,6 +204,7 @@ export function _toolLookupMessage(t){
   const nf=t.notFound||[];
   let m=`Crimp tools: found for ${t.contacts-nf.length} of ${t.contacts} contact(s)`;
   if(nf.length) m+=` — not found for ${nf.join(', ')} (TOOL row added, type the tool P/N)`;
+  if((t.searches||[]).length) m+=` · web: ${t.searches.length} search(es), ${(t.opened||[]).length} page(s) opened`;
   if(t.aiError) m+=`. ${t.aiError}`;
   return m;
 }
@@ -193,7 +212,29 @@ export function _toolLookupMessage(t){
 export async function _sdAddToolsFor(added, onStatus){
   const parts=S.allParts||[];
   const {plan, stats}=await _findToolsFor(added, onStatus);
-  const r=_insertTools(sdItems, plan, (x,conn)=>_sdToolItem(x.spec, conn, x.source, parts, x.price));
+  const r=_insertTools(sdItems, plan, (x,conn)=>_sdToolItem(x.spec, conn, x.source, parts, x.price, {note:x.note, pages:x.pages}));
   const owned=sdItems.filter(it=>_sdIsToolRow(it) && _sdIsToolOwned(it)).length;
-  return {...r, owned, contacts:stats.contacts, aiError:stats.aiError, notFound:stats.notFound};
+  return {...r, owned, contacts:stats.contacts, aiError:stats.aiError, notFound:stats.notFound, searches:stats.searches, opened:stats.opened};
+}
+// "Search again" on a tool row that has no part number yet (e.g. after web
+// search was switched on): the contact's tool is looked up again and, when
+// found, its rows take the place of the empty one.
+export async function _sdRetryToolRow(i, onStatus){
+  const ph=sdItems[i];
+  if(!ph || !_sdIsToolRow(ph) || String(ph.part_number||'').trim()) return {found:0};
+  const dwg=String(ph.drawing_number||'').trim(), forK=_key(ph.tool_for);
+  const conn=sdItems.find(r=>!_sdIsToolRow(r) && _key(r.part_number)===forK && String(r.drawing_number||'').trim()===dwg)
+    || {part_number:ph.tool_for, description:`PIN ${ph.tool_for}`, manufacturer:'', drawing_number:ph.drawing_number,
+        drawing_name:ph.drawing_name, revision:ph.revision};
+  const {plan, stats}=await _findToolsFor([{...conn, description:_isCrimpContactRow(conn)?conn.description:`CONTACT ${conn.description||''}`}], onStatus);
+  const tools=[...plan.values()][0]||[];
+  const at=sdItems.indexOf(ph);
+  if(!tools.length || tools.every(x=>!x.spec.part_number)){
+    const x=tools[0];
+    if(x){ ph.tool_note=x.note||ph.tool_note; ph.tool_pages=x.pages||[]; }
+    return {found:0, aiError:stats.aiError, note:ph.tool_note};
+  }
+  const parts=S.allParts||[];
+  sdItems.splice(at, 1, ...tools.filter(x=>x.spec.part_number).map(x=>_sdToolItem(x.spec, conn, x.source, parts, x.price, {note:x.note, pages:x.pages})));
+  return {found:tools.filter(x=>x.spec.part_number).length, aiError:stats.aiError};
 }

@@ -17,6 +17,7 @@
 .gd-p { margin:6px 0; }
 .gd-steps, .gd-list { margin:6px 0 10px; padding-inline-start:24px; }
 .gd-steps li, .gd-list li { margin:4px 0; }
+.gd-link { color:#2563EB; text-decoration:underline; font-weight:600; direction:ltr; unicode-bidi:isolate; }
 .gd-key { display:inline-block; direction:ltr; unicode-bidi:isolate; background:#F1F5F9; border:1px solid #CBD5E1;
   border-radius:5px; padding:0 6px; font-size:13px; font-weight:600; color:#0F172A; white-space:nowrap; }
 .gd-box { display:flex; gap:10px; border-radius:8px; padding:10px 12px; margin:10px 0; }

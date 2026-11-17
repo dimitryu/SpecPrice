@@ -125,6 +125,9 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
   r = await call(P, { token: 'tUser', body: { ...req, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 99, allowed_domains: ['x'] }, { type: 'computer_20250124', name: 'computer' }] } });
   const sentWs = JSON.parse(upstreamCalls.pop().init.body);
   ok(sentWs.tools.length === 1 && sentWs.tools[0].type === 'web_search_20250305' && sentWs.tools[0].max_uses === 12 && !('allowed_domains' in sentWs.tools[0]), 'web search forwarded, capped, nothing else');
+  r = await call(P, { token: 'tUser', body: { ...req, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }, { type: 'web_fetch_20250910', name: 'web_fetch', max_uses: 50, max_content_tokens: 999999, allowed_domains: ['x'] }, { type: 'web_fetch_20250910', name: 'web_fetch' }] } });
+  const sentWf = JSON.parse(upstreamCalls.pop().init.body);
+  ok(sentWf.tools.length === 2 && sentWf.tools[1].type === 'web_fetch_20250910' && sentWf.tools[1].max_uses === 8 && sentWf.tools[1].max_content_tokens === 40000 && !('allowed_domains' in sentWf.tools[1]), 'web fetch forwarded once, capped');
   r = await call(P, { token: 'tUser', body: { ...req, tools: [{ type: 'bash_20250124', name: 'bash' }, { name: 'my_fn', input_schema: {} }] } });
   ok(!('tools' in JSON.parse(upstreamCalls.pop().init.body)), 'other tools are not forwarded');
 

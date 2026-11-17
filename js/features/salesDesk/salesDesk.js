@@ -11,7 +11,7 @@ import { _sdAskUnitsThenCheck } from '../priceCheck.js';
 import { exportSalesDeskExcel } from './export.js';
 import { openPartPickerModal, openSDFileModal } from './import.js';
 import { _sdAutoMatchLabor, openLaborBreakdownModal } from './labor.js';
-import { _sdAddToolsFor, _sdToolSourceLabel, _toolLookupMessage } from './tools.js';
+import { _sdAddToolsFor, _sdRetryToolRow, _sdToolSourceLabel, _toolLookupMessage } from './tools.js';
 import { showSettingsModal } from '../settings.js';
 
 export let sdItems     = [];
@@ -299,6 +299,22 @@ export function _sdPriceSource(r){
   return {kind:'none', label:'No price yet', verified:false, url:''};
 }
 // Under a tool's Part Cost in the table: where that number came from, linked.
+// What the small tag beside Part Cost means — where the row's price came from.
+export function _SD_COST_LEGEND_HTML(){
+  const c=(t,col)=>`<strong style="color:${col}">${t}</strong>`;
+  return `
+  <div class="sd-cost-legend" style="padding:7px 12px;border-top:1px dashed var(--border);font-size:11px;color:var(--muted);
+       display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center">
+    <span>Part Cost tag:</span>
+    <span>${c('Mouser / DigiKey / Priority','#166534')} the cheapest supplier price</span>
+    <span>${c(`nominal`,'#b45309')} a label/marker with no supplier price — a fixed $${SD_NOMINAL_LABEL_PRICE.toFixed(2)} per piece; type a price if you have one</span>
+    <span>${c('AI est.','#b45309')} the AI's estimate, not verified</span>
+    <span>${c('cust. supplied','#1E40AF')} the customer supplies it — $0</span>
+    <span>${c('manual','#166534')} a price you typed</span>
+    <span>${c('no price','#b45309')} no price yet — run Check Price or type one</span>
+    <span>${_TOOL_TAG} added by the system's analysis, not in the BOM, never in the cable price</span>
+  </div>`;
+}
 export function _sdToolSourceChip(r){
   const s=_sdPriceSource(r);
   const short={mouser:'Mouser',digikey:'DigiKey',priority:'Priority',ai:'AI est.',nominal:'nominal',customer:'cust. supplied',manual:'manual',none:'no price'}[s.kind];
@@ -696,6 +712,10 @@ export async function renderSalesDesk(){
                 ${r.tool_for?`<div class="sd-tool-for">For <strong>${esc(r.tool_for)}</strong></div>`:''}
                 <div class="sd-tool-origin" style="color:#92400e;font-size:11px">Added by: ${esc(_sdToolSourceLabel(r))}${
                   _sdSafeUrl(r.tool_url)?` · <a href="${esc(_sdSafeUrl(r.tool_url))}" target="_blank" rel="noopener noreferrer" style="color:#92400e;text-decoration:underline" title="The page that names this tool for ${esc(r.tool_for||'the contact')}">source ↗</a>`:''}</div>
+                ${r.tool_note?`<div class="sd-tool-search" style="color:#6b4f1d;font-size:11px">🔎 ${esc(r.tool_note)}${
+                  (r.tool_pages||[]).map(_sdSafeUrl).filter(Boolean).map((u,k)=>` · <a href="${esc(u)}" target="_blank" rel="noopener noreferrer" style="color:#92400e;text-decoration:underline" title="${esc(u)}">page ${k+1} ↗</a>`).join('')}</div>`:''}
+                ${!String(r.part_number||'').trim()&&r.tool_for?`<div><a href="#" class="sd-tool-retry" data-i="${sdItems.indexOf(r)}" style="color:#92400e;font-size:11px;font-weight:700;text-decoration:underline"
+                  title="Look up the crimp tool for ${esc(r.tool_for)} again — maker's product page / datasheet on the web">↻ Search the tool again</a></div>`:''}
                 <div class="sd-tool-src" style="color:${src.verified?'#166534':'#b45309'}" title="${esc(_sdPriceSourceText(r))}">
                   Price from: <strong>${esc(src.label)}</strong>${src.unit&&src.kind!=='ai'?` · ${$(src.unit)}/unit`:''}${src.brk?` · break ${src.brk}+`:''}</div>
                 <div class="sd-tool-links">${_sdToolLinksHTML(r)}</div>
@@ -746,6 +766,17 @@ export async function renderSalesDesk(){
     document.getElementById('sd-exp-all')?.addEventListener('click',()=>{_sdCollapsed.clear();_sdRenderSummary();});
     host.querySelectorAll('.sd-tool-jump').forEach(a=>a.addEventListener('click',e=>{
       e.preventDefault(); _sdJumpToRow(+a.dataset.i, renderSD);
+    }));
+    host.querySelectorAll('.sd-tool-retry').forEach(a=>a.addEventListener('click',async e=>{
+      e.preventDefault();
+      if(a.dataset.busy) return;
+      a.dataset.busy='1'; a.textContent='Searching…';
+      try{
+        const r=await _sdRetryToolRow(+a.dataset.i, txt=>_sdLaborBusy(txt));
+        if(r.found) toast(`Found ${r.found} tool row(s) — verify before ordering`,'success');
+        else toast(`Still no tool found. ${r.aiError||r.note||''}`.trim(),'warn');
+      }catch(err){ toast('Tool search failed: '+err.message,'error'); }
+      finally{ _sdLaborBusy(''); renderSD(); }
     }));
     document.getElementById('sd-col-all')?.addEventListener('click',()=>{
       groups.forEach(g=>_sdCollapsed.add(g.dwg)); _sdRenderSummary();});
@@ -922,6 +953,7 @@ export async function renderSalesDesk(){
           </table>
         </div>
         ${_PRICE_LEGEND_HTML}
+        ${_SD_COST_LEGEND_HTML()}
         <div id="sd-tool-note" style="display:none;font-size:12px;color:#92400e;background:#fffbeb;border-top:1px solid #f59e0b;padding:7px 11px">
           ⚙ Rows marked <strong>TOOL</strong> were added by the system's analysis (drawing analysis, your existing tools in the Database,
           the standard tooling table or AI) — they are <strong>not</strong> in the customer's original BOM, and are never included in the cable price.

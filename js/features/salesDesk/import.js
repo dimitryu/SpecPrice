@@ -429,6 +429,7 @@ export async function handleSDFiles(files){
           digikey_price:match?parseFloat(match.digikey_price)||'':'',
           ...(_isTool && +r.digikey_price>0 ? {digikey_price:+r.digikey_price} : {}),
           tool_url:r.tool_url||'', tool_in_db:!!r.tool_in_db,
+          tool_note:_isTool ? (r.tool_note||'') : '', tool_pages:_isTool && Array.isArray(r.tool_pages) ? r.tool_pages : [],
           labor_time:'', labor_total:0,
           // Whether this tool is already owned (in Stock) is no longer decided
           // here once at import time — see _sdIsToolOwned, which checks the
