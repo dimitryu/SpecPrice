@@ -11,7 +11,7 @@ import { _sdAskUnitsThenCheck } from '../priceCheck.js';
 import { exportSalesDeskExcel } from './export.js';
 import { openPartPickerModal, openSDFileModal } from './import.js';
 import { _sdAutoMatchLabor, openLaborBreakdownModal } from './labor.js';
-import { _sdAddToolsFor, _sdToolSourceLabel } from './tools.js';
+import { _sdAddToolsFor, _sdToolSourceLabel, _toolLookupMessage } from './tools.js';
 import { showSettingsModal } from '../settings.js';
 
 export let sdItems     = [];
@@ -1011,10 +1011,11 @@ export async function renderSalesDesk(){
         if(t.added){
           renderSalesDesk();
           const from=[t.db?`${t.db} from your existing tools in the Database`:'', t.known?`${t.known} from the standard tooling table`:'',
-                      t.web?`${t.web} from the contact makers' datasheets`:'', t.ai?`${t.ai} suggested by AI`:''].filter(Boolean).join(', ');
+                      t.web?`${t.web} from the contact makers' datasheets`:'', t.ai?`${t.ai} suggested by AI`:'', t.none?`${t.none} not identified yet (type the tool P/N)`:''].filter(Boolean).join(', ');
           toast(`Added ${t.added} tool row(s) — ${from}${t.owned?` · ${t.owned} already in Stock (no price)`:''}. Tools are the system's additions, not part of the BOM.`,'success');
         }
-        if(t.aiError) toast('Tool check by AI failed: '+t.aiError,'warn');
+        const tm=_toolLookupMessage(t);
+        if(tm && ((t.notFound||[]).length || t.aiError)) toast(tm,'warn');
         logAudit('sales_desk_tools_for_picker',{added:t.added, db:t.db, known:t.known, web:t.web, ai:t.ai, owned:t.owned},!t.aiError);
       }finally{ _sdLaborBusy(''); }
       // The labor estimate is an AI call, so it takes a moment. Without this

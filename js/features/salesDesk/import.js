@@ -10,7 +10,7 @@ import { _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _no
 import { _xlsConfirmMapping, showBOMPreview } from '../bomImport.js';
 import { _sdAutoMatchLabor } from './labor.js';
 import { _sdDrawingNotes, _sdIsToolRow, _sdRecalcRow, _sdTraceFields, renderSalesDesk, sdItems } from './salesDesk.js';
-import { _addToolsToRows } from './tools.js';
+import { _addToolsToRows, _toolLookupMessage } from './tools.js';
 import { _isSpreadsheetFile, extractExcelText, readExcelSheets } from '../../io/excel.js';
 import { encodeImage } from '../../io/pdf.js';
 
@@ -351,7 +351,8 @@ export async function handleSDFiles(files){
       if(extractedRows.length){
         try{
           const t=await _addToolsToRows(extractedRows, msg=>setM(msg,98));
-          if(t.aiError) toast('Crimp-tool lookup: '+t.aiError,'warn');
+          const tm=_toolLookupMessage(t);
+          if(tm) toast(tm, (t.notFound||[]).length||t.aiError ? 'warn' : 'success');
         }catch(e){ console.warn('[SD] tool lookup failed:', e.message); }
       }
 

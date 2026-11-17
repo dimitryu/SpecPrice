@@ -2395,6 +2395,27 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   ok('title prompt: DESCRIPTION: is the name, never the drawing number', /DESCRIPTION: UHF Power Cable/.test(G('_TITLE_BLOCK_PROMPT')) && /never the drawing number/.test(G('_TITLE_BLOCK_PROMPT')));
 }
 
+// ─────────────────────────────────────────── v1.66.1: a contact with no tool found still gets a TOOL row
+{
+  const msg=G('_toolLookupMessage');
+  t('tool message: all found', msg({contacts:2, notFound:[], aiError:''}), 'Crimp tools: found for 2 of 2 contact(s)');
+  t('tool message: one not found, and why the search did not run',
+    msg({contacts:1, notFound:['39-00-0047'], aiError:'Web search did not run (x)'}),
+    'Crimp tools: found for 0 of 1 contact(s) — not found for 39-00-0047 (TOOL row added, type the tool P/N). Web search did not run (x)');
+  t('tool message: nothing to say when there were no contacts', msg({contacts:0}), '');
+  t('tool source label: not found yet', G('_sdToolSourceLabel')({tool_source:'none'}), 'Not found yet — check the contact maker’s tooling and type the tool P/N');
+  const ins=G('_insertTools');
+  const pin={part_number:'39-00-0047',description:'PIN 1.8MM 22-28AWG FEMALE',drawing_number:'D1'};
+  const list=[{part_number:'39-01-2040',description:'CONN 4 PIN MINI FIT JR FEMALE',drawing_number:'D1'}, pin];
+  const ph=[{spec:{part_number:'',description:'CRIMP TOOL for 39-00-0047 — not identified yet'}, source:'none'}];
+  const mk=(x,conn)=>({part_number:x.spec.part_number, description:x.spec.description, drawing_number:conn.drawing_number, tool_for:conn.part_number, tool_source:x.source});
+  const r1=ins(list, new Map([[pin, ph]]), mk);
+  t('placeholder TOOL row: inserted under its contact, without a part number',
+    [r1.added, r1.none, list.length, list[2].part_number, list[2].tool_for, G('_sdIsToolRow')(list[2])], [1,1,3,'','39-00-0047',true]);
+  const r2=ins(list, new Map([[pin, ph]]), mk);
+  t('placeholder TOOL row: only once per contact and drawing', [r2.added, list.length], [0,3]);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

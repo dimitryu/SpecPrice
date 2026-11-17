@@ -24,6 +24,7 @@ export const _SD_TOOL_SOURCE_LABEL={
   known:'Standard tooling table (MIL spec)',
   web:'Contact maker’s datasheet / web (AI) — verify',
   ai:'AI suggestion — verify before ordering',
+  none:'Not found yet — check the contact maker’s tooling and type the tool P/N',
 };
 export function _sdToolSourceLabel(r){
   const base=_SD_TOOL_SOURCE_LABEL[r.tool_source]||_SD_TOOL_SOURCE_LABEL.ai;
@@ -62,7 +63,7 @@ export function _toolPriceFields(r){
 export async function _findToolsFor(rows, onStatus){
   const parts=S.allParts||[];
   const plan=new Map(), askAi=[];
-  const stats={db:0, known:0, web:0, ai:0, contacts:0, aiError:''};
+  const stats={db:0, known:0, web:0, ai:0, none:0, contacts:0, aiError:'', notFound:[]};
   for(const r of rows){
     if(_sdIsToolRow(r) || !String(r.part_number||'').trim()) continue;
     const known=_bomKnownTools(r.part_number);
@@ -89,6 +90,16 @@ export async function _findToolsFor(rows, onStatus){
       const found=res.tools.filter(t=>t.for_idx===i);
       if(found.length) plan.set(r, found.map(t=>({spec:t, source:src})));
     }
+  }else if(askAi.length) stats.aiError='AI is not set up, so the crimp tools were not looked up';
+  // A contact still needs a crimp tool even when none was found: it gets a
+  // TOOL row without a part number, so the quote shows it and the user types
+  // the tool's P/N into it.
+  for(const r of askAi){
+    if(plan.has(r)) continue;
+    const pn=String(r.part_number).trim();
+    if(!stats.notFound.includes(pn)) stats.notFound.push(pn);
+    plan.set(r, [{spec:{part_number:'', manufacturer:'', source_url:'',
+      description:`CRIMP TOOL for ${pn} — not identified yet, check the contact maker's tooling list`}, source:'none'}]);
   }
   // Prices: a tool the Database does not price is looked up at Mouser / DigiKey.
   const toPrice=new Map();
@@ -142,16 +153,19 @@ export function _sdToolItem(spec, conn, source, parts, price){
 // Inserts the planned tools under their rows in `list` (the preview rows, or
 // sdItems), once per drawing. `make` builds the row object.
 function _insertTools(list, plan, make){
-  let added=0; const per={db:0, known:0, web:0, ai:0};
+  let added=0; const per={db:0, known:0, web:0, ai:0, none:0};
   for(const [conn, tools] of plan){
     let at=list.indexOf(conn);
     if(at<0) continue;
     const dwg=String(conn.drawing_number||'').trim();
     for(const x of tools){
       const pnk=String(x.spec.part_number||'').trim().toLowerCase();
-      if(!pnk) continue;
-      if(list.some(r=>_sdIsToolRow(r) && String(r.part_number||'').trim().toLowerCase()===pnk
-                       && String(r.drawing_number||'').trim()===dwg)) continue;
+      const forK=String(conn.part_number||'').trim().toLowerCase();
+      // A tool is listed once per drawing; an unidentified one once per contact.
+      const dup = pnk
+        ? list.some(r=>_sdIsToolRow(r) && String(r.part_number||'').trim().toLowerCase()===pnk && String(r.drawing_number||'').trim()===dwg)
+        : list.some(r=>_sdIsToolRow(r) && String(r.tool_for||'').trim().toLowerCase()===forK && String(r.drawing_number||'').trim()===dwg);
+      if(dup) continue;
       list.splice(++at, 0, make(x, conn));
       added++; per[x.source]++;
     }
@@ -163,7 +177,17 @@ export async function _addToolsToRows(rows, onStatus){
   const parts=S.allParts||[];
   const {plan, stats}=await _findToolsFor(rows, onStatus);
   const r=_insertTools(rows, plan, (x,conn)=>({item:'', pin_count:'', price:'', ..._toolFields(x, conn, parts)}));
-  return {...r, contacts:stats.contacts, aiError:stats.aiError};
+  return {...r, contacts:stats.contacts, aiError:stats.aiError, notFound:stats.notFound};
+}
+// One line for the user after a lookup: how many contacts got a tool, which did
+// not, and why the web search did not run when it did not.
+export function _toolLookupMessage(t){
+  if(!t || !t.contacts) return '';
+  const nf=t.notFound||[];
+  let m=`Crimp tools: found for ${t.contacts-nf.length} of ${t.contacts} contact(s)`;
+  if(nf.length) m+=` — not found for ${nf.join(', ')} (TOOL row added, type the tool P/N)`;
+  if(t.aiError) m+=`. ${t.aiError}`;
+  return m;
 }
 // Add from Database: tool rows into the Sales Desk under what was just added.
 export async function _sdAddToolsFor(added, onStatus){
@@ -171,5 +195,5 @@ export async function _sdAddToolsFor(added, onStatus){
   const {plan, stats}=await _findToolsFor(added, onStatus);
   const r=_insertTools(sdItems, plan, (x,conn)=>_sdToolItem(x.spec, conn, x.source, parts, x.price));
   const owned=sdItems.filter(it=>_sdIsToolRow(it) && _sdIsToolOwned(it)).length;
-  return {...r, owned, contacts:stats.contacts, aiError:stats.aiError};
+  return {...r, owned, contacts:stats.contacts, aiError:stats.aiError, notFound:stats.notFound};
 }

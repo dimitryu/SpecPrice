@@ -56,7 +56,7 @@ export async function aiFindCrimpTools(contacts){
   const t0=Date.now();
   const ask=async(web)=>{
     let messages=[{role:'user', content:_crimpToolPrompt(contacts, web)}];
-    let text='';
+    let text='', searched=false;
     for(let turn=0; turn<3; turn++){
       const body={model:_csModel(), max_tokens:4096, temperature:0, messages};
       if(web) body.tools=[{...WEB_SEARCH_TOOL, max_uses:Math.min(12, 3*contacts.length+2)}];
@@ -64,21 +64,31 @@ export async function aiFindCrimpTools(contacts){
       if(!resp.ok){ let m=`Anthropic error ${resp.status}`; try{ const e=await resp.json(); m=e.error?.message||m; }catch{} throw Object.assign(new Error(m),{status:resp.status}); }
       const data=await resp.json();
       text+=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
+      if((data.content||[]).some(b=>b.type==='server_tool_use'||b.type==='web_search_tool_result')) searched=true;
       // A long search can pause; hand the turn back so it carries on.
       if(data.stop_reason!=='pause_turn') break;
       messages=[...messages, {role:'assistant', content:data.content}];
     }
-    return _cleanCrimpTools(_parseToolsReply(text), contacts);
+    return {tools:_cleanCrimpTools(_parseToolsReply(text), contacts), searched};
   };
   try{
-    const tools=await ask(true);
-    logSystemAudit('crimp_tool_search',{contacts:contacts.length, found:tools.length, web:true, ms:Date.now()-t0},true);
-    return {tools, web:true, error:''};
+    const r=await ask(true);
+    // An answer with no search in it means the search never ran — a server
+    // that does not pass web search on yet, or an account where it is off. Then
+    // the question is asked again plainly, from what the AI knows.
+    if(!r.searched){
+      const note='Web search did not run (update the server functions and enable web search for the Anthropic account)';
+      const r2=r.tools.length ? r : await ask(false);
+      logSystemAudit('crimp_tool_search',{contacts:contacts.length, found:r2.tools.length, web:false, webError:note, ms:Date.now()-t0},true);
+      return {tools:r2.tools, web:false, error:note};
+    }
+    logSystemAudit('crimp_tool_search',{contacts:contacts.length, found:r.tools.length, web:true, ms:Date.now()-t0},true);
+    return {tools:r.tools, web:true, error:''};
   }catch(e){
     // Web search not enabled for the organisation, or an older proxy that drops
     // tools and so gets an answer with no searches: ask from knowledge instead.
     try{
-      const tools=await ask(false);
+      const {tools}=await ask(false);
       logSystemAudit('crimp_tool_search',{contacts:contacts.length, found:tools.length, web:false, webError:e.message, ms:Date.now()-t0},true);
       return {tools, web:false, error:'Web search unavailable: '+e.message};
     }catch(e2){

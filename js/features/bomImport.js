@@ -7,7 +7,7 @@ import { appendRowsToDrawing } from '../data/projects.js';
 import { _XLS_MAP_FIELDS, _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, _xlsAnalyzeSheet, _xlsMapSignature, parseExcelSheetsStructured } from '../domain/bom.js';
 import { renderRFQDetail } from './rfq.js';
 import { _TOOL_TAG, _sdIsToolRow, _toolRowAttrs } from './salesDesk/salesDesk.js';
-import { _addToolsToRows } from './salesDesk/tools.js';
+import { _addToolsToRows, _toolLookupMessage } from './salesDesk/tools.js';
 import { showSettingsModal } from './settings.js';
 import { _isSpreadsheetFile, extractExcelText, readExcelSheets } from '../io/excel.js';
 import { encodeImage } from '../io/pdf.js';
@@ -147,7 +147,10 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
       });
 
       if(extractedRows.length){
-        try{ await _addToolsToRows(extractedRows, msg=>setMsg(msg,98)); }
+        try{
+          const t=await _addToolsToRows(extractedRows, msg=>setMsg(msg,98));
+          if((t.notFound||[]).length || t.aiError) toast(_toolLookupMessage(t),'warn');
+        }
         catch(e){ console.warn('[BOM] tool lookup failed:', e.message); }
       }
 
