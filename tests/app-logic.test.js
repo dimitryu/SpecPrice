@@ -2371,7 +2371,7 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   yes.forEach(d=>ok('contact: '+d, isC({description:d})));
   no.forEach(d=>ok('not a contact: '+d, !isC({description:d})));
   const prompt=G('_crimpToolPrompt')([{part_number:'39-00-0047',manufacturer:'Molex',description:'PIN 1.8MM 22-28AWG FEMALE'}]);
-  ok('tool prompt: searches the contact number with maker and description', /39-00-0047/.test(prompt) && /datasheet/i.test(prompt) && /Application Tooling/.test(prompt));
+  ok('tool prompt: searches the contact number with maker and description', /39-00-0047/.test(prompt) && /datasheet/i.test(prompt) && /APPLICATION TOOLING/.test(prompt));
   ok('tool prompt: hand tool, never made up, never the contact number', /HAND crimp tool/.test(prompt) && /never a made-up number/i.test(prompt) && /never the contact's own number/i.test(prompt));
   ok('tool prompt: opens the maker\'s page with web_fetch, confirmed vs likely', /web_fetch/.test(prompt) && /"confirmed"/.test(prompt) && /"likely"/.test(prompt) && !/63819-0900/.test(prompt));
   ok('tool prompt without web search says so', !/Search the web/.test(G('_crimpToolPrompt')([{part_number:'X'}],false)));
@@ -2437,6 +2437,18 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('search note: searched, nothing opened', n({web:true, searches:['q'], opened:[]}), 'Web: 1 search(es) — "q" · no page opened');
   t('search note: no web — the reason', n({web:false, error:'Web search did not run (x)'}), 'Web search did not run (x)');
   ok('Sales Desk legend explains the nominal tag', /nominal/.test(G('_SD_COST_LEGEND_HTML')()) && /\$0\.20 per piece/.test(G('_SD_COST_LEGEND_HTML')()));
+}
+
+// ─────────────────────────────────────────── v1.66.4: family + wire range → the maker's tooling specification
+{
+  const P=G('_crimpToolPrompt');
+  const c=[{part_number:'39-00-0047',manufacturer:'',description:'PIN 1.8MM 22-28AWG FEMALE'}];
+  const p1=P(c,true), p2=P(c,true,true);
+  ok('tool prompt: identify family, wire range and other number formats', /FAMILY/.test(p1) && /WIRE RANGE/.test(p1) && /0039000047/.test(p1));
+  ok('tool prompt: search the tooling spec, not only the product page', /APPLICATION TOOLING SPECIFICATION/.test(p1) && /often has no tooling/.test(p1));
+  ok('tool prompt: check the contact is in the tool\'s terminal table, wire size must match', /terminal table/.test(p1) && /different wire range is wrong/.test(p1));
+  ok('tool prompt: the second pass says so', !/SECOND, DEEPER/.test(p1) && /SECOND, DEEPER/.test(p2));
+  t('tool source label: typed in by the user', G('_sdToolSourceLabel')({tool_source:'manual'}), 'Typed in by you — Save to Database and it is used for this contact next time');
 }
 
 // ─────────────────────────────────────────── report

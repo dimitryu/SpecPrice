@@ -25,6 +25,7 @@ export const _SD_TOOL_SOURCE_LABEL={
   web:'Contact maker’s datasheet / web (AI) — verify',
   ai:'AI suggestion — verify before ordering',
   none:'Not found yet — check the contact maker’s tooling and type the tool P/N',
+  manual:'Typed in by you — Save to Database and it is used for this contact next time',
 };
 export function _sdToolSourceLabel(r){
   const base=_SD_TOOL_SOURCE_LABEL[r.tool_source]||_SD_TOOL_SOURCE_LABEL.ai;

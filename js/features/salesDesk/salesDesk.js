@@ -880,7 +880,16 @@ export async function renderSalesDesk(){
       renderSD();
     }));
     document.querySelectorAll('.sd-part-number').forEach(inp=>inp.addEventListener('change',()=>{
-      sdItems[+inp.dataset.i].part_number=inp.value.trim();
+      const r=sdItems[+inp.dataset.i];
+      r.part_number=inp.value.trim();
+      // The tool P/N typed into a tool row the lookup could not fill: it is now
+      // the user's tool for that contact — and, once saved to the Database, the
+      // one the next drawing with this contact gets automatically.
+      if(r.part_number && r.tool_source==='none' && _sdIsToolRow(r)){
+        r.tool_source='manual';
+        r.description=String(r.description||'').replace(/\s*—\s*not identified yet.*$/i,'');
+        renderSD();
+      }
     }));
     document.querySelectorAll('.sd-drawing-number').forEach(inp=>inp.addEventListener('change',()=>{
       sdItems[+inp.dataset.i].drawing_number=inp.value.trim();
