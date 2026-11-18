@@ -1,5 +1,5 @@
-import { _aiFetch, _aiReady, _csModel, _csModelRejected, _parseAIJson } from './client.js';
 import { S } from '../core/state.js';
+import { _aiFetch, _aiReady, _csModel, _csModelRejected, _parseAIJson } from './client.js';
 import { logSystemAudit } from '../core/audit.js';
 import { _bomBadToolPn } from '../domain/bom.js';
 

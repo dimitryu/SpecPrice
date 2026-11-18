@@ -2462,6 +2462,24 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('body without temperature untouched', f('{"model":"claude-sonnet-5"}'), '{"model":"claude-sonnet-5"}');
 }
 
+// ─────────────────────────────────────────── v1.66.6: replies read whole, JSON found past prose
+{
+  const f=G('_parseAIJson');
+  t('AI json: bracketed words before the array', f('The parts list [7 rows, see note 1]:\n[{"item":"1"}]'), [{item:'1'}]);
+  t('AI json: fenced block preferred over prose brackets', f('Rows [below]\n```json\n[{"a":1}]\n```\nDone [ok]'), [{a:1}]);
+  t('AI json: two arrays — the one with objects', f('[1,2] then [{"a":1}]'), [{a:1}]);
+  t('AI json: a "]" inside a string', f('[{"d":"x ] y"}]'), [{d:'x ] y'}]);
+  const tx=G('_aiText');
+  t('AI text: every text block, other blocks skipped', tx({content:[{type:'thinking',thinking:'...'},{type:'text',text:'A'},{type:'text',text:'B'}]}), 'A\nB');
+  t('AI text: no content', tx({}), '');
+  const loc=G('_bomParseLocate');
+  t('locate: prose around the object', loc('Found it: {"found":true,"box":[0.03,0.77,0.64,0.97],"rows":7} — bottom left.'), {box:[0.03,0.77,0.64,0.97], rows:7});
+  t('locate: percent', loc('{"found":true,"box":[3,77,64,97]}').box, [0.03,0.77,0.64,0.97]);
+  t('locate: pixels are not used', loc('{"found":true,"box":[55,1100,1263,1370]}'), null);
+  t('locate: an inside-out box is not used', loc('{"found":true,"box":[0.6,0.9,0.1,0.8]}'), null);
+  t('locate: not found', loc('{"found":false}'), null);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

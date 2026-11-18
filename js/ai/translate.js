@@ -1,4 +1,4 @@
-import { _aiFetch } from './client.js';
+import { _aiFetch, _aiText } from './client.js';
 
 export async function _csTranslateChunk(todo, lang, bucket){
   const langName = lang==='ru' ? 'Russian' : (lang==='he' ? 'Hebrew' : 'English');
@@ -17,7 +17,7 @@ export async function _csTranslateChunk(todo, lang, bucket){
   });
   if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
-  const raw=(await resp.json()).content[0].text;
+  const raw=_aiText(await resp.json());
   const m=String(raw).match(/\[[\s\S]*\]/);
   if(!m) throw new Error('Translation came back in an unexpected format');
   const arr=JSON.parse(m[0]);
@@ -49,7 +49,7 @@ export async function aiTranslateOperations(todo, lang){
   });
   if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
-  const raw=(await resp.json()).content[0].text;
+  const raw=_aiText(await resp.json());
   const m=String(raw).match(/\[[\s\S]*\]/);
   if(!m) throw new Error('Translation came back in an unexpected format');
   const arr=JSON.parse(m[0]);

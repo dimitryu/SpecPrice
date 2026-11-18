@@ -1,4 +1,4 @@
-import { _AI_NO_KEY, _aiFetch, _aiReady, _csProviderHint, _csSalvageJson } from './client.js';
+import { _AI_NO_KEY, _aiFetch, _aiReady, _aiText, _csProviderHint, _csSalvageJson } from './client.js';
 import { _CS_ANALYSIS_TIMEOUT } from './cutstrip.js';
 import { _csConnectors, _csCutLength, _csMM, _csNum, _csSegLabel, _csSegments } from '../domain/cutstrip.js';
 import { _CS_SOURCE_LANG } from '../features/cutstrip/i18n.js';
@@ -74,7 +74,7 @@ ${_mfgSpecDigest(spec)}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}
     throw new Error(_csProviderHint('Anthropic', m)); }
   const d=await resp.json();
-  const raw=(d.content&&d.content[0]&&d.content[0].text)||'';
+  const raw=_aiText(d);
   // _csSalvageJson answers {obj, partial}, not the object itself — reading
   // .steps off the wrapper found nothing, so the sequence always came back empty.
   const obj=(_csSalvageJson(raw)||{}).obj || {};

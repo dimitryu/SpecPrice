@@ -85,12 +85,47 @@ export async function _aiFetch(opts, timeoutMs){
 }
 
 export let _dbgLastAI='';
+// The text of a reply: every text block, in order. A reply does not always
+// start with its text — a model may put other blocks first (tool use,
+// thinking) — so reading only content[0] can come back empty.
+export function _aiText(data){
+  return ((data&&data.content)||[]).filter(b=>b&&b.type==='text'&&typeof b.text==='string').map(b=>b.text).join('\n');
+}
+// The end of the JSON value that starts at s[i] ('[' or '{'), strings and
+// escapes respected; -1 when it never closes.
+export function _jsonEnd(s, i){
+  const open=s[i], close=open==='['?']':'}'; let depth=0, str=false;
+  for(let k=i;k<s.length;k++){
+    const ch=s[k];
+    if(str){ if(ch==='\\') k++; else if(ch==='"') str=false; continue; }
+    if(ch==='"') str=true;
+    else if(ch==='['||ch==='{') depth++;
+    else if(ch===']'||ch==='}'){ depth--; if(depth===0) return ch===close ? k : -1; }
+  }
+  return -1;
+}
+// The JSON array in a reply that may also hold prose, a fenced block, or
+// bracketed words ("[see note 3]") before it. The first array that parses wins;
+// an array of objects is preferred over one of plain values.
 export function _parseAIJson(raw){
   _dbgLastAI=raw;
-  const m=raw.match(/\[[\s\S]*\]/);
-  if(!m){console.warn('[AI] no JSON array. Raw:',raw.slice(0,300));return[];}
-  try{return JSON.parse(m[0]);}
-  catch(e){console.warn('[AI] parse error:',e.message,'at:',m[0].slice(0,200));return[];}
+  const s=String(raw||'');
+  const fenced=/```(?:json)?\s*([\s\S]*?)```/i.exec(s);
+  const sources=fenced ? [fenced[1], s] : [s];
+  let plain=null;
+  for(const src of sources){
+    for(let i=src.indexOf('['); i>=0; i=src.indexOf('[', i+1)){
+      const end=_jsonEnd(src, i);
+      if(end<0) continue;
+      let v; try{ v=JSON.parse(src.slice(i, end+1)); }catch{ continue; }
+      if(!Array.isArray(v)) continue;
+      if(!v.length || v.some(x=>x&&typeof x==='object')) return v;
+      if(!plain) plain=v;
+    }
+  }
+  if(plain) return plain;
+  console.warn('[AI] no JSON array. Raw:', s.slice(0,300));
+  return [];
 }
 
 // Retries a fetch() once after a short delay if it fails at the network

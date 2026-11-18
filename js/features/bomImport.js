@@ -90,7 +90,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
     };
 
     try {
-      let extractedRows = [];
+      let extractedRows = [], _bomDiag = [];
       let _pdfText='', _pdfTextLen=0, _pdfImages=[], _imgForTb=null, _pdfLayout='';
       if(isXls){
         setMsg('Reading spreadsheet…', 20);
@@ -119,7 +119,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
         // See _bomFromPDF: the text layer when it holds a parts list, and
         // otherwise the table located on the sheet and read at full sharpness.
         const r=await _bomFromPDF(file, setMsg);
-        extractedRows=r.rows; _pdfImages=r.pageImages; _pdfText=r.pdfText; _pdfTextLen=r.textLen; _pdfLayout=r.layoutText||'';
+        extractedRows=r.rows; _bomDiag=r.diag||[]; _pdfImages=r.pageImages; _pdfText=r.pdfText; _pdfTextLen=r.textLen; _pdfLayout=r.layoutText||'';
       } else {
         setMsg('Encoding image…', 20);
         const {b64, mimeType} = await encodeImage(file);
@@ -155,7 +155,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
       }
 
       if(!extractedRows.length){
-        errors.push(`"${file.name}" — no BOM rows detected`);
+        errors.push(`"${file.name}" — no BOM rows detected${_bomDiag.length?` (${_bomDiag.join('; ')})`:''}`);
       } else {
         allRows.push(...extractedRows);
       }
@@ -174,7 +174,9 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
     _ringEl.textContent='✓';}
 
   if(!allRows.length){
-    body.innerHTML = `<p style="color:var(--muted);margin-top:10px">No BOM rows were detected in ${files.length>1?`any of the ${files.length} files`:'this file'}.</p>`;
+    body.innerHTML = `<p style="color:var(--muted);margin-top:10px">No BOM rows were detected in ${files.length>1?`any of the ${files.length} files`:'this file'}.</p>
+      ${errors.length?`<div class="sd-import-why" style="margin-top:8px;font-size:12px;line-height:1.5;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:8px 10px;color:#7F1D1D">
+        <strong>What happened:</strong><ul style="margin:4px 0 0 18px;padding:0">${errors.map(m=>`<li>${esc(m)}</li>`).join('')}</ul></div>`:''}`;
     foot.innerHTML = `<button class="btn btn-ghost" id="modal-cancel-err">Close</button>`;
     document.getElementById('modal-cancel-err')?.addEventListener('click',closeModal);
     return;

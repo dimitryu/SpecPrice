@@ -180,7 +180,7 @@ export async function handleSDFiles(files){
     };
 
     try {
-      let extractedRows=[];
+      let extractedRows=[], _bomDiag=[];
       let _pdfText='', _pdfTextLen=0, _pdfImages=[], _pdfLayout='';
       let _procIsImage=false, _procImgData=null; // whichever image (if any) ended up being used — reused below for the cable-process analysis
 
@@ -212,7 +212,7 @@ export async function handleSDFiles(files){
       } else if(isPDF){
         // See _bomFromPDF — shared with the RFQ import.
         const r=await _bomFromPDF(file, setM);
-        extractedRows=r.rows; _pdfImages=r.pageImages; _pdfText=r.pdfText; _pdfTextLen=r.textLen; _pdfLayout=r.layoutText||'';
+        extractedRows=r.rows; _bomDiag=r.diag||[]; _pdfImages=r.pageImages; _pdfText=r.pdfText; _pdfTextLen=r.textLen; _pdfLayout=r.layoutText||'';
         const _bomPageIdx=_findBOMPageIndex(r.pageTexts);
         if(r.fromImage && r.imgData){ _procIsImage=true; _procImgData=r.imgData; }
         // Fall back to the detected BOM sheet's own image (or page 1 if none
@@ -357,7 +357,7 @@ export async function handleSDFiles(files){
       }
 
       if(!extractedRows.length){
-        errors.push(`"${file.name}" — no BOM rows detected`);
+        errors.push(`"${file.name}" — no BOM rows detected${_bomDiag.length?` (${_bomDiag.join('; ')})`:''}`);
       } else {
         allRows.push(...extractedRows);
       }
@@ -373,7 +373,10 @@ export async function handleSDFiles(files){
     _ringEl.textContent='✓';}
 
   if(!allRows.length){
-    body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No BOM rows were detected in ${files.length>1?`any of the ${files.length} files`:'this file'}.</p>`;
+    // What each file's reading did stays on screen (a toast is gone in seconds).
+    body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No BOM rows were detected in ${files.length>1?`any of the ${files.length} files`:'this file'}.</p>
+      ${errors.length?`<div class="sd-import-why" style="margin-top:8px;font-size:12px;line-height:1.5;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:8px 10px;color:#7F1D1D">
+        <strong>What happened:</strong><ul style="margin:4px 0 0 18px;padding:0">${errors.map(m=>`<li>${esc(m)}</li>`).join('')}</ul></div>`:''}`;
     foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
     return;
   }

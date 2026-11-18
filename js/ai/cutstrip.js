@@ -1,5 +1,5 @@
 import { S } from '../core/state.js';
-import { _AI_NO_KEY, _CS_MAX_REPLY_CHARS, _aiFetch, _aiReady, _csComplete, _csDeadProviders, _csIsKeyError, _csLoopy, _csModel, _csModelRejected, _csProviderHint, _csSalvageJson, _csStitch, _csTrimPrefill } from './client.js';
+import { _AI_NO_KEY, _CS_MAX_REPLY_CHARS, _aiFetch, _aiReady, _aiText, _csComplete, _csDeadProviders, _csIsKeyError, _csLoopy, _csModel, _csModelRejected, _csProviderHint, _csSalvageJson, _csStitch, _csTrimPrefill } from './client.js';
 import { logSystemAudit } from '../core/audit.js';
 import { _CS_CABLE_RE, _CS_CUT_MODEL, _csEndLegs, _csNormalize, _csProposeStrips, _csSyncCutLength } from '../domain/cutstrip.js';
 import { _CS_SOURCE_LANG } from '../features/cutstrip/i18n.js';
@@ -732,7 +732,7 @@ export async function _csAnthropic(text, isImage, imgData, lang){
       if(_csModelRejected(resp.status, m)){ S._csModelDown=true; return ask(msgs, temp); }
       throw new Error(_csProviderHint('Anthropic', m));}
     const d=await resp.json();
-    return {text:(d.content&&d.content[0]&&d.content[0].text)||'', stop:d.stop_reason};
+    return {text:_aiText(d), stop:d.stop_reason};
   };
 
   // A long structured answer can outrun one reply. Rather than throwing the

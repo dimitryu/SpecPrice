@@ -1,5 +1,5 @@
 import { S } from '../core/state.js';
-import { _AI_NO_KEY, _aiFetch, _aiReady, _csModel, _csModelRejected, _parseAIJson } from './client.js';
+import { _AI_NO_KEY, _aiFetch, _aiReady, _aiText, _csModel, _csModelRejected, _dbgLastAI, _jsonEnd, _parseAIJson } from './client.js';
 import { logSystemAudit } from '../core/audit.js';
 import { extractPDFPages } from '../io/pdf.js';
 
@@ -34,8 +34,9 @@ a pin-out or wiring table, and a label table are NOT a parts list.
 
 Return ONE JSON object and nothing else:
 {"found":true,"box":[x0,y0,x1,y1],"rows":<about how many data rows>}
-where the box is the table's outline as fractions of the image (0 = left/top, 1 = right/bottom),
-including its header row. If there is no parts list on this sheet: {"found":false}`;
+where the box is the table's outline as FRACTIONS of the image (0 = left/top, 1 = right/bottom —
+never pixels), including its header row, e.g. {"found":true,"box":[0.03,0.77,0.64,0.97],"rows":7}.
+If there is no parts list on this sheet: {"found":false}`;
 export async function _bomLocate(b64){
   const resp=await _aiFetch({
     body:JSON.stringify({model:_csModel(), max_tokens:300, temperature:0, messages:[{role:'user',content:[
@@ -47,17 +48,26 @@ export async function _bomLocate(b64){
     if(_csModelRejected(resp.status,m)){ S._csModelDown=true; return _bomLocate(b64); }
     throw new Error(m); }
   const d=await resp.json();
-  return _bomParseLocate((d.content&&d.content[0]&&d.content[0].text)||'');
+  return _bomParseLocate(_aiText(d));
 }
 export function _bomParseLocate(text){
-  const m=/\{[\s\S]*\}/.exec(String(text||''));
-  if(!m) return null;
-  let o; try{ o=JSON.parse(m[0]); }catch{ return null; }
+  // The first {...} that parses and says "found" — prose or a second object
+  // around it does not matter.
+  const s=String(text||''); let o=null;
+  for(let i=s.indexOf('{'); i>=0 && !o; i=s.indexOf('{', i+1)){
+    const end=_jsonEnd(s, i);
+    if(end<0) continue;
+    try{ const v=JSON.parse(s.slice(i, end+1)); if(v && typeof v==='object' && 'found' in v) o=v; }catch{}
+  }
   if(!o || o.found!==true || !Array.isArray(o.box) || o.box.length!==4) return null;
   const b=o.box.map(Number);
   if(b.some(v=>!Number.isFinite(v))) return null;
-  // Some answers come back in percent rather than fractions.
+  // Some answers come back in percent rather than fractions. Anything larger
+  // (pixels of an image size we cannot know) is not used: the whole sheet is
+  // read instead.
   const box = b.some(v=>v>1.5) ? b.map(v=>v/100) : b;
+  if(box.some(v=>v<-0.02 || v>1.02)) return null;
+  if(!(box[2]>box[0] && box[3]>box[1])) return null;
   return {box, rows:Number(o.rows)||0};
 }
 // The whole PDF path of a BOM import, shared by both screens that import one.
@@ -75,12 +85,22 @@ export async function _bomFromPDF(file, setMsg){
   const bomPageSparse=bomPageIdx>=0 && (pageTexts[bomPageIdx]||'').trim().length<400;
   const hasHeader=_textHasBomHeader(pageTexts);
   let rows=[], page=-1, how='';
+  // What each step did — shown to the user when no rows come out, and logged,
+  // so a drawing that fails says why instead of just "no BOM rows".
+  const diag=[]; let lastErr=null;
+  const say=t=>{ diag.push(t); console.log('[BOM]', t); };
+  const reply=()=>{ const r=String(_dbgLastAI||'').replace(/\s+/g,' ').trim(); return r ? ` — AI replied: "${r.slice(0,140)}${r.length>140?'…':''}"` : ''; };
+  const read=async(label, ...args)=>{
+    try{ const got=await aiExtractBOM(...args); if(!got.length) say(`${label}: 0 rows${reply()}`); return got; }
+    catch(e){ lastErr=e; say(`${label}: AI error — ${e.message}`); return []; }
+  };
+  if(!(textLen>50 && hasHeader)) say(textLen>50 ? 'PDF text has no parts-list header (the table is drawn, not text) — reading the picture' : 'PDF has no text layer — reading the picture');
 
   // 1. The text layer, when it actually holds a parts list: exact and quick.
   let textRows=0;
   if(textLen>50 && hasHeader){
     setMsg('Sending text to AI…', 40);
-    rows=await aiExtractBOM(layoutText, false, null, file.name);
+    rows=await read('Text layer', layoutText, false, null, file.name);
     if(rows.length){ how='text'; page=bomPageIdx; }
     // Count the table's own rows in the text. If the AI returned fewer, it
     // missed some: read the table from the picture as well and keep the
@@ -100,12 +120,13 @@ export async function _bomFromPDF(file, setMsg){
       if(!pageImages[pi]) continue;
       setMsg(`Looking for the parts list on page ${pi+1}/${pageImages.length}…`, 50+Math.round(30*k/order.length));
       let loc=null;
-      try{ loc=await _bomLocate(pageImages[pi]); }catch(e){ console.warn('[BOM] locate', e.message); }
-      if(!loc) continue;
+      try{ loc=await _bomLocate(pageImages[pi]); }catch(e){ lastErr=e; say(`Page ${pi+1}: locating the parts list failed — ${e.message}`); continue; }
+      if(!loc){ say(`Page ${pi+1}: parts list not located${reply()}`); continue; }
+      say(`Page ${pi+1}: parts list located at [${loc.box.map(v=>(+v).toFixed(2)).join(', ')}]`);
       setMsg(`Reading the parts list on page ${pi+1}…`, 60+Math.round(30*k/order.length));
       const bands=await crop(pi, loc.box);
       const lists=[];
-      for(const b64 of bands) lists.push(await aiExtractBOM('', true, {b64, mimeType:'image/jpeg'}, file.name));
+      for(const b64 of bands) lists.push(await read(`Page ${pi+1} parts list`, '', true, {b64, mimeType:'image/jpeg'}, file.name));
       const got=_bomMergeBands(lists);
       if(got.length && _partRows(got)>=_partRows(rows)){ rows=got; page=pi; how='region'; }
     }
@@ -115,7 +136,7 @@ export async function _bomFromPDF(file, setMsg){
         const pi=order[k];
         if(!pageImages[pi]) continue;
         setMsg(`Vision analysis: page ${pi+1}/${pageImages.length}…`, 85);
-        const got=await aiExtractBOM('', true, {b64:pageImages[pi], mimeType:'image/jpeg'}, file.name);
+        const got=await read(`Page ${pi+1} whole sheet`, '', true, {b64:pageImages[pi], mimeType:'image/jpeg'}, file.name);
         if(got.length){ rows=got; page=pi; how='page'; break; }
       }
     }
@@ -124,12 +145,16 @@ export async function _bomFromPDF(file, setMsg){
   //    be a table the header test did not catch.
   if(!rows.length && textLen>50 && !hasHeader){
     setMsg('Sending text to AI…', 90);
-    rows=await aiExtractBOM(layoutText, false, null, file.name);
+    rows=await read('Text layer (no header)', layoutText, false, null, file.name);
     if(rows.length) how='text';
   }
-  logSystemAudit('drawing_bom_pdf',{filename:file.name, how, page:page+1, rows:rows.length, text_header:hasHeader, text_rows:textRows},true);
+  if(!_aiReady()) say('AI is not set up');
+  logSystemAudit('drawing_bom_pdf',{filename:file.name, how, page:page+1, rows:rows.length, text_header:hasHeader, text_rows:textRows,
+    ...(rows.length?{}:{diag:diag.join(' | ').slice(0,1500)})}, rows.length>0);
+  // Every AI call failed: that error is the answer, not "no rows".
+  if(!rows.length && lastErr && diag.every(d=>/AI error|failed —|PDF (text|has)|AI is not set up/.test(d))) throw lastErr;
   const imgIdx = page>=0 ? page : (bomPageIdx>=0 ? bomPageIdx : 0);
-  return {rows, pageTexts, pageImages, pdfText, layoutText, textLen,
+  return {rows, diag, pageTexts, pageImages, pdfText, layoutText, textLen,
           imgData: pageImages[imgIdx] ? {b64:pageImages[imgIdx], mimeType:'image/jpeg'} : null,
           fromImage: how==='region' || how==='page'};
 }
@@ -417,7 +442,7 @@ export async function _anthropicBOM(text, isImage, imgData, filename, sourceType
     if(isImage && _csModelRejected(resp.status,m)){ S._csModelDown=true; return _anthropicBOM(text, isImage, imgData, filename, sourceType); }
     throw new Error(m);}
   const data=await resp.json();
-  return _parseAIJson(data.content[0].text.trim());
+  return _parseAIJson(_aiText(data).trim());
 }
 
 
@@ -465,7 +490,7 @@ export async function aiReadTitleBlock(text, isImage, imgData){
       max_tokens:400, temperature:0, messages})});
     if(!resp.ok) throw new Error('Anthropic error '+resp.status);
     const data=await resp.json();
-    const tb=_parseTitleBlockJson(data.content[0].text);
+    const tb=_parseTitleBlockJson(_aiText(data));
     logSystemAudit('drawing_title_block',{found:!!(tb&&(tb.drawing_number||tb.title||tb.revision)),ms:Date.now()-_t0},true);
     return tb;
   }catch(e){

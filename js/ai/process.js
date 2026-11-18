@@ -1,4 +1,4 @@
-import { _aiFetch, _aiReady } from './client.js';
+import { _aiFetch, _aiReady, _aiText } from './client.js';
 import { logSystemAudit } from '../core/audit.js';
 
 // ── Sales Desk only: AI cable-manufacturing-process analysis ─────────────────
@@ -118,7 +118,7 @@ export async function _anthropicCableProcess(text, isImage, imgData, rowsList, h
   if(!resp.ok){let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
   const data=await resp.json();
-  return _parseCableProcessJson(data.content[0].text.trim());
+  return _parseCableProcessJson(_aiText(data).trim());
 }
 export async function aiAnalyzeCableProcess(text, isImage, imgData, rowsList, hasDrawing=true){
   if(!rowsList || !_aiReady()) return null;
@@ -173,7 +173,7 @@ export async function _anthropicNotes(text, isImage, imgData){
   if(!resp.ok){let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
   const data=await resp.json();
-  return _parseNotesJson(data.content[0].text.trim());
+  return _parseNotesJson(_aiText(data).trim());
 }
 export async function aiExtractDrawingNotes(text, isImage, imgData){
   if(!_aiReady()) return [];
