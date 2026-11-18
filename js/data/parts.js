@@ -216,8 +216,8 @@ export async function saveBOMToPartStock(rows, rfqName='', onProgress){
         if(r.revision && !d.revision) patch.revision=r.revision;
         if(r.tool_for && !d.tool_for) patch.tool_for=r.tool_for;
         // A tool priced during the import keeps its prices and links.
-        for(const k of ['mouser_price','digikey_price']) if(+r[k]>0 && !(+d[k]>0)) patch[k]=+r[k];
-        for(const k of ['mouser_url','digikey_url','mouser_stock','digikey_stock']) if(r[k] && !d[k]) patch[k]=r[k];
+        for(const k of ['mouser_price','digikey_price','onlinecomp_price']) if(+r[k]>0 && !(+d[k]>0)) patch[k]=+r[k];
+        for(const k of ['mouser_url','digikey_url','onlinecomp_url','mouser_stock','digikey_stock','onlinecomp_stock','onlinecomp_uom']) if(r[k] && !d[k]) patch[k]=r[k];
         // Customer-supplied records what the latest import said; it is never
         // read back into a quote (that is decided per quote).
         if(r.customer_supplied!=null && !!r.customer_supplied!==!!d.customer_supplied) patch.customer_supplied=!!r.customer_supplied;
@@ -243,6 +243,7 @@ export async function saveBOMToPartStock(rows, rfqName='', onProgress){
           customer_supplied:!!r.customer_supplied,
           ...(+r.mouser_price>0?{mouser_price:+r.mouser_price, mouser_url:r.mouser_url||'', mouser_stock:r.mouser_stock||''}:{}),
           ...(+r.digikey_price>0?{digikey_price:+r.digikey_price, digikey_url:r.digikey_url||'', digikey_stock:r.digikey_stock||''}:{}),
+          ...(+r.onlinecomp_price>0?{onlinecomp_price:+r.onlinecomp_price, onlinecomp_url:r.onlinecomp_url||'', onlinecomp_stock:r.onlinecomp_stock||'', onlinecomp_uom:r.onlinecomp_uom||''}:{}),
           alt_mpns:(r.alt_mpns||[]).length>1?r.alt_mpns:[],
           est_price:r.price?(parseFloat(r.price)||''):'', stock:'', price_description:'',
           rfq_names: rfqName ? [rfqName] : [],

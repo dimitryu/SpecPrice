@@ -36,6 +36,8 @@ export const _SD_DEFAULT_COLS=[
   {k:'mouser_stock',   l:'Mouser Stock',    w:'85px'},
   {k:'digikey_price',  l:'DigiKey Cost',    w:'95px'},
   {k:'digikey_stock',  l:'DigiKey Stock',   w:'85px'},
+  {k:'onlinecomp_price', l:'Online Comp. Cost', w:'100px'},
+  {k:'onlinecomp_stock', l:'Online Comp. Stock', w:'90px'},
   {k:'priority_price', l:'Priority Cost',  w:'95px'},
   {k:'customer_supplied', l:'Cust. Supplied', w:'70px'},
   {k:'total',          l:'Part Cost',       w:'85px'},
@@ -139,9 +141,11 @@ export function _sdCellHTML(k,r,i){
     // dearest red — so a price means the same thing on both screens.
     case 'priority_price':
     case 'mouser_price':
-    case 'digikey_price': return _priceCellHTML(r,k);
+    case 'digikey_price':
+    case 'onlinecomp_price': return _priceCellHTML(r,k);
     case 'mouser_stock':
-    case 'digikey_stock': return _stockCellHTML(r,k);
+    case 'digikey_stock':
+    case 'onlinecomp_stock': return _stockCellHTML(r,k);
     // Part Cost is always editable — type a number to set/correct it directly
     // (see _sdRecalcTotal). Highlighted cyan when no source has a price and
     // there's no manual override yet, so missing-price rows are easy to spot.
@@ -173,8 +177,8 @@ export let _sdFilterQ='';
 // Independent sort state for the Sales Desk table (separate from Part Stock's
 // sortCol/sortAsc, which is a different table with different columns).
 export let _sdSortCol=null, _sdSortAsc=true;
-export const _SD_NUMERIC_COLS=new Set(['qty','priority_price','mouser_price','digikey_price',
-                                'mouser_stock','digikey_stock','total','labor_time']);
+export const _SD_NUMERIC_COLS=new Set(['qty','priority_price','mouser_price','digikey_price','onlinecomp_price',
+                                'mouser_stock','digikey_stock','onlinecomp_stock','total','labor_time']);
 // The 'labor_time' column now displays/edits the row's final total (see
 // _sdCellHTML/_sdRecalcLaborTotal), stored on r.labor_total, not r.labor_time
 // itself — sort on the value actually shown to the user.
@@ -279,6 +283,7 @@ export function _sdSearchUrls(pn){
   return {
     mouser:   `https://www.mouser.com/c/?q=${q}`,
     digikey:  `https://www.digikey.com/en/products/result?keywords=${q}`,
+    onlinecomp:`https://www.onlinecomponents.com/en/keywordsearch?text=${q}`,
     findchips:`https://www.findchips.com/search/${q}`,
   };
 }
@@ -286,7 +291,9 @@ export function _sdSearchUrls(pn){
 export function _sdTraceFields(p){
   if(!p) return {};
   return {mouser_url:p.mouser_url||'', mouser_brk:p.mouser_brk||0,
-          digikey_url:p.digikey_url||'', digikey_brk:p.digikey_brk||0};
+          digikey_url:p.digikey_url||'', digikey_brk:p.digikey_brk||0,
+          onlinecomp_url:p.onlinecomp_url||'', onlinecomp_brk:p.onlinecomp_brk||0, onlinecomp_uom:p.onlinecomp_uom||'',
+          onlinecomp_stock:p.onlinecomp_stock||'', onlinecomp_match:p.onlinecomp_match||''};
 }
 // {kind, label, unit, brk, url, verified}: what Part Cost is using right now.
 export function _sdPriceSource(r){
@@ -303,6 +310,9 @@ export function _sdPriceSource(r){
   if(src==='digikey_price')
     return {kind:'digikey', label:'DigiKey', unit:+r.digikey_price||0, brk:r.digikey_brk||0, verified:true,
             url:_sdSafeUrl(r.digikey_url)||(pn?search.digikey:'')};
+  if(src==='onlinecomp_price')
+    return {kind:'onlinecomp', label:'Online Components', unit:+r.onlinecomp_price||0, brk:r.onlinecomp_brk||0, verified:true,
+            url:_sdSafeUrl(r.onlinecomp_url)||(pn?search.onlinecomp:'')};
   if(src==='priority_price')
     return {kind:'priority', label:'Priority (our purchase price)', unit:+r.priority_price||0, verified:true, url:''};
   if(src==='nominal')
@@ -319,7 +329,7 @@ export function _SD_COST_LEGEND_HTML(){
   <div class="sd-cost-legend" style="padding:5px 0;border-top:1px dashed var(--border);font-size:11px;color:var(--muted);
        display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center">
     <span>Part Cost tag:</span>
-    <span>${c('Mouser / DigiKey / Priority','#166534')} the cheapest supplier price</span>
+    <span>${c('Mouser / DigiKey / Online Comp. / Priority','#166534')} the cheapest supplier price</span>
     <span>${c(`nominal`,'#b45309')} a label/marker with no supplier price — a fixed $${SD_NOMINAL_LABEL_PRICE.toFixed(2)} per piece; type a price if you have one</span>
     <span>${c('AI est.','#b45309')} the AI's estimate, not verified</span>
     <span>${c('cust. supplied','#1E40AF')} the customer supplies it — $0</span>
@@ -330,7 +340,7 @@ export function _SD_COST_LEGEND_HTML(){
 }
 export function _sdToolSourceChip(r){
   const s=_sdPriceSource(r);
-  const short={mouser:'Mouser',digikey:'DigiKey',priority:'Priority',ai:'AI est.',nominal:'nominal',customer:'cust. supplied',manual:'manual',none:'no price'}[s.kind];
+  const short={mouser:'Mouser',digikey:'DigiKey',onlinecomp:'Online Comp.',priority:'Priority',ai:'AI est.',nominal:'nominal',customer:'cust. supplied',manual:'manual',none:'no price'}[s.kind];
   const color=s.verified?'#166534':'#b45309';
   const body=s.url
     ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" style="color:${color};text-decoration:underline">${short} ↗</a>`
@@ -341,7 +351,7 @@ export function _sdToolSourceChip(r){
 export function _sdPriceSourceText(r){
   const s=_sdPriceSource(r);
   const $=v=>'$'+(+v||0).toFixed(2);
-  if(s.kind==='mouser'||s.kind==='digikey')
+  if(s.kind==='mouser'||s.kind==='digikey'||s.kind==='onlinecomp')
     return `${s.label}: ${$(s.unit)} per unit${s.brk?` (price break ${s.brk}+)`:''}`;
   if(s.kind==='priority') return `${s.label}: ${$(s.unit)} per unit`;
   if(s.kind==='customer') return 'Customer-supplied material: not purchased, priced at $0.00 in this quote';
@@ -362,11 +372,12 @@ export function _sdToolLinksHTML(r){
     // Each distributor that has the tool: its own price, linked to its product
     // page. One that has no price for it: a search for the tool's number there.
     // The source Part Cost is using is in bold.
-    for(const [k,label] of [['mouser','Mouser'],['digikey','DigiKey']]){
+    for(const [k,label] of [['mouser','Mouser'],['digikey','DigiKey'],['onlinecomp','Online Comp.']]){
       const price=+r[k+'_price']||0, url=_sdSafeUrl(r[k+'_url']), brk=+r[k+'_brk']||0;
       if(price) out.push(a(url||q[k], `${label} $${price.toFixed(2)}${url?' ↗':''}`,
         `${label}: $${price.toFixed(2)} per unit${brk?` (break ${brk}+)`:''}${url?' — opens the product page':' — search'}`, s.kind===k));
-      else out.push(a(q[k], label, `Search ${label} for ${r.part_number}`));
+      // A vendor not set up for this company is left out rather than shown as a bare search.
+      else if(k!=='onlinecomp' || r.onlinecomp_match) out.push(a(q[k], label, `Search ${label} for ${r.part_number}`));
     }
     out.push(a(q.findchips,'🔍 FindChips','Compare prices across distributors (FindChips)'));
   } else if(r.tool_for){
@@ -1065,7 +1076,7 @@ export async function renderSalesDesk(){
           customer_supplied:false,
           pack_ml:parseFloat(p.pack_ml)>0 ? +p.pack_ml : (_parsePackMl(`${p.description||''} ${p.part_number||''}`)||''),
           qty, unit:dw.unit||p.unit||p.units||'pcs',priority_price:parseFloat(p.priority_price)||0,
-          mouser_price:parseFloat(p.mouser_price)||'', digikey_price:parseFloat(p.digikey_price)||'',
+          mouser_price:parseFloat(p.mouser_price)||'', digikey_price:parseFloat(p.digikey_price)||'', onlinecomp_price:parseFloat(p.onlinecomp_price)||'',
           ..._sdTraceFields(p),
           total:0, labor_time:'', labor_total:0};
         _sdRecalcRow(item);
@@ -1193,7 +1204,9 @@ export function _sdSaveToDBModal(after){
         mouser_price:'Mouser price',digikey_price:'DigiKey price',priority_price:'Priority price',mouser_stock:'Mouser stock',
         digikey_stock:'DigiKey stock',est_price:'Estimate',customer_supplied:'Customer supplied',mouser_url:'Mouser link',
         digikey_url:'DigiKey link',mouser_brk:'Mouser break',digikey_brk:'DigiKey break',mouser_match:'Mouser match',
-        digikey_match:'DigiKey match',mouser_mpn:'Mouser P/N',digikey_mpn:'DigiKey P/N'};
+        digikey_match:'DigiKey match',mouser_mpn:'Mouser P/N',digikey_mpn:'DigiKey P/N',
+        onlinecomp_price:'Online Comp. price',onlinecomp_stock:'Online Comp. stock',onlinecomp_url:'Online Comp. link',onlinecomp_brk:'Online Comp. break',
+        onlinecomp_match:'Online Comp. match',onlinecomp_mpn:'Online Comp. P/N',onlinecomp_uom:'Online Comp. unit'};
       const lines=res.changes.slice(0,60).map(c=>`<li><strong>${esc(c.pn)}</strong> — ${c.created?'<span style="color:#1B6B3A">new part created</span>'
         :esc(c.fields.map(f=>FIELD_NAMES[f]||f).join(', '))+(c.revived?' <span style="color:#1B6B3A">(restored from the recycle bin)</span>':'')}</li>`).join('');
       body.insertAdjacentHTML('beforeend',`

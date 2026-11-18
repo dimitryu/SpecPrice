@@ -459,6 +459,8 @@ export async function handleSDFiles(files){
           tool_for: _isTool ? (r.tool_for||_lastConnector) : '',
           digikey_price:match?parseFloat(match.digikey_price)||'':'',
           ...(_isTool && +r.digikey_price>0 ? {digikey_price:+r.digikey_price} : {}),
+          onlinecomp_price:match?parseFloat(match.onlinecomp_price)||'':'',
+          ...(_isTool && +r.onlinecomp_price>0 ? {onlinecomp_price:+r.onlinecomp_price} : {}),
           tool_url:r.tool_url||'', tool_in_db:!!r.tool_in_db,
           // An adhesive's bottle size: the Database's, else what the drawing says ("LOCTITE 243 50ML").
           pack_ml: parseFloat(match?.pack_ml)>0 ? +match.pack_ml : (_parsePackMl(`${r.description||''} ${r.part_number||''}`)||''),
@@ -511,9 +513,10 @@ export async function handleSDFiles(files){
 // The prices and links a tool row brought from the import (only what is set).
 export function _sdToolRowPrices(r){
   const out={};
-  for(const k of ['mouser_price','digikey_price']) if(+r[k]>0) out[k]=+r[k];
-  for(const k of ['mouser_url','digikey_url','mouser_stock','digikey_stock','mouser_match','digikey_match','mouser_mpn','digikey_mpn'])
+  for(const k of ['mouser_price','digikey_price','onlinecomp_price']) if(+r[k]>0) out[k]=+r[k];
+  for(const k of ['mouser_url','digikey_url','onlinecomp_url','mouser_stock','digikey_stock','onlinecomp_stock','mouser_match','digikey_match','onlinecomp_match',
+                  'mouser_mpn','digikey_mpn','onlinecomp_mpn','onlinecomp_uom'])
     if(r[k]!=null && r[k]!=='') out[k]=r[k];
-  for(const k of ['mouser_brk','digikey_brk']) if(+r[k]>0) out[k]=+r[k];
+  for(const k of ['mouser_brk','digikey_brk','onlinecomp_brk']) if(+r[k]>0) out[k]=+r[k];
   return out;
 }

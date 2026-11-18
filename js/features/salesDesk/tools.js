@@ -47,7 +47,7 @@ function _dbPart(pn, parts){
 export function _toolPriceFields(r){
   if(!r) return {};
   const f={};
-  for(const [k,v] of [['mouser',r.mouser],['digikey',r.digikey]]){
+  for(const [k,v] of [['mouser',r.mouser],['digikey',r.digikey],['onlinecomp',r.onlinecomp]]){
     if(!v) continue;
     f[k+'_price']=v.price>0?v.price:'';
     f[k+'_stock']=String(parseInt(v.stock,10)||0);
@@ -55,6 +55,7 @@ export function _toolPriceFields(r){
     f[k+'_brk']=parseInt(v.breakQty,10)||0;
     f[k+'_match']=!(v.price>0)?'noprice':(v.exact?'exact':'approx');
     f[k+'_mpn']=v.mpn||'';
+    if(k==='onlinecomp') f.onlinecomp_uom=v.uom||'';
   }
   const mfr=(r.best&&r.best.manufacturer)||'';
   if(mfr) f._mfr=mfr;
@@ -123,11 +124,11 @@ export async function _findToolsFor(rows, onStatus){
   const toPrice=new Map();
   for(const list of plan.values()) for(const x of list){
     const db=_dbPart(x.spec.part_number, parts);
-    const priced=db && ((+db.mouser_price>0)||(+db.digikey_price>0)||(+db.priority_price>0));
+    const priced=db && ((+db.mouser_price>0)||(+db.digikey_price>0)||(+db.onlinecomp_price>0)||(+db.priority_price>0));
     if(!priced && x.spec.part_number) toPrice.set(_key(x.spec.part_number), x.spec);
   }
   if(toPrice.size){
-    if(onStatus) onStatus(`Checking the price of ${toPrice.size} tool(s) at Mouser / DigiKey…`);
+    if(onStatus) onStatus(`Checking the price of ${toPrice.size} tool(s) at the distributors…`);
     const got=new Map();
     for(const [k,spec] of toPrice){
       try{ got.set(k, _toolPriceFields(await lookupPartPrices(spec.part_number, 1, spec.description||''))); }
@@ -157,8 +158,10 @@ function _toolFields(x, conn, parts){
     priority_price: db ? (parseFloat(db.priority_price)||0) : 0,
     mouser_price: db&&+db.mouser_price>0 ? +db.mouser_price : (p.mouser_price||''),
     digikey_price: db&&+db.digikey_price>0 ? +db.digikey_price : (p.digikey_price||''),
+    onlinecomp_price: db&&+db.onlinecomp_price>0 ? +db.onlinecomp_price : (p.onlinecomp_price||''),
   };
-  for(const k of ['mouser_url','digikey_url','mouser_brk','digikey_brk','mouser_stock','digikey_stock','mouser_match','digikey_match','mouser_mpn','digikey_mpn'])
+  for(const k of ['mouser_url','digikey_url','onlinecomp_url','mouser_brk','digikey_brk','onlinecomp_brk','mouser_stock','digikey_stock','onlinecomp_stock',
+                  'mouser_match','digikey_match','onlinecomp_match','mouser_mpn','digikey_mpn','onlinecomp_mpn','onlinecomp_uom'])
     out[k]=(db&&db[k])||p[k]||(k.endsWith('_brk')?0:'');
   if(!_sdIsToolRow(out)) out.description=`TOOL — ${out.description}`;
   return out;

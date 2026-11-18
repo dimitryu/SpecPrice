@@ -601,6 +601,59 @@ async function lookupDigiKey(pn, qty, clientId, clientSecret, desc) {
                                           price: (readDigiKeyProduct(c.item, qty, m.exact) || {}).price || 0 })).slice(0, 8) };
 }
 
+/* Online Components lookup — their Inventory & Pricing API.
+ * GET https://api.onlinecomponents.com/wapi/v1/{ApiName}/{Query}/{InStockOnly}/{ExactMatch}/{ResultsCount}/{ApiKey}
+ * (OpenAPI: /wapi/docs/v1/docs.json). The key travels in the path, so it is
+ * never logged — errors below are reported without the URL. Exact match is
+ * off: our matchPart() decides, as with the other vendors, so a part number
+ * written with other punctuation is still found and a neighbour is not.
+ * Prices come back as strings in `price_breaks` [{pricebreak, pricelist}],
+ * stock in `quantityAvailable`, the unit in `unitOfMeasure` (EA, FT, M …). */
+const OC_BASE = 'https://api.onlinecomponents.com/wapi/v1';
+const OC_DEFAULT_API_NAME = 'cgpriceavailability';
+function readOnlineCompPart(part, qty, exact) {
+  const breaks = (part.price_breaks || []).map(b => ({ qty: parseInt(b.pricebreak, 10) || 0, price: numFrom(b.pricelist) }));
+  const best = pickNearestBreak(breaks, qty);
+  const stock = parseInt(String(part.quantityAvailable || '').replace(/[^\d]/g, ''), 10) || 0;
+  return {
+    price: best ? best.price : 0,
+    currency: part.currency || 'USD',
+    breakQty: best ? best.qty : 0,
+    stock: String(stock),
+    mpn: part.partNumber || '',
+    exactMatch: exact,
+    manufacturer: part.manufacturer || '',
+    // Their product links carry referral tags for the partner channel; the
+    // page itself is what the user needs.
+    url: String(part.productUrl || '').replace(/[?#].*$/, ''),
+    datasheet: part.datasheetUrl || '',
+    status: part.productLifeCycle || part.productStatus || '',
+    uom: String(part.unitOfMeasure || '').trim().toUpperCase(),
+    moq: parseInt(part.moq, 10) || 0,
+    leadTime: part.factoryLeadTime || '',
+  };
+}
+async function lookupOnlineComp(pn, qty, apiKey, apiName, desc) {
+  const url = `${OC_BASE}/${encodeURIComponent(apiName || OC_DEFAULT_API_NAME)}/${encodeURIComponent(pn)}/false/false/50/${encodeURIComponent(apiKey)}`;
+  let resp;
+  try { resp = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(20000) }); }
+  catch (e) { throw new Error('Online Components: ' + (e.name === 'TimeoutError' ? 'timed out' : 'network error')); }
+  if (resp.status === 401 || resp.status === 403) throw new Error(`Online Components auth failed (HTTP ${resp.status}) — check the API key and API name`);
+  if (resp.status === 429) throw new Error('Online Components rate limit reached (HTTP 429) — try again shortly');
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`Online Components HTTP ${resp.status}`);
+  const data = await resp.json().catch(() => null);
+  const parts = Array.isArray(data) ? data : [];
+  const m = matchPart(parts, pn, p => p.partNumber, desc, p => p.description || '', p => p.manufacturer);
+  if (!m) return null;
+  const pick = chooseCandidate(m.pool, it => readOnlineCompPart(it, qty, m.exact));
+  return { ...pick.info,
+           considered: m.considered, descScore: pick.score, desc: pick.desc,
+           chosenBy: pick.chosenBy,
+           candidates: m.pool.map(c => ({ pn: c.pn, mfr: c.mfr, desc: c.desc, score: c.score,
+                                          price: (readOnlineCompPart(c.item, qty, m.exact) || {}).price || 0 })).slice(0, 8) };
+}
+
 exports.priceLookup = onRequest(
   {
     region: 'us-central1',
@@ -636,7 +689,7 @@ exports.priceLookup = onRequest(
     const desc = String(req.query.desc || '').slice(0, 300);
     if (!pn) return void res.status(400).json({ error: 'Missing ?pn=' });
 
-    const out = { pn, qty, mouser: null, digikey: null, errors: [] };
+    const out = { pn, qty, mouser: null, digikey: null, onlinecomp: null, errors: [] };
 
     // Both vendors are queried in parallel and failures are isolated: a missing
     // key or a vendor outage must never take the other one down with it.
@@ -644,8 +697,16 @@ exports.priceLookup = onRequest(
     const mouserKey = creds.mouser_api_key;
     const dkId = creds.digikey_client_id;
     const dkSecret = creds.digikey_client_secret;
+    const ocKey = creds.onlinecomp_api_key;
 
     await Promise.all([
+      (async () => {
+        // Not configured is not an error worth showing: most installs start with
+        // Mouser / DigiKey only.
+        if (!ocKey) return;
+        try { out.onlinecomp = await lookupOnlineComp(pn, qty, ocKey, creds.onlinecomp_api_name, desc); }
+        catch (e) { out.errors.push(e.message || 'Online Components lookup failed'); }
+      })(),
       (async () => {
         if (!mouserKey) { out.errors.push('Mouser: no API key configured'); return; }
         try { out.mouser = await lookupMouser(pn, qty, mouserKey, desc); }
@@ -692,7 +753,7 @@ exports.priceLookup = onRequest(
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 const CONFIG_DOC = 'secure_config/distributor_api';
-const CRED_FIELDS = ['mouser_api_key', 'digikey_client_id', 'digikey_client_secret'];
+const CRED_FIELDS = ['mouser_api_key', 'digikey_client_id', 'digikey_client_secret', 'onlinecomp_api_key', 'onlinecomp_api_name'];
 
 // A price check runs one lookup per part, so re-reading Firestore for every
 // row would add a pointless round-trip to each. 60s is short enough that a
@@ -707,6 +768,8 @@ async function getCredentials() {
     mouser_api_key: (process.env.MOUSER_API_KEY || '').trim(),
     digikey_client_id: (process.env.DIGIKEY_CLIENT_ID || '').trim(),
     digikey_client_secret: (process.env.DIGIKEY_CLIENT_SECRET || '').trim(),
+    onlinecomp_api_key: (process.env.ONLINECOMP_API_KEY || '').trim(),
+    onlinecomp_api_name: (process.env.ONLINECOMP_API_NAME || '').trim(),
   };
 
   try {
@@ -808,6 +871,13 @@ exports.apiConfig = onRequest(
             secretHint: hint(creds.digikey_client_secret),
             source: meta.digikey_client_id ? 'ui' : (creds.digikey_client_id ? 'env-var' : null),
           },
+          onlinecomp: {
+            configured: !!creds.onlinecomp_api_key,
+            hint: hint(creds.onlinecomp_api_key),
+            // The API name is not a secret: shown in full so a typo is visible.
+            apiName: creds.onlinecomp_api_name || OC_DEFAULT_API_NAME,
+            source: meta.onlinecomp_api_key ? 'ui' : (creds.onlinecomp_api_key ? 'env-var' : null),
+          },
           // Normally a Firestore Timestamp, but tolerate a plain Date or an
           // ISO string too — a stale field format must not 500 the whole panel
           // and hide the configured/not answer the admin actually came for.
@@ -848,7 +918,7 @@ exports.apiConfig = onRequest(
       if (body.action === 'test') {
         const creds = await getCredentials();
         const pn = String(body.pn || '').trim() || '1-794610-2';
-        const result = { pn, mouser: null, digikey: null };
+        const result = { pn, mouser: null, digikey: null, onlinecomp: null };
 
         // "Not configured" is reported distinctly from "configured but broken":
         // one is a deliberate choice, the other is a problem to fix.
@@ -863,6 +933,12 @@ exports.apiConfig = onRequest(
               ? 'Client Secret missing — enter it to complete DigiKey setup'
               : 'Not configured — skipped' }
           : await lookupDigiKey(pn, 1, creds.digikey_client_id, creds.digikey_client_secret).then(
+              r => ({ ok: true, message: r ? `Found — $${r.price} @ qty ${r.breakQty}` : 'Connected, but this part was not found' }),
+              e => ({ ok: false, message: e.message }));
+
+        result.onlinecomp = !creds.onlinecomp_api_key
+          ? { ok: false, skipped: true, message: 'Not configured — skipped' }
+          : await lookupOnlineComp(pn, 1, creds.onlinecomp_api_key, creds.onlinecomp_api_name).then(
               r => ({ ok: true, message: r ? `Found — $${r.price} @ qty ${r.breakQty}` : 'Connected, but this part was not found' }),
               e => ({ ok: false, message: e.message }));
 

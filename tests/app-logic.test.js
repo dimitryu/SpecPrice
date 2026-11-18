@@ -2550,6 +2550,22 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   ok('Database: Revision / Customer PN columns folded into Drawing #', !G('_PS_DEFAULT_COLS').some(c=>c.k==='revision'||c.k==='atlantium_pn'));
 }
 
+// ─────────────────────────────────────────── v1.68: Online Components as a fourth price source
+{
+  const lc=G('_sdLineCost');
+  t('Online Comp.: per piece', lc({qty:3, unit:'pc', onlinecomp_price:2},'onlinecomp_price'), 6);
+  t('Online Comp.: cable sold by the foot', +lc({qty:304.8, unit:'mm', onlinecomp_price:1},'onlinecomp_price').toFixed(6), 1);
+  t('Online Comp.: cable sold by the metre', +lc({qty:2000, unit:'mm', onlinecomp_price:3, onlinecomp_uom:'M'},'onlinecomp_price').toFixed(6), 6);
+  const r={qty:2, unit:'pc', mouser_price:6, digikey_price:5, onlinecomp_price:4.5};
+  G('_sdRecalcTotal')(r);
+  t('Part Cost: the cheapest of the four sources', [r.total, r._costSource], [9,'onlinecomp_price']);
+  t('price source: Online Components', G('_sdPriceSource')(r).kind, 'onlinecomp');
+  ok('Database and Sales Desk show its price and stock', ['onlinecomp_price','onlinecomp_stock'].every(k=>G('_PS_DEFAULT_COLS').some(c=>c.k===k)) && G('_SD_DEFAULT_COLS').some(c=>c.k==='onlinecomp_price'));
+  ok('saved to the Database with the other prices', G('_SD_DB_NUM').includes('onlinecomp_price') && G('_SD_DB_TEXT').includes('onlinecomp_url'));
+  const tf=G('_toolPriceFields')({onlinecomp:{price:0.19,stock:'32358',url:'https://oc/x',breakQty:70,exact:true,mpn:'3200043',uom:'EA'}});
+  t('tool price fields from Online Components', [tf.onlinecomp_price, tf.onlinecomp_stock, tf.onlinecomp_brk, tf.onlinecomp_match, tf.onlinecomp_uom], [0.19,'32358',70,'exact','EA']);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

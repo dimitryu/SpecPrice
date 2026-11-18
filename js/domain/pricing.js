@@ -136,7 +136,10 @@ export function _sdBottlesText(r){
   return `${b} × ${+p.toFixed(2)} ml bottle${b>1?'s':''} (need ${need} ml)`;
 }
 // Every price source the app can quote from. Order matters only for tie-breaks.
-export const _SD_PRICE_SOURCES=['priority_price','mouser_price','digikey_price'];
+export const _SD_PRICE_SOURCES=['priority_price','mouser_price','digikey_price','onlinecomp_price'];
+// The distributors whose APIs Check Price asks, in screen order. Each one's
+// fields on a row are <k>_price, <k>_stock, <k>_url, <k>_brk, <k>_match, <k>_mpn.
+export const SD_DISTRIBUTORS=[{k:'mouser',label:'Mouser'},{k:'digikey',label:'DigiKey'},{k:'onlinecomp',label:'Online Comp.'}];
 // Actual dollar cost of this row if priced from `priceField` — for "pc" (and any
 // other non-length) rows the price is already per-piece, so qty multiplies
 // directly; for "mm" rows the qty is first converted into whatever unit that
@@ -150,6 +153,8 @@ export function _sdLineCost(r, priceField){
   if(unit==='ml') return price*_sdBottles(r);
   if(unit==='mm'){
     if(priceField==='priority_price') return price*(qty/MM_PER_METER);
+    // Online Components states its unit per part: by the metre or by the foot.
+    if(priceField==='onlinecomp_price' && /^(M|MTR|METER|METRE)$/i.test(String(r.onlinecomp_uom||'').trim())) return price*(qty/MM_PER_METER);
     // Mouser and DigiKey both sell bulk wire by the foot.
     return price*(qty/MM_PER_FOOT);
   }

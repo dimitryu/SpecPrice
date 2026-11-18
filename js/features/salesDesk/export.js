@@ -23,6 +23,7 @@ export function exportPartStockExcel(rows, totalCount, cols){
       if(c.k==='priority_price') return parseFloat(p.priority_price)||'';
       if(c.k==='mouser_price') return parseFloat(p.mouser_price)||'';
       if(c.k==='digikey_price') return parseFloat(p.digikey_price)||'';
+      if(c.k==='onlinecomp_price') return parseFloat(p.onlinecomp_price)||'';
       if(c.k==='unit') return p.unit||p.units||'';
       if(c.k==='rfq_names') return (p.rfq_names||[]).join(', ');
       // One line per drawing, as on screen: number · Rev · QTY · Customer PN.
@@ -96,11 +97,14 @@ export async function exportSalesDeskExcel(){
     });
 
     const COLS=['Item','Drawing #','MNF P/N','Description','Manufacturer','QTY','Units',
-                'Mouser Price','Mouser Stock','DigiKey Price','DigiKey Stock','Priority Price',
-                'Part Cost','Labor Time (min)'];
-    const LAST=COLS.length;                 // 14 columns, A..N
+                'Mouser Price','Mouser Stock','DigiKey Price','DigiKey Stock','Online Comp. Price','Online Comp. Stock',
+                'Priority Price','Part Cost','Labor Time (min)'];
+    const LAST=COLS.length;                 // 16 columns, A..P
+    // Where things are (0-based within a parts row): the three distributor
+    // prices, Priority, Part Cost (column O) and labor.
+    const C_MO=7, C_DK=9, C_OC=11, C_PR=13, C_COST=14, C_LAB=15;
     ws.columns=[{width:6},{width:18},{width:24},{width:40},{width:22},{width:9},{width:8},
-                {width:13},{width:12},{width:13},{width:12},{width:13},{width:12},{width:15}];
+                {width:13},{width:12},{width:13},{width:12},{width:13},{width:12},{width:13},{width:12},{width:15}];
 
     const merge=(r,c1,c2)=>ws.mergeCells(r,c1,r,c2);
     const fill=(cell,argb)=>{cell.fill={type:'pattern',pattern:'solid',fgColor:{argb}};};
@@ -294,10 +298,11 @@ export async function exportSalesDeskExcel(){
 
     let itemNo=0;
     const HEAD_NOTES={
-      7:'Price per unit from Mouser. On a cable row (unit mm) it is per FOOT. Edit it and Part Cost and the totals update.',
-      9:'Price per unit from DigiKey. On a cable row (unit mm) it is per FOOT. Edit it and Part Cost and the totals update.',
-      11:'Price per unit from Priority. On a cable row (unit mm) it is per METRE. Edit it and Part Cost and the totals update.',
-      12:'The cheapest of the three prices for this row\'s QTY (mm converted to ft for Mouser/DigiKey, to m for Priority).',
+      [C_MO]:'Price per unit from Mouser. On a cable row (unit mm) it is per FOOT. Edit it and Part Cost and the totals update.',
+      [C_DK]:'Price per unit from DigiKey. On a cable row (unit mm) it is per FOOT. Edit it and Part Cost and the totals update.',
+      [C_OC]:'Price per unit from Online Components. On a cable row (unit mm) it is per FOOT, or per METRE when they sell it by the metre. Edit it and Part Cost and the totals update.',
+      [C_PR]:'Price per unit from Priority. On a cable row (unit mm) it is per METRE. Edit it and Part Cost and the totals update.',
+      [C_COST]:'The cheapest of the four prices for this row\'s QTY (mm converted to ft for Mouser/DigiKey/Online Comp., to m for Priority).',
     };
     const bomHeaderRow=()=>{
       const hr=row;
@@ -335,6 +340,7 @@ export async function exportSalesDeskExcel(){
         const qty=parseFloat(r.qty)||0;
         const mo=r.mouser_match==='noprice'?null:_num(r.mouser_price);
         const dk=r.digikey_match==='noprice'?null:_num(r.digikey_price);
+        const oc=r.onlinecomp_match==='noprice'?null:_num(r.onlinecomp_price);
         const pr=_num(r.priority_price);
         // Part Cost. Manual price in the app → kept as a per-unit price, so a
         // QTY change still moves it. No price anywhere → the estimate (tools).
@@ -351,37 +357,41 @@ export async function exportSalesDeskExcel(){
           // price — the ml (QTY) over the bottle size, rounded up.
           const ml=String(r.unit||'').trim().toLowerCase()==='ml', pk=parseFloat(r.pack_ml)||0;
           const q=ml ? (pk>0 ? `MAX(1,ROUNDUP(F${n}/${_r6(pk)},0))` : '1') : `F${n}`;
+          const ocPerM=/^(M|MTR|METER|METRE)$/i.test(String(r.onlinecomp_uom||'').trim());
           const a=`IF(N(H${n})>0,H${n}*${q}*${ml?1:K_DIST(n)},9E+99)`;
           const b=`IF(N(J${n})>0,J${n}*${q}*${ml?1:K_DIST(n)},9E+99)`;
-          const c=`IF(N(L${n})>0,L${n}*${q}*${ml?1:K_PRI(n)},9E+99)`;
+          const d=`IF(N(L${n})>0,L${n}*${q}*${ml?1:(ocPerM?K_PRI(n):K_DIST(n))},9E+99)`;
+          const c=`IF(N(N${n})>0,N${n}*${q}*${ml?1:K_PRI(n)},9E+99)`;
           const est=_num(r.est_price);
           // Same order as the app: a label/marker with no price takes the
           // nominal label price (per piece; one label on a row not counted in pieces).
           const pcs=!['mm','gr'].includes(String(r.unit||'').trim().toLowerCase());
           const fb = _sdIsLabelRow(r) ? (pcs ? `${SD_NOMINAL_LABEL_PRICE}*F${n}` : `${SD_NOMINAL_LABEL_PRICE}`)
                    : est ? `${est}*F${n}*${K_DIST(n)}` : '0';
-          cost=F(`IF(MIN(${a},${b},${c})<9E+98,MIN(${a},${b},${c}),${fb})`, r.total||0);
+          cost=F(`IF(MIN(${a},${b},${d},${c})<9E+98,MIN(${a},${b},${d},${c}),${fb})`, r.total||0);
         }
         const _bt=_sdBottlesText(r);
         const vals=[itemNo, r.drawing_number||'', r.part_number||'', (r.description||'')+(_bt?` — buy ${_bt}`:''),
                     r.manufacturer||'', qty, r.unit||'',
-                    mo, stockVal('mouser_stock'), dk, stockVal('digikey_stock'), pr,
+                    mo, stockVal('mouser_stock'), dk, stockVal('digikey_stock'), oc, stockVal('onlinecomp_stock'), pr,
                     cost, +(r.labor_total||0)];
         vals.forEach((v,ci)=>{
           const c=ws.getCell(row,ci+1);
           c.value=v;
-          c.font={size:10, color:{argb:isTool?'FF92400E':'FF0F172A'}, italic:isTool, bold:ci===12};
+          c.font={size:10, color:{argb:isTool?'FF92400E':'FF0F172A'}, italic:isTool, bold:ci===C_COST};
           c.border=_xlBoxed;
-          if(ci===7||ci===9) c.numFmt = mm ? '$#,##0.0000" /ft"' : '$#,##0.0000';
-          if(ci===11)        c.numFmt = mm ? '$#,##0.0000" /m"'  : '$#,##0.0000';
-          if(ci===12) c.numFmt='$#,##0.00';
-          if(ci===8||ci===10) c.numFmt='#,##0';
-          if(ci===13) c.numFmt='0.0';
+          if(ci===C_MO||ci===C_DK) c.numFmt = mm ? '$#,##0.0000" /ft"' : '$#,##0.0000';
+          if(ci===C_OC) c.numFmt = mm ? (/^(M|MTR|METER|METRE)$/i.test(String(r.onlinecomp_uom||'').trim()) ? '$#,##0.0000" /m"' : '$#,##0.0000" /ft"') : '$#,##0.0000';
+          if(ci===C_PR) c.numFmt = mm ? '$#,##0.0000" /m"'  : '$#,##0.0000';
+          if(ci===C_COST) c.numFmt='$#,##0.00';
+          if(ci===C_MO+1||ci===C_DK+1||ci===C_OC+1) c.numFmt='#,##0';
+          if(ci===C_LAB) c.numFmt='0.0';
           if(ci===5)  c.numFmt='#,##0.###';
           let matchFlagged=false;
-          if(ci===7||ci===9){
-            const cfg = ci===7 ? {code:'mouser_match', mpn:'mouser_mpn', name:'Mouser'}
-                               : {code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey'};
+          if(ci===C_MO||ci===C_DK||ci===C_OC){
+            const cfg = ci===C_MO ? {code:'mouser_match', mpn:'mouser_mpn', name:'Mouser'}
+                      : ci===C_DK ? {code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey'}
+                                  : {code:'onlinecomp_match', mpn:'onlinecomp_mpn', name:'Online Components'};
             const code=r[cfg.code]||'';
             if(code==='approx'){
               c.font={...c.font, color:{argb:'FF92400E'}};
@@ -392,10 +402,10 @@ export async function exportSalesDeskExcel(){
               c.note=`${cfg.name} lists this part but publishes no price (non-stocked / quote-only).`;
             }
           }
-          if(ci===12 && custSup) c.note='Customer-supplied material — not purchased, priced at $0.';
-          else if(ci===12 && manual) c.note='Manual price typed in Sales Desk — kept as a price per unit, so it follows QTY.';
-          else if(ci===12 && isTool) c.note=_sdPriceSourceText(r);
-          else if(ci===12 && r._costSource==='nominal') c.note=_sdPriceSourceText(r);
+          if(ci===C_COST && custSup) c.note='Customer-supplied material — not purchased, priced at $0.';
+          else if(ci===C_COST && manual) c.note='Manual price typed in Sales Desk — kept as a price per unit, so it follows QTY.';
+          else if(ci===C_COST && isTool) c.note=_sdPriceSourceText(r);
+          else if(ci===C_COST && r._costSource==='nominal') c.note=_sdPriceSourceText(r);
           c.alignment={vertical:'middle',
                        horizontal: (ci===3||ci===4)?'left':(ci>=5?'right':'left'),
                        wrapText: ci===3};
@@ -404,7 +414,7 @@ export async function exportSalesDeskExcel(){
           else if(i%2===1) fill(c,_XL.bomBand);
         });
         if(isTool){
-          toolCells.push({cell:A(n,13), r});
+          toolCells.push({cell:A(n,C_COST+1), r});
           ws.getCell(row,1).border={..._xlBoxed,left:{style:'medium',color:{argb:_XL.toolEdge}}};
           ws.getCell(row,4).value=`${r.description||''}   [TOOL — not from customer BOM]`;
         }
@@ -430,35 +440,35 @@ export async function exportSalesDeskExcel(){
       // This drawing's own price build-up, immediately under its parts — as
       // formulas over the cells above, with its three settings as yellow inputs.
       const U=g.units;
-      const partsSum = `SUM(M${firstRow}:M${lastRow})` + (toolCells.length ? `-(${toolCells.map(t=>t.cell).join('+')})` : '');
+      const partsSum = `SUM(O${firstRow}:O${lastRow})` + (toolCells.length ? `-(${toolCells.map(t=>t.cell).join('+')})` : '');
       const b={g};
-      b.minutes=A(row,13);
+      b.minutes=A(row,LAST-1);
       money('Labor time  (minutes per cable)', +(+g.laborMinutesPerUnit).toFixed(2), {fmt:'0.0', bold:false});
       markInput(ws.getCell(b.minutes), 'Editable — minutes to build one cable.');
-      b.rate=A(row,13);
+      b.rate=A(row,LAST-1);
       money('Labor rate  ($ per minute)', +g.rate, {fmt:'$#,##0.00', bold:false});
       markInput(ws.getCell(b.rate), 'Editable — labor cost per minute.');
-      b.pct=A(row,13);
+      b.pct=A(row,LAST-1);
       money('Profit %', (g.profitPct||0)/100, {fmt:'0.0%', bold:false});
       markInput(ws.getCell(b.pct), 'Editable — profit on the subtotal.');
-      b.parts=A(row,13);
+      b.parts=A(row,LAST-1);
       money(`Parts  (per cable${U>1?` — parts table ÷ ${U}`:''})`, F(`(${partsSum})/${U}`, g.partsTotalPerUnit));
-      b.labor=A(row,13);
+      b.labor=A(row,LAST-1);
       money('Labor  (minutes × rate, per cable)', F(`${b.minutes}*${b.rate}`, g.laborCostPerUnit));
-      b.sub=A(row,13);
+      b.sub=A(row,LAST-1);
       money('Subtotal  (per cable)', F(`${b.parts}+${b.labor}`, g.subtotalPerUnit), {bold:true});
-      b.profit=A(row,13);
+      b.profit=A(row,LAST-1);
       money('Profit  (per cable)', F(`${b.sub}*${b.pct}`, g.finalPerUnit-g.subtotalPerUnit));
       // Per cable is the number the customer compares and the one the sales
       // conversation is actually about, so it takes the highlighted band; the
       // order total follows in the quieter style underneath. With a single
       // cable the two are the same figure, so only one line is printed.
-      b.unit=A(row,13);
+      b.unit=A(row,LAST-1);
       money(`Unit Price — ${g.dwg}`, F(`${b.sub}+${b.profit}`, g.finalPerUnit),
             {bold:true,size:13,bg:_XL.final,fg:'FFFFFFFF',height:24});
       b.order=b.unit;
       if(U>1){
-        b.order=A(row,13);
+        b.order=A(row,LAST-1);
         money(`Price per ${U} units`, F(`${b.unit}*${U}`, g.final),
               {bold:true,size:12,bg:'FF1F8B4C',fg:'FFFFFFFF',height:22});
       }
@@ -491,10 +501,10 @@ export async function exportSalesDeskExcel(){
         const toolRefs=[];
         // Column heads for the tool list: what the tool is, which connector it
         // is for, where its price came from, and a link to check it.
-        [[2,'Tool'],[3,'Description'],[7,'For part'],[9,'Price from'],[11,'Link'],[13,'Price']].forEach(([c,h])=>{
+        [[2,'Tool'],[3,'Description'],[7,'For part'],[9,'Price from'],[11,'Link'],[LAST-1,'Price']].forEach(([c,h])=>{
           const x=ws.getCell(row,c); x.value=h; x.font={bold:true,size:9,color:{argb:'FF92400E'}};
         });
-        merge(row,3,6); merge(row,7,8); merge(row,9,10); merge(row,11,12);
+        merge(row,3,6); merge(row,7,8); merge(row,9,10); merge(row,11,LAST-2);
         for(let c=1;c<=LAST;c++){ const cell=ws.getCell(row,c); fill(cell,_XL.tool); cell.border=_xlBoxed; }
         row++;
         g.missingToolRows.forEach(r=>{
@@ -505,7 +515,7 @@ export async function exportSalesDeskExcel(){
           merge(row,7,8);  ws.getCell(row,7).value=r.tool_for||'—';
           merge(row,9,10); ws.getCell(row,9).value=src.label;
           ws.getCell(row,9).note=_sdPriceSourceText(r);
-          merge(row,11,12);
+          merge(row,11,LAST-2);
           const href=src.url || (r.part_number ? q.mouser : '');
           if(href) ws.getCell(row,11).value={text: src.url ? `${src.label} page ↗` : 'Search Mouser ↗', hyperlink: href};
           const v=ws.getCell(row,LAST-1);
@@ -525,7 +535,7 @@ export async function exportSalesDeskExcel(){
         // A tools figure typed in Sales Desk wins over the sum, as it does there.
         const st=_sdDwgSet(g.dwg);
         const typed = st.toolsTotal!=null && st.toolsTotal!=='';
-        b.tools=A(row,13);
+        b.tools=A(row,LAST-1);
         money(`TOOLS TOTAL — ${g.dwg} (separate)`,
               typed ? +g.toolsTotal.toFixed(2) : F(`SUM(${toolRefs.join(',')})`, g.toolsTotal),
               {bold:true,size:11,bg:_XL.warn,fg:'FF92400E',height:20});

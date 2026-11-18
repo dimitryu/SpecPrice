@@ -776,9 +776,10 @@ export function _isYes(v){ return v===true || /^(y|yes|true|1|x|✓|v|customer|c
 // one of them: the Database is a catalogue and always holds 1.
 // ══════════════════════════════════════════════════════════════════════════════
 export const _SD_DB_TEXT=['description','manufacturer','drawing_name','revision','atlantium_pn',
-  'pin_count','tool_for','mouser_url','digikey_url','mouser_match','digikey_match','mouser_mpn','digikey_mpn'];
+  'pin_count','tool_for','mouser_url','digikey_url','mouser_match','digikey_match','mouser_mpn','digikey_mpn',
+  'onlinecomp_url','onlinecomp_match','onlinecomp_mpn','onlinecomp_uom'];
 export const _SD_DB_NUM=['mouser_price','digikey_price','priority_price','mouser_stock','digikey_stock',
-  'mouser_brk','digikey_brk','est_price','pack_ml'];
+  'mouser_brk','digikey_brk','est_price','pack_ml','onlinecomp_price','onlinecomp_stock','onlinecomp_brk'];
 // ── The drawings a Database part is in ─────────────────────────────────────────
 // A part is one record however many drawings use it; `drawings` lists each of
 // them with that drawing's revision, name and per-cable QTY / unit, so a search

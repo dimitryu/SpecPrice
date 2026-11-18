@@ -48,7 +48,7 @@ global.fetch = async (url, init) => {
 
 const fns = require(path.join(__dirname, '..', 'functions', 'index.js'));
 
-function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', token, body } = {}) {
+function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', token, body, query = {} } = {}) {
   return new Promise(resolve => {
     const res = {
       _status: 200, _headers: {},
@@ -59,7 +59,7 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
     };
     const headers = { origin };
     if (token) headers.authorization = 'Bearer ' + token;
-    Promise.resolve(fn({ method, headers, body, query: {} }, res)).catch(e => resolve({ status: 'threw', error: e }));
+    Promise.resolve(fn({ method, headers, body, query }, res)).catch(e => resolve({ status: 'threw', error: e }));
   });
 }
 
@@ -155,6 +155,26 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
   r = await call(C, { token: 'tAdmin', body: { action: 'test_ai' } });
   ok(r.json.ok === true, 'test_ai ok');
   ok(JSON.parse(upstreamCalls.pop().init.body).max_tokens === 5, 'test_ai is a tiny request');
+
+  // ── Online Components: key saved like Mouser's, never returned; lookup by part number ──
+  r = await call(C, { token: 'tAdmin', body: { onlinecomp_api_key: 'oc-secret-key-7777', onlinecomp_api_name: 'cgpriceavailability' } });
+  ok(r.status === 200 && store['secure_config/distributor_api'].onlinecomp_api_key === 'oc-secret-key-7777', 'Online Components key saved');
+  await new Promise(res => setTimeout(res, 0));
+  upstreamReply = { status: 200, body: JSON.stringify([
+    { partNumber: 'D38999/26WC35SN', manufacturer: 'TE Connectivity / Deutsch', description: 'Circular plug', quantityAvailable: '36', unitOfMeasure: 'EA',
+      productUrl: 'https://www.onlinecomponents.com/en/productdetail/te/d38999-1.html?utm_source=Radion', currency: 'USD',
+      price_breaks: [{ pricebreak: '1', pricelist: '185.27' }, { pricebreak: '5', pricelist: '182.24' }] },
+    { partNumber: 'D38999/26WC35SN', manufacturer: 'Aero-Electric', description: 'Circular plug', quantityAvailable: '0', unitOfMeasure: 'EA',
+      productUrl: 'https://www.onlinecomponents.com/en/productdetail/ae/d38999-2.html', price_breaks: [{ pricebreak: '1', pricelist: '42.55' }] },
+    { partNumber: 'D38999/26WC35SA', manufacturer: 'X', price_breaks: [{ pricebreak: '1', pricelist: '1.00' }] }]) };
+  upstreamCalls = [];
+  r = await call(fns.priceLookup, { method: 'GET', token: 'tUser', query: { pn: 'D38999/26WC-35SN', qty: '1', desc: 'plug' } });
+  const ocCall = upstreamCalls.find(c => /onlinecomponents/.test(c.url));
+  ok(ocCall && /\/wapi\/v1\/cgpriceavailability\/D38999%2F26WC-35SN\/false\/false\/50\/oc-secret-key-7777$/.test(ocCall.url), 'Online Components: documented path, part number encoded');
+  ok(r.json.onlinecomp && r.json.onlinecomp.price === 42.55 && r.json.onlinecomp.manufacturer === 'Aero-Electric', 'Online Components: the cheapest of the matching parts, a different part number left out');
+  ok(r.json.onlinecomp && r.json.onlinecomp.url === 'https://www.onlinecomponents.com/en/productdetail/ae/d38999-2.html' && r.json.onlinecomp.uom === 'EA', 'Online Components: product page without referral tags, unit kept');
+  r = await call(C, { method: 'GET', token: 'tAdmin' });
+  ok(r.json.onlinecomp && r.json.onlinecomp.configured && r.json.onlinecomp.hint === '…7777' && !JSON.stringify(r.json).includes('oc-secret-key-7777'), 'Online Components: status shows a hint, never the key');
 
   console.log(`functions harness: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
