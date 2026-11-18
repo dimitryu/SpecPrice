@@ -2,7 +2,7 @@ import { S } from '../../core/state.js';
 import { logSystemAudit } from '../../core/audit.js';
 import { fmtDate, toast } from '../../core/ui.js';
 import { APP_VER } from '../../core/version.js';
-import { MM_PER_FOOT, MM_PER_METER, SD_NOMINAL_LABEL_PRICE, _sdIsLabelRow } from '../../domain/pricing.js';
+import { MM_PER_FOOT, MM_PER_METER, SD_NOMINAL_LABEL_PRICE, _sdBottlesText, _sdIsLabelRow } from '../../domain/pricing.js';
 import { _sdComputeSummary, _sdDwgSet, _sdIsToolRow, _sdPriceSource, _sdPriceSourceText, _sdSearchUrls, sdItems } from './salesDesk.js';
 import { _XL, _xlBoxed, loadExcelJS } from '../../io/excel.js';
 
@@ -342,9 +342,13 @@ export async function exportSalesDeskExcel(){
           const per=qty ? (parseFloat(r.manual_total)||0)/qty : 0;
           cost=F(`${_r6(per)}*F${n}`, r.total||0);
         } else {
-          const a=`IF(N(H${n})>0,H${n}*F${n}*${K_DIST(n)},9E+99)`;
-          const b=`IF(N(J${n})>0,J${n}*F${n}*${K_DIST(n)},9E+99)`;
-          const c=`IF(N(L${n})>0,L${n}*F${n}*${K_PRI(n)},9E+99)`;
+          // Adhesive in ml: the price is per bottle, so the line is bottles ×
+          // price — the ml (QTY) over the bottle size, rounded up.
+          const ml=String(r.unit||'').trim().toLowerCase()==='ml', pk=parseFloat(r.pack_ml)||0;
+          const q=ml ? (pk>0 ? `MAX(1,ROUNDUP(F${n}/${_r6(pk)},0))` : '1') : `F${n}`;
+          const a=`IF(N(H${n})>0,H${n}*${q}*${ml?1:K_DIST(n)},9E+99)`;
+          const b=`IF(N(J${n})>0,J${n}*${q}*${ml?1:K_DIST(n)},9E+99)`;
+          const c=`IF(N(L${n})>0,L${n}*${q}*${ml?1:K_PRI(n)},9E+99)`;
           const est=_num(r.est_price);
           // Same order as the app: a label/marker with no price takes the
           // nominal label price (per piece; one label on a row not counted in pieces).
@@ -353,7 +357,8 @@ export async function exportSalesDeskExcel(){
                    : est ? `${est}*F${n}*${K_DIST(n)}` : '0';
           cost=F(`IF(MIN(${a},${b},${c})<9E+98,MIN(${a},${b},${c}),${fb})`, r.total||0);
         }
-        const vals=[itemNo, r.drawing_number||'', r.part_number||'', r.description||'',
+        const _bt=_sdBottlesText(r);
+        const vals=[itemNo, r.drawing_number||'', r.part_number||'', (r.description||'')+(_bt?` — buy ${_bt}`:''),
                     r.manufacturer||'', qty, r.unit||'',
                     mo, stockVal('mouser_stock'), dk, stockVal('digikey_stock'), pr,
                     cost, +(r.labor_total||0)];

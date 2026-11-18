@@ -4,7 +4,7 @@ import { arrayUnion, collection, db, deleteField, doc, getDoc, getDocs, serverTi
 import { PROTECTED_ROLE } from '../core/roles.js';
 import { companyId, currentUserRole } from '../core/session.js';
 import { toast } from '../core/ui.js';
-import { _dbNormalizeUnit, _sdDbNewDoc, _sdDbPatch } from '../domain/bom.js';
+import { _dbNormalizeUnit, _mergePartDrawing, _partDrawingsPatch, _sdDbNewDoc, _sdDbPatch } from '../domain/bom.js';
 
 export async function loadParts(){
   if(S.allParts.length>0) return;
@@ -205,7 +205,9 @@ export async function saveBOMToPartStock(rows, rfqName='', onProgress){
           revived++;
         }
         if(r.description && !d.description) patch.description=r.description;
-        if(r.drawing_number && !d.drawing_number) patch.drawing_number=r.drawing_number;
+        // The drawing this row comes from is ADDED to the part's drawings (the
+        // first drawing used to stay forever, or be replaced by the newest).
+        Object.assign(patch, _partDrawingsPatch([r], d));
         if(r.drawing_name && !d.drawing_name) patch.drawing_name=r.drawing_name;
         if(r.manufacturer && !d.manufacturer) patch.manufacturer=r.manufacturer;
         if(r.unit && !d.unit) patch.unit=_dbNormalizeUnit(r.unit);
@@ -235,6 +237,7 @@ export async function saveBOMToPartStock(rows, rfqName='', onProgress){
         await setDoc(ref,{
           part_number:pn, description:r.description||'',
           drawing_number:r.drawing_number||'', drawing_name:r.drawing_name||'', manufacturer:r.manufacturer||'',
+          drawings:_mergePartDrawing([], r),
           unit:_dbNormalizeUnit(r.unit)||'', atlantium_pn:r.atlantium_pn||'', qty:1,
           pin_count:r.pin_count||'', revision:r.revision||'', tool_for:r.tool_for||'',
           customer_supplied:!!r.customer_supplied,
@@ -255,7 +258,10 @@ export async function saveBOMToPartStock(rows, rfqName='', onProgress){
   }
   // Refresh in-memory parts list so SD search sees new entries. A revived
   // part was out of allParts, so that case reloads both lists from scratch.
-  if(revived){ S.allParts=[]; S.trashParts=[]; }
+  // Always from the Database again: loadParts() keeps a list it already has,
+  // so parts created here stayed invisible to every screen (and to Check
+  // Price, which then wrote a second, blank record over them) until a reload.
+  S.allParts=[]; S.trashParts=[];
   await loadParts();
   return created;
 }
@@ -353,13 +359,15 @@ export async function mergePartDoc(key, fields){
 export async function saveSalesDeskToDB(rows, onProgress){
   await loadParts();
   const res={created:0, updated:0, unchanged:0, skipped:0, duplicates:0, revived:0, fields:0, changes:[], errors:[]};
-  const seen=new Set(), list=[];
+  // One record per part number; a part on the desk in several drawings is
+  // saved once, from its first row, with every drawing it is in.
+  const seen=new Map(), list=[];
   for(const r of rows){
     const pn=String(r.part_number||'').trim();
     if(!pn){ res.skipped++; continue; }
     const k=pn.toLowerCase();
-    if(seen.has(k)){ res.duplicates++; continue; }
-    seen.add(k); list.push(r);
+    if(seen.has(k)){ res.duplicates++; seen.get(k).push(r); continue; }
+    seen.set(k,[r]); list.push(r);
   }
   const byPn=new Map([...S.allParts, ...S.trashParts].map(p=>[String(p.part_number||'').trim().toLowerCase(), p]));
   let done=0;
@@ -374,7 +382,7 @@ export async function saveSalesDeskToDB(rows, onProgress){
       const snap=await getDoc(ref);
       if(snap.exists()){
         const d=snap.data();
-        const patch=_sdDbPatch(r, d);
+        const patch=_sdDbPatch(r, d, seen.get(pn.toLowerCase()));
         const names=Object.keys(patch);
         if(d.deleted===true){
           Object.assign(patch,{deleted:false, deletedAt:deleteField(), deletedAtMs:deleteField(), deletedBy:deleteField()});
@@ -385,7 +393,7 @@ export async function saveSalesDeskToDB(rows, onProgress){
         res.updated++; res.fields+=names.length;
         res.changes.push({pn, fields:names, revived:d.deleted===true});
       } else {
-        await setDoc(ref,{..._sdDbNewDoc(r), updatedAt:serverTimestamp()});
+        await setDoc(ref,{..._sdDbNewDoc(r, seen.get(pn.toLowerCase())), updatedAt:serverTimestamp()});
         res.created++;
         res.changes.push({pn, created:true, fields:[]});
       }

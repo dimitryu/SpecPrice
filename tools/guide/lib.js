@@ -56,9 +56,10 @@ function auditJS(){
     add(day,9,users[0],'screen_open',{screen:'part-stock'});
     if(day%2===0) add(day,11,users[2],'screen_open',{screen:'cut-strip'});
     if(day%3===0){ const f=['DEMO-100-01.pdf','DEMO-220-03.pdf','DEMO-310-02.pdf'][day%9/3|0];
-      add(day,10,users[1],'drawing_bom_search',{filename:f,provider:'anthropic',mode:'vision',rowsFound:6+day%5,ms:21000+day*400});
-      add(day,10,users[1],'sales_desk_add_from_drawing',{count:6+day%5});
-      add(day,11,users[1],'price_check',{checked:8,found:7,failed:0,ms:9000+day*150});
+      const dw=f.replace(/\.pdf$/,'');
+      add(day,10,users[1],'drawing_bom_search',{drawing:dw,filename:f,provider:'anthropic',mode:'vision',rowsFound:6+day%5,ms:21000+day*400});
+      add(day,10,users[1],'sales_desk_add_from_drawing',{drawing:dw,count:6+day%5});
+      add(day,11,users[1],'price_check',{drawing:dw,checked:8,found:7,failed:0,ms:9000+day*150});
       add(day,12,users[1],'sales_desk_export',{rows:8}); }
     if(day===4) add(day,10,users[1],'drawing_bom_search',{filename:'scan-blurry.jpg',mode:'vision'},false);
   }

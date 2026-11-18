@@ -175,6 +175,18 @@ const DAY=86400000;
     ok('sd→db: a new part is created with qty 1 and its fields', DB[PC]['SD-NEW-1'] && DB[PC]['SD-NEW-1'].qty===1 && DB[PC]['SD-NEW-1'].unit==='pc' && DB[PC]['SD-NEW-1'].customer_supplied===true);
     ok('sd→db: a row with no part number is skipped', res.skipped===1); }
 
+  // ── a part in several drawings: each drawing is ADDED, with its QTY ────
+  { await M.saveBOMToPartStock([{part_number:'P-DW-1', description:'Pin', drawing_number:'DWG-A', revision:'B', qty:2, unit:'pc'}]);
+    await M.saveBOMToPartStock([{part_number:'P-DW-1', description:'Pin', drawing_number:'DWG-B', revision:'C', qty:4, unit:'pc'}]);
+    const d=DB[PC]['P-DW-1'];
+    ok('drawings: a second drawing is added, the first kept', d.drawing_number==='DWG-A, DWG-B' && (d.drawings||[]).length===2);
+    ok('drawings: each with its own QTY and revision', d.drawings[0].qty==='2' && d.drawings[1].qty==='4' && d.drawings[1].revision==='C');
+    await M.saveSalesDeskToDB([{part_number:'P-DW-1', description:'Pin', drawing_number:'DWG-C', qty:30, _qtyPerUnit:3, unit:'pc'},
+                               {part_number:'P-DW-1', description:'Pin', drawing_number:'DWG-A', qty:5, unit:'pc'}]);
+    const e=DB[PC]['P-DW-1'];
+    ok('drawings: Sales Desk adds its drawings too, per-cable QTY', e.drawing_number==='DWG-B, DWG-C, DWG-A' && e.drawings.find(x=>x.drawing_number==='DWG-C').qty==='3');
+    ok('drawings: ...and updates the QTY of a drawing already there', e.drawings.find(x=>x.drawing_number==='DWG-A').qty==='5'); }
+
   // ── a big delete is audited in chunks that fit a Firestore document ─────
   const many={}; for(let i=0;i<250;i++) many['M'+i]={part_number:'M'+i, description:'x'.repeat(200)};
   Object.assign(DB[PC], many);

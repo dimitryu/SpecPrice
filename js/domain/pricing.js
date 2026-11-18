@@ -72,10 +72,12 @@ export function _fcParsePriceBreaks(texts){
 // gr (grams) is treated the same as mm here per business rule — it's a bulk-
 // material quantity, not a per-piece count, so it gets the same non-"pc"
 // lookup treatment. "pc" (and anything unrecognized) passes through unchanged.
-export function _priceTargetQty(qty, unit){
+export function _priceTargetQty(qty, unit, packMl){
   const u=String(unit||'').trim().toLowerCase();
   const n=parseFloat(qty)||0;
   if(u==='mm'||u==='gr') return Math.max(1, Math.round(n*0.00328084));
+  // Adhesive is bought by the bottle: the quantity asked for is bottles.
+  if(u==='ml') return _sdBottlesFor(n, packMl);
   return Math.max(1, Math.round(n)||1);
 }
 
@@ -96,6 +98,43 @@ export function _fcNearestBreakPrice(breaks,targetQty){
 // distributors if the row's mm quantity were multiplied straight against either
 // price without first converting it into the unit that price is quoted in.
 export const MM_PER_METER=1000, MM_PER_FOOT=304.8;
+// ── Adhesives in ml ───────────────────────────────────────────────────────────
+// A glue, sealant or threadlocker is listed in ml on the drawing but bought by
+// the bottle (tube, syringe, can). The supplier's price is for one bottle; the
+// line costs as many bottles as cover the ml needed — the required ml of all
+// the cables, divided by the bottle size and rounded up.
+export function _sdIsAdhesiveRow(r){
+  if(String(r&&r.unit||'').trim().toLowerCase()==='ml') return true;
+  return /\b(ADHESIVES?|GLUE|EPOXY|LOCTITE|SEALANTS?|RTV|CYANOACRYLATE|THREAD[\s-]?LOCK(?:ER|ING)?|SUPER[\s-]?GLUE|POTTING|CONFORMAL\s+COAT(?:ING)?)\b|דבק/i.test(String(r&&r.description||''));
+}
+// A bottle size in ml read out of a description or part number: "50ML",
+// "250 ml", "1 L", "0.5 LITER", "10 cc", "1.69 FL OZ". 0 when none is stated.
+export function _parsePackMl(text){
+  const s=String(text||'');
+  let m=/(\d+(?:[.,]\d+)?)\s*(?:ML|MILLILIT(?:ER|RE)S?|CC)\b/i.exec(s);
+  if(m) return +parseFloat(m[1].replace(',','.')).toFixed(3);
+  m=/(\d+(?:[.,]\d+)?)\s*(?:L|LT|LTR|LIT(?:ER|RE)S?)\b/i.exec(s);
+  if(m) return +(parseFloat(m[1].replace(',','.'))*1000).toFixed(3);
+  m=/(\d+(?:[.,]\d+)?)\s*FL\.?\s*OZ\b/i.exec(s);
+  if(m) return +(parseFloat(m[1].replace(',','.'))*29.5735).toFixed(1);
+  return 0;
+}
+// Bottles for `ml` ml with bottles of `packMl` ml — at least one; one when the
+// bottle size is not known yet.
+export function _sdBottlesFor(ml, packMl){
+  const n=parseFloat(ml)||0, p=parseFloat(packMl)||0;
+  if(!(p>0)) return 1;
+  return Math.max(1, Math.ceil(n/p - 1e-9));
+}
+export function _sdBottles(r){ return _sdBottlesFor(r.qty, r.pack_ml); }
+// "2 × 50 ml bottle (need 75 ml)" — what to buy, for the screens and the quote.
+export function _sdBottlesText(r){
+  if(String(r&&r.unit||'').trim().toLowerCase()!=='ml') return '';
+  const p=parseFloat(r.pack_ml)||0, need=+(parseFloat(r.qty)||0).toFixed(2);
+  if(!(p>0)) return `bottle size unknown — need ${need} ml (type it in Pack ml)`;
+  const b=_sdBottles(r);
+  return `${b} × ${+p.toFixed(2)} ml bottle${b>1?'s':''} (need ${need} ml)`;
+}
 // Every price source the app can quote from. Order matters only for tie-breaks.
 export const _SD_PRICE_SOURCES=['priority_price','mouser_price','digikey_price'];
 // Actual dollar cost of this row if priced from `priceField` — for "pc" (and any
@@ -107,6 +146,8 @@ export function _sdLineCost(r, priceField){
   if(!price) return 0;
   const qty=parseFloat(r.qty)||1;
   const unit=String(r.unit||'').trim().toLowerCase();
+  // ml: the price is per bottle.
+  if(unit==='ml') return price*_sdBottles(r);
   if(unit==='mm'){
     if(priceField==='priority_price') return price*(qty/MM_PER_METER);
     // Mouser and DigiKey both sell bulk wire by the foot.

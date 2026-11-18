@@ -3,6 +3,7 @@ import { logAudit } from '../core/audit.js';
 import { loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../core/table.js';
 import { _buildPager, closeModal, debounce, esc, fmtDate, fmtPrice, setActions, setContent, showModal, toast } from '../core/ui.js';
 import { _PS_TRASH_DAY_OPTIONS, _psAutoPurge, _psDaysLeft, _psDeletedMs, _psIsAdmin, _psPurge, _psRestore, _psSetTrashDays, _psSoftDelete, loadParts, purgeLegacyFindChipsFields, updatePartFields } from '../data/parts.js';
+import { _partDrawings, _pnKey } from '../domain/bom.js';
 import { _sdLineCost } from '../domain/pricing.js';
 import { openImportDataModal } from './importData.js';
 import { runFCCheckModal } from './priceCheck.js';
@@ -237,6 +238,18 @@ export function _psCellHTML(k,p){
     case 'digikey_stock': return _stockCellHTML(p,k);
     case 'unit': return esc(p.unit||p.units||'');
     case 'rfq_names': return esc((p.rfq_names||[]).join(', '));
+    // Every drawing the part is in, each with its revision and per-cable QTY;
+    // a click shows that drawing's whole BOM (the search below).
+    case 'drawing_number': {
+      const list=_partDrawings(p);
+      if(!list.length) return '';
+      return list.map(d=>{
+        const meta=[d.revision?`Rev ${d.revision}`:'', d.qty!==''&&d.qty!=null?`${d.qty}${d.unit?' '+d.unit:''}`:''].filter(Boolean).join(' · ');
+        return `<div class="ps-dwg" style="white-space:nowrap"><a href="#" class="ps-dwg-link" data-dwg="${esc(d.drawing_number)}"
+          title="Show the BOM of ${esc(d.drawing_number)}${d.drawing_name?' — '+esc(d.drawing_name):''}" style="color:var(--blue-dark);text-decoration:underline">${esc(d.drawing_number)}</a>${
+          meta?` <span style="color:var(--muted);font-size:10px">${esc(meta)}</span>`:''}</div>`;
+      }).join('');
+    }
     case 'customer_supplied': return p.customer_supplied?'<span style="color:#1E40AF;font-weight:700" title="Marked customer-supplied in the latest quote/import that saved this part">✓</span>':'';
     case 'updatedAt': return fmtDate(p.updatedAt);
     // A part with QVL alternatives shows how many were (or will be) compared;
@@ -283,6 +296,11 @@ export async function renderPartStock(filter=''){
   await _psAutoPurge();          // admins only; removes parts past their retention
 
   const predicate=parseBoolQuery(filter);
+  // A search that IS a drawing number: the table shows that drawing's BOM —
+  // the parts saved from it, with that drawing's revision and QTY.
+  const _dwgQ=String(filter||'').trim().replace(/^"(.*)"$/,'$1').trim();
+  const _dwgKey=_pnKey(_dwgQ);
+  const _dwgBom=_dwgKey.length>=4 ? S.allParts.filter(p=>_partDrawings(p).some(d=>_pnKey(d.drawing_number)===_dwgKey)) : [];
   const filtered=(filter||'').trim()
     ? S.allParts.filter(p=>predicate([p.part_number,p.drawing_number,p.drawing_name,p.atlantium_pn,p.description,
         p.manufacturer,p.distributor,p.qty,p.unit,p.units,(p.rfq_names||[]).join(' '),
@@ -334,6 +352,11 @@ export async function renderPartStock(filter=''){
       <button class="btn btn-ghost" id="btn-ps-trash" style="white-space:nowrap;flex-shrink:0" title="Deleted parts — restore or remove for good">♻ Deleted items${S.trashParts.length?` (${S.trashParts.length})`:''}</button>` : ''}
       <span class="count-badge">${totalItems} parts — page ${psPage}/${totalPages}</span>
     </div>
+    ${_dwgBom.length?(()=>{
+      const d0=_partDrawings(_dwgBom[0]).find(d=>_pnKey(d.drawing_number)===_dwgKey)||{};
+      return `<div class="ps-dwg-bom" style="margin:0 0 8px;padding:8px 12px;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:6px;font-size:13px;color:#1E3A8A">
+        📐 <strong>BOM of drawing ${esc(d0.drawing_number||_dwgQ)}</strong>${d0.drawing_name?` — ${esc(d0.drawing_name)}`:''}${d0.revision?` · Rev ${esc(d0.revision)}`:''}
+        · <strong>${_dwgBom.length}</strong> part(s) in the Database. The Drawing # column shows each part's QTY in this drawing.</div>`; })():''}
     <div class="table-wrap" id="ps-table-wrap"><table id="ps-table">
       <thead><tr>
         <th style="width:28px"><input type="checkbox" id="ps-check-all" title="Select all"></th>
@@ -346,6 +369,9 @@ export async function renderPartStock(filter=''){
 
   const inp=document.getElementById('ps-search');
   wireSearchClear('ps-search','ps-search-clear');
+  document.querySelectorAll('#ps-table .ps-dwg-link').forEach(l=>l.addEventListener('click',e=>{
+    e.preventDefault(); psPage=1; renderPartStock(`"${l.dataset.dwg}"`);
+  }));
   wireShiftCheck(document.querySelector('#ps-table'),'.ps-check');
   makeTableResizable(document.querySelector('#ps-table'));
   makeColumnsReorderable(document.querySelector('#ps-table'),'partstock',COLS,()=>renderPartStock(inp.value));

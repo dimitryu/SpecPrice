@@ -5,6 +5,31 @@ import { extractPDFPages } from '../io/pdf.js';
 
 // Rows from overlapping bands, joined: a row seen at the bottom of one band and
 // again at the top of the next is the same row once.
+// Rows the reading seems to have missed: item numbers absent between 1 and
+// the highest one read (items 4–7 read → 1, 2, 3 missing), and fewer rows than
+// the locator counted. Lists numbered 10, 20, 30… are not "missing" anything.
+export function _bomMissingRows(rows, expected=0){
+  const parts=(rows||[]).filter(r=>!/\btool\b/i.test(String(r.description||'')));
+  const items=[...new Set(parts.map(r=>parseInt(String(r.item??'').trim(),10)).filter(n=>n>0 && n<1000))];
+  const max=items.length ? Math.max(...items) : 0;
+  let gaps=[];
+  for(let k=1;k<=max;k++) if(!items.includes(k)) gaps.push(k);
+  if(gaps.length > max/2) gaps=[];          // a sparse numbering, not missed rows
+  const short=expected>0 && parts.length<expected;
+  return {gaps, short, missing: gaps.length>0 || short};
+}
+// Two readings of the same table, put together: every row of the first, plus
+// the rows of the second it does not have (by item number, else by part
+// number), in item order when the items are numbered.
+export function _bomUnionRows(a, b){
+  const key=r=>{ const it=parseInt(String(r?.item??'').trim(),10);
+    return it>0 ? 'i'+it : 'p'+String(r?.part_number||'').trim().toUpperCase()+'|'+String(r?.description||'').trim().toUpperCase(); };
+  const out=[...(a||[])], have=new Set(out.map(key));
+  for(const r of (b||[])){ const k=key(r); if(!have.has(k)){ out.push(r); have.add(k); } }
+  const num=r=>parseInt(String(r?.item??'').trim(),10);
+  if(out.every(r=>num(r)>0)) out.sort((x,y)=>num(x)-num(y));
+  return out;
+}
 export function _bomMergeBands(lists){
   const out=[];
   const key=r=>`${String(r?.item??'').trim()}|${String(r?.part_number||'').trim().toUpperCase()}|${String(r?.description||'').trim().toUpperCase()}`;
@@ -35,7 +60,7 @@ a pin-out or wiring table, and a label table are NOT a parts list.
 Return ONE JSON object and nothing else:
 {"found":true,"box":[x0,y0,x1,y1],"rows":<about how many data rows>}
 where the box is the table's outline as FRACTIONS of the image (0 = left/top, 1 = right/bottom —
-never pixels), including its header row, e.g. {"found":true,"box":[0.03,0.77,0.64,0.97],"rows":7}.
+never pixels), including its header row and EVERY data row from the first item to the last, e.g. {"found":true,"box":[0.03,0.77,0.64,0.97],"rows":7}.
 If there is no parts list on this sheet: {"found":false}`;
 export async function _bomLocate(b64){
   const resp=await _aiFetch({
@@ -127,7 +152,28 @@ export async function _bomFromPDF(file, setMsg){
       const bands=await crop(pi, loc.box);
       const lists=[];
       for(const b64 of bands) lists.push(await read(`Page ${pi+1} parts list`, '', true, {b64, mimeType:'image/jpeg'}, file.name));
-      const got=_bomMergeBands(lists);
+      let got=_bomMergeBands(lists);
+      // Rows missing (items 1–3 absent, or fewer than the locator counted): the
+      // box was probably drawn too tight. Read again with a box grown up and
+      // down, then — if still short — the whole sheet, and keep every row
+      // any reading found.
+      let miss=_bomMissingRows(got, loc.rows);
+      if(got.length && miss.missing){
+        say(`Page ${pi+1}: ${_partRows(got)} row(s) read${miss.gaps.length?`, items ${miss.gaps.join(', ')} missing`:''}${loc.rows?` (about ${loc.rows} expected)`:''} — reading a larger area`);
+        setMsg(`Some rows were missed — reading a larger area of page ${pi+1}…`, 70);
+        const [x0,y0,x1,y1]=loc.box;
+        const wide=[Math.max(0,x0-0.04), Math.max(0,y0-0.15), Math.min(1,x1+0.04), Math.min(1,y1+0.08)];
+        const lists2=[];
+        for(const b64 of await crop(pi, wide)) lists2.push(await read(`Page ${pi+1} parts list (larger area)`, '', true, {b64, mimeType:'image/jpeg'}, file.name));
+        got=_bomUnionRows(got, _bomMergeBands(lists2));
+        miss=_bomMissingRows(got, loc.rows);
+        if(miss.missing){
+          setMsg(`Still short — reading the whole page ${pi+1}…`, 78);
+          got=_bomUnionRows(got, await read(`Page ${pi+1} whole sheet (check)`, '', true, {b64:pageImages[pi], mimeType:'image/jpeg'}, file.name));
+          miss=_bomMissingRows(got, loc.rows);
+        }
+        say(`Page ${pi+1}: ${_partRows(got)} row(s) after the second reading${miss.gaps.length?` — items ${miss.gaps.join(', ')} still missing`:''}`);
+      }
       if(got.length && _partRows(got)>=_partRows(rows)){ rows=got; page=pi; how='region'; }
     }
     // 3. Nothing located: the whole sheet, as before.
@@ -205,7 +251,7 @@ FIELD MAPPING (map by column name; names vary between systems):
 - "manufacturer" → manufacturer/vendor name from that same QVL row — look for: VENDOR, MANUFACTURER, MFG, SUPPLIER
 - "description" → the component's descriptive text — look for: DESCRIPTION, NAME, DESC. Prefer the longer/fuller of the two if both exist.
 - "qty" → quantity — look for: QTY, QUANTITY, NO. REQ'D, AMOUNT, USAGE. **If the export has NO quantity column anywhere, use "1" for every row.**
-- "unit" → unit of measure — look for: UOM, UNIT, U/M. The ONLY valid values are "pc", "mm", "cm", "ea", "gm", "M". Map "each"/"EA"→"pc" and "FT"/"FEET"→"" (leave empty — a foot isn't one of the valid units; the app converts lengths separately). Anything unrecognised → "".
+- "unit" → unit of measure — look for: UOM, UNIT, U/M. The ONLY valid values are "pc", "mm", "cm", "ea", "gm", "M", "ml" (millilitres — adhesives, sealants; also "L" for litres). Map "each"/"EA"→"pc" and "FT"/"FEET"→"" (leave empty — a foot isn't one of the valid units; the app converts lengths separately). Anything unrecognised → "".
 - "item" → the row's sequence number if the sheet has one, else ""
 - "drawing_number" / "drawing_name" → the top-level assembly part number / title if the report header states one (e.g. a "Part Number:" cell near the top), else ""
 - "pin_count" → number of pins/positions/contacts for connector components, if stated or reliably inferable from the part number/description of a known connector series. Else "".
@@ -260,7 +306,7 @@ COLUMN MAPPING (column names may vary between drawings):
 - "drawing_number" → drawing number — look for: DWG NO, DRAWING NO, DRAWING #
 - "drawing_name" → drawing title or assembly name
 - "qty" → quantity — look for: QTY, QUANTITY, NO. REQ'D, NO. OFF, AMOUNT. Return as a plain number string (e.g. "3", "2500"). This is REQUIRED for every row — do not leave it empty unless the drawing genuinely has no quantity column.
-- "unit" → unit of measure — look for: UNIT, UOM, U/M — the ONLY valid values are: "pc", "mm", "cm", "ea", "gm" (grams — also written "GR"), "M" (meters). If the column shows anything else, leave "unit" as empty string "" rather than inventing or guessing a unit.
+- "unit" → unit of measure — look for: UNIT, UOM, U/M — the ONLY valid values are: "pc", "mm", "cm", "ea", "gm" (grams — also written "GR"), "M" (meters), "ml" (millilitres — adhesives, sealants; "L" for litres). If the column shows anything else, leave "unit" as empty string "" rather than inventing or guessing a unit.
 - "pin_count" → for connector parts only: the number of pins/positions/contacts (look for a POS, PINS, CONTACTS, WAY column, or a count embedded in the part number/description of a known connector series). Empty string "" if the row isn't a connector or the count isn't known — do not guess.
 - "customer_supplied" → "yes" ONLY when the parts list marks this row as supplied/furnished by the customer (e.g. "CUSTOMER SUPPLIED", "SUPPLIED BY CUSTOMER", "CUSTOMER FURNISHED", "CFE", "CFM", "FBC", "GFE", or a "SUPPLIED BY: CUSTOMER" column). Otherwise "". Never guess.
 - "price" → normally leave this empty string "" (component pricing comes from FindChips/Priority separately, not from the drawing). 
@@ -344,7 +390,7 @@ For each row extract:
 - "atlantium_pn": the company's own / internal / customer part number (e.g. a "B.B PART No." column) when it is a separate column from the manufacturer part number, else empty
 - "description": component description (DESCRIPTION / DESC column)
 - "qty": quantity as a number string
-- "unit": unit of measure — the ONLY valid values are: pc, mm, M, cm, ea, gm (grams — also written GR). If it's anything else, use empty string "" instead of guessing.
+- "unit": unit of measure — the ONLY valid values are: pc, mm, M, cm, ea, gm (grams — also written GR), ml (millilitres — adhesives, sealants; L for litres). If it's anything else, use empty string "" instead of guessing.
 - "manufacturer": manufacturer name if shown, else empty string
 - "pin_count": for connector parts only — the number of pins/positions/contacts, read from a POS/PINS/CONTACTS/WAY column if the drawing has one, or inferred from a count embedded in the part number/description of a known connector series. Empty string "" if the row isn't a connector or the count isn't known — do not guess.
 - "customer_supplied" → "yes" ONLY when the parts list marks this row as supplied/furnished by the customer (e.g. "CUSTOMER SUPPLIED", "SUPPLIED BY CUSTOMER", "CUSTOMER FURNISHED", "CFE", "CFM", "FBC", "GFE", or a "SUPPLIED BY: CUSTOMER" column). Otherwise "". Never guess.

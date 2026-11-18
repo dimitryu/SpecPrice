@@ -2480,6 +2480,61 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('locate: not found', loc('{"found":false}'), null);
 }
 
+// ─────────────────────────────────────────── v1.67: logs name the drawing; ml adhesives; drawings per part; ferrules; missed rows
+{
+  const wd=G('_withDrawing'), set=G('setLogDrawing');
+  set(['EL-004987-AA']);
+  t('log: an object gets the drawing first', wd('price_check',{checked:3}), {drawing:'EL-004987-AA', checked:3});
+  t('log: a string becomes a note', wd('labor_breakdown_translate','2 ops'), {drawing:'EL-004987-AA', note:'2 ops'});
+  t('log: an entry naming its drawing keeps it', wd('cut_strip_generated',{drawing:'X-1'}), {drawing:'X-1'});
+  t('log: account and screen entries get none', wd('screen_open',{screen:'database'}), {screen:'database'});
+  set([]);
+  t('log: no drawing in progress — unchanged', wd('price_check',{checked:3}), {checked:3});
+  t('log: drawings of rows, unique', G('logDrawingsOf')([{drawing_number:'A'},{drawing_number:'B'},{drawing_number:'A'},{}]), ['A','B']);
+
+  const pk=G('_parsePackMl');
+  t('pack ml: 50ML', pk('LOCTITE 243 THREADLOCKER 50ML BOTTLE'), 50);
+  t('pack ml: 250 ml', pk('Adhesive, 250 ml can'), 250);
+  t('pack ml: litres', pk('EPOXY 1 L'), 1000);
+  t('pack ml: cc', pk('SYRINGE 10cc'), 10);
+  t('pack ml: fl oz', pk('RTV 2.8 FL OZ TUBE'), 82.8);
+  t('pack ml: none', pk('LOCTITE 243'), 0);
+  const bt=G('_sdBottlesFor');
+  t('bottles: 75 ml from 50 ml bottles = 2', bt(75,50), 2);
+  t('bottles: exactly one bottle', bt(50,50), 1);
+  t('bottles: size unknown = 1', bt(75,0), 1);
+  const lc=G('_sdLineCost');
+  t('ml line cost: bottles × price per bottle', lc({qty:120, unit:'ml', pack_ml:50, mouser_price:12.5},'mouser_price'), 37.5);
+  t('ml target qty for the price break: bottles', G('_priceTargetQty')(120,'ml',50), 3);
+  t('ml bottles text', G('_sdBottlesText')({qty:75, unit:'ml', pack_ml:50}), '2 × 50 ml bottles (need 75 ml)');
+  t('unit: L → ml ×1000', G('_normalizeUnitQty')(0.5,'L'), {qty:500, unit:'ml'});
+  t('unit: ml kept', G('_dbNormalizeUnit')('ML'), 'ml');
+  ok('adhesive rows recognised', G('_sdIsAdhesiveRow')({description:'LOCTITE 401 INSTANT ADHESIVE'}) && G('_sdIsAdhesiveRow')({description:'X',unit:'ml'}) && !G('_sdIsAdhesiveRow')({description:'HEAT SHRINK'}));
+
+  const pd=G('_partDrawings'), mg=G('_mergePartDrawing'), pp=G('_partDrawingsPatch');
+  t('drawings: an old record read from its drawing number', pd({drawing_number:'A-1', revision:'B', drawing_name:'Cable'}), [{drawing_number:'A-1',revision:'B',drawing_name:'Cable',qty:'',unit:''}]);
+  const l1=mg(pd({drawing_number:'A-1'}), {drawing_number:'B-2', revision:'C', qty:2, unit:'cm'});
+  t('drawings: a new drawing is ADDED, not replacing', l1.map(d=>d.drawing_number), ['A-1','B-2']);
+  t('drawings: per-cable QTY and unit kept', [l1[1].qty, l1[1].unit, l1[1].revision], ['2','mm','C']);
+  t('drawings: the same drawing again is updated, not doubled', mg(l1, {drawing_number:'a-1', qty:5, _qtyPerUnit:1}).map(d=>d.drawing_number+':'+d.qty), ['B-2:','A-1:1'].map((x,i)=>i===0?'B-2:2':x));
+  t('drawings patch: numbers joined for the table and search', pp([{drawing_number:'B-2'}], {drawing_number:'A-1'}).drawing_number, 'A-1, B-2');
+  t('drawings patch: nothing new — no patch', pp([{drawing_number:'A-1'}], {drawing_number:'A-1', drawings:[{drawing_number:'A-1',revision:'',drawing_name:'',qty:'',unit:''}]}), {});
+  t('sales desk → DB: the drawing number no longer overwritten', G('_sdDbPatch')({drawing_number:'B-2', description:'X'}, {drawing_number:'A-1', description:'X'}).drawing_number, 'A-1, B-2');
+  t('latest drawing: the one saved last', G('_partLatestDrawing')({drawings:[{drawing_number:'A-1'},{drawing_number:'B-2'}]}).drawing_number, 'B-2');
+
+  const isC=G('_isCrimpContactRow');
+  ['FERR.INS.BLK 16# L=8MM','FERR. 1.5MM2 RED','END SLEEVE 2.5MM2','CABLE SHOE M8 35MM2','KABELSCHUH M6','ADER END HUELSE 1.5'].forEach(d=>ok('crimp contact (ferrule/lug): '+d, isC({description:d})));
+  ['FERRITE BEAD 600R','CABLE GLAND M20','HEAT SHRINK SLEEVE'].forEach(d=>ok('not a crimp contact: '+d, !isC({description:d})));
+  ok('tool prompt: ferrules and lugs by type and cross-section', /FERRULES/.test(G('_crimpToolPrompt')([{part_number:'3200043',description:'FERR.INS.BLK 16# L=8MM'}])));
+
+  const ms=G('_bomMissingRows');
+  t('missed rows: items 4–7 read → 1, 2, 3 missing', ms([4,5,6,7].map(n=>({item:String(n)})),7).gaps, [1,2,3]);
+  ok('missed rows: 1–7 read — complete', !ms([1,2,3,4,5,6,7].map(n=>({item:String(n)})),7).missing);
+  ok('missed rows: numbered 10, 20, 30 — not missing', !ms([10,20,30].map(n=>({item:String(n)}))).missing);
+  ok('missed rows: fewer than the locator counted', ms([1,2].map(n=>({item:String(n)})),5).short);
+  t('union of two readings, in item order', G('_bomUnionRows')([4,5].map(n=>({item:String(n)})), [1,2,4].map(n=>({item:String(n)}))).map(r=>r.item), ['1','2','4','5']);
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

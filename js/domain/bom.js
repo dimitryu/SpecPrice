@@ -188,7 +188,7 @@ export function _normalizeUnitQty(qty, rawUnit){
   const n=parseFloat(qty);
   const hasNum=!isNaN(n);
   switch(u){
-    case 'pc': case 'mm': case 'gr': return {qty, unit:u};
+    case 'pc': case 'mm': case 'gr': case 'ml': return {qty, unit:u};
     case 'm': case 'meter': case 'meters':
       return {qty: hasNum ? n*1000 : qty, unit:'mm'};
     case 'cm': case 'centimeter': case 'centimeters':
@@ -203,6 +203,13 @@ export function _normalizeUnitQty(qty, rawUnit){
       return {qty: hasNum ? n*25.4 : qty, unit:'mm'};
     case 'gm': case 'g': case 'gram': case 'grams':
       return {qty, unit:'gr'};
+    // Volume (adhesives, sealants): one canonical unit, ml.
+    case 'milliliter': case 'milliliters': case 'millilitre': case 'millilitres': case 'cc':
+      return {qty, unit:'ml'};
+    case 'cl':
+      return {qty: hasNum ? n*10 : qty, unit:'ml'};
+    case 'l': case 'lt': case 'ltr': case 'liter': case 'liters': case 'litre': case 'litres':
+      return {qty: hasNum ? n*1000 : qty, unit:'ml'};
     default: return {qty, unit:''};
   }
 }
@@ -768,15 +775,63 @@ export function _isYes(v){ return v===true || /^(y|yes|true|1|x|✓|v|customer|c
 // The fields a Sales Desk row carries that the Database keeps too. QTY is not
 // one of them: the Database is a catalogue and always holds 1.
 // ══════════════════════════════════════════════════════════════════════════════
-export const _SD_DB_TEXT=['description','manufacturer','drawing_number','drawing_name','revision','atlantium_pn',
+export const _SD_DB_TEXT=['description','manufacturer','drawing_name','revision','atlantium_pn',
   'pin_count','tool_for','mouser_url','digikey_url','mouser_match','digikey_match','mouser_mpn','digikey_mpn'];
 export const _SD_DB_NUM=['mouser_price','digikey_price','priority_price','mouser_stock','digikey_stock',
-  'mouser_brk','digikey_brk','est_price'];
+  'mouser_brk','digikey_brk','est_price','pack_ml'];
+// ── The drawings a Database part is in ─────────────────────────────────────────
+// A part is one record however many drawings use it; `drawings` lists each of
+// them with that drawing's revision, name and per-cable QTY / unit, so a search
+// for a drawing number brings back that drawing's whole BOM. `drawing_number`
+// holds all their numbers, comma-separated, for the table and the search. A
+// record from before the list existed is read from its drawing_number.
+export function _partDrawings(p){
+  if(!p) return [];
+  if(Array.isArray(p.drawings) && p.drawings.length)
+    return p.drawings.filter(d=>d && String(d.drawing_number||'').trim()).map(d=>({...d}));
+  const nums=String(p.drawing_number||'').split(/\s*,\s*/).map(s=>s.trim()).filter(Boolean);
+  return nums.map(n=>({drawing_number:n, revision:nums.length===1?String(p.revision||''):'',
+    drawing_name:nums.length===1?String(p.drawing_name||''):'', qty:'', unit:''}));
+}
+// The list with `row`'s drawing added — or, when it is already there, brought up
+// to date (a value missing on the row keeps the one on record). The drawing
+// saved last ends up last.
+export function _mergePartDrawing(list, row){
+  const dn=String((row&&row.drawing_number)||'').trim();
+  if(!dn) return list;
+  const k=_pnKey(dn);
+  const q=row._qtyPerUnit!=null ? row._qtyPerUnit : row.qty;
+  const entry={drawing_number:dn, revision:String(row.revision||'').trim(), drawing_name:String(row.drawing_name||'').trim(),
+               qty:q==null||q===''?'':String(q).trim(), unit:_dbNormalizeUnit(row.unit)||String(row.unit||'').trim()};
+  const old=(list||[]).find(d=>_pnKey(d.drawing_number)===k);
+  const rest=(list||[]).filter(d=>_pnKey(d.drawing_number)!==k);
+  const merged=old ? {...old, ...Object.fromEntries(Object.entries(entry).filter(([,v])=>v!=='')), drawing_number:old.drawing_number} : entry;
+  return [...rest, merged];
+}
+export function _partDrawingNumbers(list){ return (list||[]).map(d=>d.drawing_number).join(', '); }
+// The drawing a part was last saved from — what a Sales Desk row taken from the
+// Database is filed under.
+export function _partLatestDrawing(p){ const l=_partDrawings(p); return l.length ? l[l.length-1] : null; }
+// The Database fields for `rows` (one part, from one drawing or several)
+// merged into what `dbDoc` has: {drawings, drawing_number} when they change.
+export function _partDrawingsPatch(rows, dbDoc){
+  const before=_partDrawings(dbDoc);
+  const after=(rows||[]).reduce(_mergePartDrawing, before);
+  const patch={};
+  const norm=l=>JSON.stringify(l.map(d=>[d.drawing_number,d.revision||'',d.drawing_name||'',String(d.qty??''),d.unit||'']));
+  if(after.length && (!Array.isArray(dbDoc&&dbDoc.drawings) || norm(after)!==norm(dbDoc.drawings))) patch.drawings=after;
+  const nums=_partDrawingNumbers(after);
+  if(nums && nums!==String((dbDoc&&dbDoc.drawing_number)||'').trim()) patch.drawing_number=nums;
+  return patch;
+}
 // The patch that brings `dbDoc` in line with `row`: only fields whose value on
 // screen differs from the Database. An EMPTY value on screen never clears a
 // Database value — a blank cell usually means "not known here", not "erase".
-export function _sdDbPatch(row, dbDoc){
+export function _sdDbPatch(row, dbDoc, sameRows){
   const d=dbDoc||{}, patch={};
+  // Drawings are added to, never replaced: every row of this part (it may sit
+  // in several drawings on the desk) adds or updates its own drawing.
+  Object.assign(patch, _partDrawingsPatch(sameRows&&sameRows.length ? sameRows : [row], d));
   const txt=v=>String(v==null?'':v).trim();
   for(const k of _SD_DB_TEXT){
     const v=txt(row[k]);
@@ -800,10 +855,10 @@ export function _sdDbPatch(row, dbDoc){
   return patch;
 }
 // A new Database record from a Sales Desk row.
-export function _sdDbNewDoc(row){
+export function _sdDbNewDoc(row, sameRows){
   const doc={part_number:String(row.part_number||'').trim(), qty:1, stock:'', price_description:'', rfq_names:[],
              alt_mpns:(row.alt_mpns||[]).length>1?row.alt_mpns:[]};
-  Object.assign(doc, _sdDbPatch(row, {}));
+  Object.assign(doc, _sdDbPatch(row, {}, sameRows));
   doc.customer_supplied=!!row.customer_supplied;
   return doc;
 }
@@ -815,9 +870,12 @@ export function _sdDbNewDoc(row){
 export function _isCrimpContactRow(r){
   if(!r || _sdIsToolRow(r)) return false;
   const d=String(r.description||'').toUpperCase();
-  if(!/\b(PINS?|SOCKETS?|CONTACTS?|TERMINALS?|TERM\.?|FERRULES?|LUGS?|SPLICES?)\b/.test(d)
+  // Ferrules and cable lugs go by many names and short forms: FERR., wire-end /
+  // cord-end / bootlace ferrule, end sleeve, Aderendhülse, cable shoe, Kabelschuh.
+  const FERRULE_LUG=/\b(FERR|FERRULES?|BOOTLACE|END[\s-]?SLEEVES?|CORD[\s-]?END|WIRE[\s-]?END|ADER[\s-]?END[\s-]?H(?:UE|Ü|U)LSEN?|AEH|LUGS?|CABLE[\s-]?SHOES?|KABELSCHUHE?|SPLICES?)\b/;
+  if(!/\b(PINS?|SOCKETS?|CONTACTS?|TERMINALS?|TERM\.?)\b/.test(d) && !FERRULE_LUG.test(d)
      && !/\bRING\b[\s\S]*\bCRIMP\b|\bCRIMP\b[\s\S]*\bRING\b/.test(d)) return false;
-  if(/\b(RING|SPADE|FORK|BUTT|FLAG|QUICK.?DISCONNECT|FASTON|FERRULES?|LUGS?|SPLICES?)\b/.test(d)) return true;
+  if(/\b(RING|SPADE|FORK|BUTT|FLAG|QUICK.?DISCONNECT|FASTON)\b/.test(d) || FERRULE_LUG.test(d)) return true;
   // Distributor style for a single contact: "CONN SOCKET 22-28AWG CRIMP TIN" —
   // a wire gauge and PIN/SOCKET that is not a count ("4 PIN" is a housing).
   if(/AWG\b/.test(d) && /(^|[^\d\s]\s*)\b(PIN|SOCKET|CONTACT)\b/.test(d) && !/\d+\s*(POS|POSITIONS?|PINS?|WAY)\b/.test(d)) return true;

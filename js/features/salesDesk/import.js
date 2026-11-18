@@ -2,11 +2,12 @@ import { S } from '../../core/state.js';
 import { _bomFromPDF, _findBOMPageIndex, aiExtractBOM, aiReadTitleBlock } from '../../ai/bom.js';
 import { _aiReady } from '../../ai/client.js';
 import { aiAnalyzeCableProcess, aiExtractDrawingNotes } from '../../ai/process.js';
-import { logAudit } from '../../core/audit.js';
+import { logAudit, logDrawingsOf, setLogDrawing } from '../../core/audit.js';
 import { parseBoolQuery, wireSearchClear, wireShiftCheck } from '../../core/table.js';
 import { closeModal, debounce, esc, fmtPrice, showModal, toast } from '../../core/ui.js';
 import { saveBOMToPartStock } from '../../data/parts.js';
-import { _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, parseExcelSheetsStructured } from '../../domain/bom.js';
+import { _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, _parseDrawingFileName, _partLatestDrawing, parseExcelSheetsStructured } from '../../domain/bom.js';
+import { _parsePackMl } from '../../domain/pricing.js';
 import { _xlsConfirmMapping, showBOMPreview } from '../bomImport.js';
 import { _sdAutoMatchLabor } from './labor.js';
 import { _sdDrawingNotes, _sdIsToolRow, _sdRecalcRow, _sdTraceFields, renderSalesDesk, sdItems } from './salesDesk.js';
@@ -165,6 +166,9 @@ export async function handleSDFiles(files){
 
   for(let fidx=0; fidx<files.length; fidx++){
     const file=files[fidx];
+    // Logs written while this file is read name its drawing: from the file
+    // name until the title block has been read, then the drawing's own number.
+    setLogDrawing(_parseDrawingFileName(file.name).drawing_number || file.name);
     const isPDF=file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf');
     const isImg=file.type.startsWith('image/');
     const isXls=_isSpreadsheetFile(file);
@@ -248,6 +252,7 @@ export async function handleSDFiles(files){
       const _dwgId=_drawingIdentity(_tb, file.name, isPDF ? (_pdfLayout||_pdfText) : '');
       const effectiveDwgName=_dwgId.drawing_number;
       _applyDrawingIdentity(extractedRows, _dwgId);
+      setLogDrawing(_dwgId.drawing_number || _parseDrawingFileName(file.name).drawing_number);
       extractedRows.forEach(r=>{
         r.customer_supplied=_isYes(r.customer_supplied);
         _normalizeExtractedRow(r);
@@ -366,6 +371,7 @@ export async function handleSDFiles(files){
     }
   }
 
+  setLogDrawing([]);   // the reading is over; the save (below) sets it again
   if(errors.length) errors.forEach(msg=>toast(msg,'error'));
 
   const _ringEl=body.querySelector('.ring');
@@ -385,6 +391,7 @@ export async function handleSDFiles(files){
   showBOMPreview(allRows, body, foot,
     `💾 Save to Database + Sales Desk (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
     async(updatedRows, prog)=>{
+      setLogDrawing(logDrawingsOf(updatedRows));
       await saveBOMToPartStock(updatedRows, '', prog ? (d,t)=>prog.set(d,t,'Saving to Database…') : null);
       if(prog) prog.note(`Adding ${updatedRows.length} rows to Sales Desk…`);
       let added=0;
@@ -407,7 +414,7 @@ export async function handleSDFiles(files){
           // which reads as a real part, gets sent to Check Price as one, and
           // matches nothing. An empty cell is the truthful answer.
           part_number:r.part_number||'', description:r.description||'',
-          drawing_number:r.drawing_number||match?.drawing_number||match?.drawing_name||'',
+          drawing_number:r.drawing_number||(_partLatestDrawing(match)||{}).drawing_number||match?.drawing_name||'',
           drawing_name:r.drawing_name||'', revision:r.revision||'', atlantium_pn:r.atlantium_pn||'',
           pin_count:r.pin_count||'', customer_supplied:!!r.customer_supplied,
           tool_source:_isTool ? (r.tool_source||'ai') : '',
@@ -432,6 +439,8 @@ export async function handleSDFiles(files){
           digikey_price:match?parseFloat(match.digikey_price)||'':'',
           ...(_isTool && +r.digikey_price>0 ? {digikey_price:+r.digikey_price} : {}),
           tool_url:r.tool_url||'', tool_in_db:!!r.tool_in_db,
+          // An adhesive's bottle size: the Database's, else what the drawing says ("LOCTITE 243 50ML").
+          pack_ml: parseFloat(match?.pack_ml)>0 ? +match.pack_ml : (_parsePackMl(`${r.description||''} ${r.part_number||''}`)||''),
           tool_note:_isTool ? (r.tool_note||'') : '', tool_pages:_isTool && Array.isArray(r.tool_pages) ? r.tool_pages : [],
           labor_time:'', labor_total:0,
           // Whether this tool is already owned (in Stock) is no longer decided
@@ -465,6 +474,7 @@ export async function handleSDFiles(files){
       S._sdPendingLaborByKey={};
       toast(`Added ${added} parts to Sales Desk`,'success');
       logAudit('sales_desk_add_from_drawing',{count:added},true);
+      setLogDrawing([]);
       closeModal();
       document.getElementById('sd-tbody')&&renderSalesDesk();
       await _sdAutoMatchLabor();

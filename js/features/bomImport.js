@@ -1,10 +1,10 @@
 import { _bomFromPDF, aiExtractBOM, aiReadTitleBlock } from '../ai/bom.js';
 import { _aiReady } from '../ai/client.js';
-import { logAudit } from '../core/audit.js';
+import { logAudit, logDrawingsOf, setLogDrawing } from '../core/audit.js';
 import { closeModal, esc, progressPanel, showModal, toast } from '../core/ui.js';
 import { saveBOMToPartStock } from '../data/parts.js';
 import { appendRowsToDrawing } from '../data/projects.js';
-import { _XLS_MAP_FIELDS, _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, _xlsAnalyzeSheet, _xlsMapSignature, parseExcelSheetsStructured } from '../domain/bom.js';
+import { _XLS_MAP_FIELDS, _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, _parseDrawingFileName, _xlsAnalyzeSheet, _xlsMapSignature, parseExcelSheetsStructured } from '../domain/bom.js';
 import { renderRFQDetail } from './rfq.js';
 import { _TOOL_TAG, _sdIsToolRow, _toolRowAttrs } from './salesDesk/salesDesk.js';
 import { _addToolsToRows, _toolLookupMessage } from './salesDesk/tools.js';
@@ -74,6 +74,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
 
   for(let fidx=0; fidx<files.length; fidx++){
     const file = files[fidx];
+    setLogDrawing(_parseDrawingFileName(file.name).drawing_number || file.name);
     const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
     const isImg = file.type.startsWith('image/');
     const isXls = _isSpreadsheetFile(file);
@@ -141,6 +142,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
       const _dwgId=_drawingIdentity(_tb, file.name, isPDF ? (_pdfLayout||_pdfText) : '');
       if(files.length===1 && drawingNameOverride) _dwgId.drawing_number=drawingNameOverride;
       _applyDrawingIdentity(extractedRows, _dwgId);
+      setLogDrawing(_dwgId.drawing_number || _parseDrawingFileName(file.name).drawing_number);
       extractedRows.forEach(r=>{
         r.customer_supplied=_isYes(r.customer_supplied);
         _normalizeExtractedRow(r);
@@ -167,6 +169,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
     }
   }
 
+  setLogDrawing([]);
   if(errors.length) errors.forEach(msg=>toast(msg,'error'));
 
   const _ringEl=document.querySelector('.ai-status .ring');
@@ -185,6 +188,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
   showBOMPreview(allRows, body, foot,
     `💾 Save to Database + RFQ (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
     async(updatedRows)=>{
+      setLogDrawing(logDrawingsOf(updatedRows));
       await saveBOMToPartStock(updatedRows, projectName);
       // Group rows by drawing_number so each source file lands in its own RFQ drawing doc
       const byDwg = {};
@@ -197,6 +201,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
       }
       toast(`Saved ${updatedRows.length} BOM rows across ${Object.keys(byDwg).length} drawing(s)`,'success');
       logAudit('rfq_bom_saved',{rows:updatedRows.length,drawings:Object.keys(byDwg).length,project:projectName},true);
+      setLogDrawing([]);
       closeModal();
       renderRFQDetail(projectId, projectName);
     }

@@ -31,7 +31,7 @@ const L=require('./lib.js');
     await L.mark(o.page,['#ps-search','#ps-page-size','#btn-ps-refresh','#btn-ps-fc','#btn-ps-import','#btn-ps-export','#btn-ps-delsel','#btn-ps-trash','.count-badge']);
     const tb=await (await o.page.$('.toolbar')).boundingBox();
     await L.shot(o.page,'03-db-toolbar',{x:0,y:0,width:1000,height:tb.y+tb.height+16}); await o.b.close(); }
-  await L.mark(page,[{sel:'#ps-table thead',pad:2},{sel:'.price-green',idx:1,pad:4},{sel:'.price-red',idx:1,pad:4},{sel:'.ps-stock-toggle',idx:1,pad:6},{sel:'#ps-table tbody tr td:nth-child(3)',idx:4,pad:2}]);
+  await L.mark(page,[{sel:'#ps-table thead',pad:2},{sel:'.price-green',idx:1,pad:4},{sel:'.price-red',idx:1,pad:4},{sel:'.ps-stock-toggle',idx:1,pad:6},{sel:'#ps-table tbody tr td:nth-child(4)',idx:4,pad:2}]);
   await L.shot(page,'04-db-table',{x:0,y:70,width:1500,height:460});
   // check price modal on 4 selected rows
   for(const i of [2,5,7,12]) await page.click(`.ps-check >> nth=${i}`);

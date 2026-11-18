@@ -62,7 +62,8 @@ const INIT=`window.__DB['companies/c1/cut_strip_specs']=(()=>{const o=${specs}; 
   await page.click('#adm-tickets-body tbody button >> nth=0').catch(()=>{}); await page.waitForTimeout(700);
   await L.shot(page,'48b-admin-ticket-open','.modal'); await page.evaluate(()=>closeModal()); await page.waitForTimeout(400);
   P=await L.panel(page,'#adm-logs-body');
-  await L.mark(page,[{sel:'#adm-logs-body input',idx:0},{sel:'#adm-logs-body tbody tr',idx:3,pad:1}]);
+  { const r=await page.evaluate(()=>[...document.querySelectorAll('#adm-logs-body tbody tr')].findIndex(t=>/drawing_bom_search/.test(t.textContent)));
+    await L.mark(page,[{sel:'#adm-logs-body input',idx:0},{sel:'#adm-logs-body tbody tr',idx:Math.max(0,r),pad:1},{sel:'#adm-logs-body tbody td.adm-log-details',idx:Math.max(0,r),pad:1,at:'right'}]); }
   await L.shot(page,'49-admin-logs',P);
   P=await L.panel(page,'#adm-prompts-body'); await L.shot(page,'49b-admin-prompts',P);
   console.log('errors',errs);

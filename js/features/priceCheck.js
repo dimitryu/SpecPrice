@@ -1,9 +1,9 @@
 import { S } from '../core/state.js';
-import { logSystemAudit } from '../core/audit.js';
+import { logDrawingsOf, logSystemAudit, setLogDrawing } from '../core/audit.js';
 import { closeModal, esc, showModal, toast } from '../core/ui.js';
 import { mergePartDoc, updatePartFields } from '../data/parts.js';
 import { lookupPartPrices } from '../data/pricing.js';
-import { SD_NOMINAL_LABEL_PRICE, _priceTargetQty, _sdIsLabelRow, _sdLineCost, _sdRecalcTotal } from '../domain/pricing.js';
+import { SD_NOMINAL_LABEL_PRICE, _parsePackMl, _priceTargetQty, _sdBottles, _sdBottlesText, _sdIsLabelRow, _sdLineCost, _sdRecalcTotal } from '../domain/pricing.js';
 import { renderPartStock } from './database.js';
 import { _sdApplyUnits, _sdDwgKey, _sdDwgUnits, renderSalesDesk, sdItems } from './salesDesk/salesDesk.js';
 
@@ -65,6 +65,7 @@ export function _sdAskUnitsThenCheck(targets){
     picks.forEach(([d,v])=>_sdApplyUnits(d,v));
     const items=targets.filter(r=>r.part_number).map(r=>({
       part_number:r.part_number, qty:parseFloat(r.qty)||1, unit:r.unit||'',
+      pack_ml:r.pack_ml||'', drawing_number:r.drawing_number||'',
       description:r.description||'', _sdIdx:sdItems.indexOf(r)}));
     if(!items.length){ closeModal(); toast('No parts to check','error'); return; }
     runFCCheckModal(items,'sd');   // replaces this modal with its own
@@ -76,6 +77,7 @@ export async function runFCCheckModal(items, mode){
   let stopped=false;
   const total=items.length;
   const _fcT0=Date.now();   // how long the whole run took — logged at the end
+  setLogDrawing(logDrawingsOf(items));
 
   const money=v=>v>0?('$'+(+v).toFixed(2)):'';
   // Unit prices need more places than line totals: a connector at $0.0032 and
@@ -90,7 +92,7 @@ export async function runFCCheckModal(items, mode){
   const _lineCost=(it,field,price)=>{
     const p=parseFloat(price)||0;
     if(!p) return 0;
-    return _sdLineCost({qty:it.qty, unit:it.unit, [field]:p}, field);
+    return _sdLineCost({qty:it.qty, unit:it.unit, pack_ml:it.pack_ml, [field]:p}, field);
   };
 
   showModal(`<div class="modal" style="width:min(96vw,900px)">
@@ -198,7 +200,7 @@ export async function runFCCheckModal(items, mode){
     setStatus(i,'⏳');
     const prPrice=parseFloat(it.priority_price)||0;
     try{
-      const targetQty=_priceTargetQty(it.qty, it.unit);
+      const targetQty=_priceTargetQty(it.qty, it.unit, it.pack_ml);
 
       // ── Qualified Vendor List: price every approved alternative ──
       // A QVL names several manufacturer part numbers that the CUSTOMER has
@@ -252,6 +254,14 @@ export async function runFCCheckModal(items, mode){
 
       const dkNum = r.digikey ? r.digikey.price : '';
       const moNum = r.mouser  ? r.mouser.price  : '';
+      // An adhesive in ml with no bottle size yet: the supplier's description
+      // usually states it ("…, 50 ml bottle"). Read it before the line is costed.
+      let _packFound=0;
+      if(String(it.unit||'').toLowerCase()==='ml' && !(parseFloat(it.pack_ml)>0)){
+        _packFound=[r.best, r.mouser, r.digikey].filter(Boolean).map(v=>_parsePackMl(`${v.desc||''} ${v.mpn||''}`)).find(v=>v>0)
+          || _parsePackMl(`${it.description||''} ${it.part_number||''}`) || 0;
+        if(_packFound) it.pack_ml=_packFound;
+      }
       // Stored per-unit (that's what the columns elsewhere hold), displayed as
       // the line total for this row's quantity.
       paintRow(i,
@@ -301,6 +311,12 @@ export async function runFCCheckModal(items, mode){
         tip=(tip?tip+'\n\n':'')+`Cheapest QVL alternative: ${moneyUnit(pick.price)}/unit vs ${moneyUnit(savedVs)}/unit for the dearest approved option.`;
       }
       if(_nominal) setStatus(i, `◑ nominal $${SD_NOMINAL_LABEL_PRICE.toFixed(2)}`, '#B45309', tip+'\n\n'+`No supplier price for this label/marker — Part Cost uses the nominal label price, $${SD_NOMINAL_LABEL_PRICE.toFixed(2)} per piece. Type a price in Part Cost if you have a real one.`);
+      else if(String(it.unit||'').toLowerCase()==='ml'){
+        // What to buy: N bottles of the size found, for the ml needed.
+        const bt=_sdBottlesText(it);
+        setStatus(i, `${glyph} · ${parseFloat(it.pack_ml)>0?`${_sdBottles(it)}×${+(+it.pack_ml).toFixed(2)}ml`:'size?'}`, parseFloat(it.pack_ml)>0?(noPrice?'#B45309':'var(--green)'):'#B45309',
+          (tip?tip+'\n\n':'')+`Adhesive bought by the bottle: ${bt}. Prices shown are for all the bottles.${_packFound?' Bottle size read from the supplier\u2019s description.':''}`);
+      }
       else setStatus(i, glyph, noPrice?'#B45309':'var(--green)', tip);
 
       // The distributor knows the real manufacturer; our rows frequently don't
@@ -365,7 +381,7 @@ export async function runFCCheckModal(items, mode){
           try{
             const patch={
               mouser_price:moNum, digikey_price:dkNum, ...matchFields, ...stockFields,
-              stock, qty:1
+              stock, qty:1, ...(_packFound ? {pack_ml:_packFound} : {})
             };
             if(newMfr) patch.manufacturer=newMfr;
             // The cheapest approved alternative becomes the part we quote.
@@ -388,6 +404,7 @@ export async function runFCCheckModal(items, mode){
         if(sdIdx!==undefined&&sdItems[sdIdx]){
           sdItems[sdIdx].mouser_price=moNum;
           sdItems[sdIdx].digikey_price=dkNum;
+          if(_packFound && !(parseFloat(sdItems[sdIdx].pack_ml)>0)) sdItems[sdIdx].pack_ml=_packFound;
           Object.assign(sdItems[sdIdx], matchFields, stockFields);
           if(newMfr) sdItems[sdIdx].manufacturer=newMfr;
           if(candidates.length>1 && chosenPn && chosenPn!==sdItems[sdIdx].part_number){
@@ -404,7 +421,7 @@ export async function runFCCheckModal(items, mode){
             if(existing){
               const sdPatch={
                 mouser_price:moNum, digikey_price:dkNum, ...matchFields, ...stockFields,
-                stock, qty:1
+                stock, qty:1, ...(_packFound && !(parseFloat(existing.pack_ml)>0) ? {pack_ml:_packFound} : {})
               };
               if(newMfr) sdPatch.manufacturer=newMfr;
               await updatePartFields(existing._id,sdPatch);
@@ -413,11 +430,13 @@ export async function runFCCheckModal(items, mode){
               if(newMfr) existing.manufacturer=newMfr;
             } else {
               const key=pn.replace(/[\/\\#\[\]*?]/g,'_').slice(0,500);
+              // Merged into whatever is there: only the price fields and what
+              // this row knows — never blanks over a record saved moments ago.
+              const known=Object.fromEntries(Object.entries({description:it.description, manufacturer:newMfr||it.manufacturer,
+                unit:it.unit, ...(_packFound?{pack_ml:_packFound}:{})}).filter(([,v])=>v!=null && v!==''));
               await mergePartDoc(key,{
-                part_number:pn, description:'', drawing_number:'', manufacturer:newMfr||'',
-                unit:'', atlantium_pn:'', qty:1, stock, ...matchFields, ...stockFields,
-                mouser_price:moNum, digikey_price:dkNum,
-                price_description:'', deleted:false
+                part_number:pn, ...known, qty:1, stock, ...matchFields, ...stockFields,
+                mouser_price:moNum, digikey_price:dkNum, deleted:false
               });
               S.allParts.push({_id:key, part_number:pn, qty:1, stock, ...matchFields, ...stockFields,
                 mouser_price:moNum, digikey_price:dkNum, manufacturer:newMfr||''});
@@ -481,4 +500,5 @@ export async function runFCCheckModal(items, mode){
     checked: done, found, failed: failures, stopped, ms: Date.now()-_fcT0,
     ...(failures?{error:lastError}:{})
   }, failures!==total || total===0);
+  setLogDrawing([]);
 }

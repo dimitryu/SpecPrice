@@ -1,11 +1,12 @@
 import { S } from '../../core/state.js';
 import { _aiReady } from '../../ai/client.js';
 import { _NOTE_DOC_STD_RE } from '../../ai/process.js';
-import { logAudit } from '../../core/audit.js';
+import { logAudit, logDrawingsOf, setLogDrawing } from '../../core/audit.js';
 import { loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../../core/table.js';
 import { closeModal, debounce, esc, progressPanel, setActions, setContent, showModal, toast } from '../../core/ui.js';
 import { loadParts, saveSalesDeskToDB } from '../../data/parts.js';
-import { SD_NOMINAL_LABEL_PRICE, _SD_PRICE_SOURCES, _sdLaborQtyMultiplier, _sdRecalcTotal } from '../../domain/pricing.js';
+import { _partLatestDrawing } from '../../domain/bom.js';
+import { SD_NOMINAL_LABEL_PRICE, _SD_PRICE_SOURCES, _parsePackMl, _sdBottlesText, _sdIsAdhesiveRow, _sdLaborQtyMultiplier, _sdRecalcTotal } from '../../domain/pricing.js';
 import { _PRICE_LEGEND_HTML, _priceCellHTML, _stockCellHTML } from '../database.js';
 import { _sdAskUnitsThenCheck } from '../priceCheck.js';
 import { exportSalesDeskExcel } from './export.js';
@@ -30,6 +31,7 @@ export const _SD_DEFAULT_COLS=[
   {k:'manufacturer',   l:'Manufacturer',    w:'120px'},
   {k:'qty',            l:'QTY',             w:'75px'},
   {k:'unit',           l:'Units',           w:'55px'},
+  {k:'pack_ml',        l:'Pack (ml)',       w:'120px'},
   {k:'mouser_price',   l:'Mouser Cost',     w:'95px'},
   {k:'mouser_stock',   l:'Mouser Stock',    w:'85px'},
   {k:'digikey_price',  l:'DigiKey Cost',    w:'95px'},
@@ -90,7 +92,7 @@ export function _sdRecalcLaborTotal(r){
   return r.labor_total;
 }
 export function _sdRecalcRow(r){ _sdRecalcTotal(r); _sdRecalcLaborTotal(r); return r; }
-export const _SD_UNIT_OPTIONS=['','pc','mm','gr'];
+export const _SD_UNIT_OPTIONS=['','pc','mm','gr','ml'];
 export const _TOOL_TAG='<span style="margin-inline-start:6px;padding:1px 6px;border-radius:8px;background:#F59E0B;color:#fff;font-size:9px;font-weight:700;vertical-align:middle">TOOL</span>';
 export function _sdCellHTML(k,r,i){
   // Does this row have ANY quotable price? Used below to flag rows that still
@@ -122,6 +124,17 @@ export function _sdCellHTML(k,r,i){
     case 'unit': return `<select class="sd-unit" data-i="${i}" style="padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px">
            ${_SD_UNIT_OPTIONS.map(u=>`<option value="${u}" ${String(r.unit||'')===u?'selected':''}>${u||'—'}</option>`).join('')}
          </select>`;
+    // The bottle size of an adhesive bought by the bottle, and how many bottles
+    // the ml needed come to. Read from the supplier's description at Check Price
+    // when it says ("50ML"); typed here when it does not.
+    case 'pack_ml': {
+      if(String(r.unit||'').toLowerCase()!=='ml' && !_sdIsAdhesiveRow(r)) return '<span style="color:var(--muted)">—</span>';
+      const t=_sdBottlesText(r);
+      return `<input type="number" class="sd-pack-ml" data-i="${i}" value="${r.pack_ml??''}" min="0" step="any" placeholder="ml"
+           title="Bottle size in ml — Part Cost = bottles × price per bottle"
+           style="width:62px;padding:2px 5px;border:1px solid ${parseFloat(r.pack_ml)>0?'var(--border)':'#f59e0b'};border-radius:4px;font-size:12px">${
+           t?`<div class="sd-bottles" style="font-size:10px;color:${parseFloat(r.pack_ml)>0?'var(--muted)':'#b45309'};white-space:normal;line-height:1.2;margin-top:2px">${esc(t)}</div>`:''}`;
+    }
     // All price columns share the Database's comparison rule — cheapest green,
     // dearest red — so a price means the same thing on both screens.
     case 'priority_price':
@@ -772,11 +785,12 @@ export async function renderSalesDesk(){
       if(a.dataset.busy) return;
       a.dataset.busy='1'; a.textContent='Searching…';
       try{
+        setLogDrawing(logDrawingsOf([sdItems[+a.dataset.i]]));
         const r=await _sdRetryToolRow(+a.dataset.i, txt=>_sdLaborBusy(txt));
         if(r.found) toast(`Found ${r.found} tool row(s) — verify before ordering`,'success');
         else toast(`Still no tool found. ${r.aiError||r.note||''}`.trim(),'warn');
       }catch(err){ toast('Tool search failed: '+err.message,'error'); }
-      finally{ _sdLaborBusy(''); renderSD(); }
+      finally{ _sdLaborBusy(''); setLogDrawing([]); renderSD(); }
     }));
     document.getElementById('sd-col-all')?.addEventListener('click',()=>{
       groups.forEach(g=>_sdCollapsed.add(g.dwg)); _sdRenderSummary();});
@@ -890,6 +904,11 @@ export async function renderSalesDesk(){
         r.description=String(r.description||'').replace(/\s*—\s*not identified yet.*$/i,'');
         renderSD();
       }
+    }));
+    document.querySelectorAll('.sd-pack-ml').forEach(inp=>inp.addEventListener('change',()=>{
+      const r=sdItems[+inp.dataset.i], v=parseFloat(inp.value);
+      r.pack_ml = v>0 ? v : '';
+      _sdRecalcRow(r); renderSD();
     }));
     document.querySelectorAll('.sd-drawing-number').forEach(inp=>inp.addEventListener('change',()=>{
       sdItems[+inp.dataset.i].drawing_number=inp.value.trim();
@@ -1027,11 +1046,13 @@ export async function renderSalesDesk(){
           manufacturer:p.manufacturer||'',
           alt_mpns:(p.alt_mpns||[]),
           est_price:parseFloat(p.est_price)||0,
-          drawing_number:p.drawing_number||p.drawing_name||'',
-          drawing_name:p.drawing_name||'', revision:p.revision||'', atlantium_pn:p.atlantium_pn||'',
+          // A part in several drawings is filed under the one it was saved from last.
+          drawing_number:(_partLatestDrawing(p)||{}).drawing_number||p.drawing_name||'',
+          drawing_name:(_partLatestDrawing(p)||{}).drawing_name||p.drawing_name||'', revision:(_partLatestDrawing(p)||{}).revision||p.revision||'', atlantium_pn:p.atlantium_pn||'',
           pin_count:p.pin_count||'',
           // Customer-supplied is decided per quote, never carried over from the Database.
           customer_supplied:false,
+          pack_ml:parseFloat(p.pack_ml)>0 ? +p.pack_ml : (_parsePackMl(`${p.description||''} ${p.part_number||''}`)||''),
           qty, unit:p.unit||p.units||'pcs',priority_price:parseFloat(p.priority_price)||0,
           mouser_price:parseFloat(p.mouser_price)||'', digikey_price:parseFloat(p.digikey_price)||'',
           ..._sdTraceFields(p),
@@ -1043,6 +1064,7 @@ export async function renderSalesDesk(){
       }
       renderSalesDesk();
       toast(`Added ${added} part(s) to Sales Desk`,'success');
+      setLogDrawing(logDrawingsOf(newRows));
       logAudit('sales_desk_add_from_picker',{count:added},true);
       // Crimp / insertion tools for what was just added: Database → standard
       // table → AI (see tools.js). They arrive as TOOL rows under their connector.
@@ -1058,7 +1080,7 @@ export async function renderSalesDesk(){
         const tm=_toolLookupMessage(t);
         if(tm && ((t.notFound||[]).length || t.aiError)) toast(tm,'warn');
         logAudit('sales_desk_tools_for_picker',{added:t.added, db:t.db, known:t.known, web:t.web, ai:t.ai, owned:t.owned},!t.aiError);
-      }finally{ _sdLaborBusy(''); }
+      }finally{ _sdLaborBusy(''); setLogDrawing([]); }
       // The labor estimate is an AI call, so it takes a moment. Without this
       // the Labor Time column just sits at 0 for a few seconds and looks broken
       // — which is exactly how the old empty stub looked.
@@ -1150,10 +1172,12 @@ export function _sdSaveToDBModal(after){
     const body=document.getElementById('sdb-body');
     const prog=progressPanel(body,'Saving to Database…');
     try{
+      setLogDrawing(logDrawingsOf(sdItems));
       const res=await saveSalesDeskToDB(sdItems,(d,t)=>prog.set(d,t,'Saving to Database…'));
       prog.finish(`Done — ${res.updated} updated, ${res.created} created, ${res.unchanged} unchanged`);
       logAudit('sales_desk_save_to_db',{updated:res.updated, created:res.created, unchanged:res.unchanged, fields:res.fields, errors:res.errors.length}, !res.errors.length);
-      const FIELD_NAMES={description:'Description',manufacturer:'Manufacturer',drawing_number:'Drawing #',drawing_name:'Drawing name',
+      setLogDrawing([]);
+      const FIELD_NAMES={description:'Description',manufacturer:'Manufacturer',drawing_number:'Drawing #',drawings:'Drawings (BOM)',drawing_name:'Drawing name',
         revision:'Revision',atlantium_pn:'Customer PN',pin_count:'Pins',tool_for:'Tool for',unit:'Units',
         mouser_price:'Mouser price',digikey_price:'DigiKey price',priority_price:'Priority price',mouser_stock:'Mouser stock',
         digikey_stock:'DigiKey stock',est_price:'Estimate',customer_supplied:'Customer supplied',mouser_url:'Mouser link',
