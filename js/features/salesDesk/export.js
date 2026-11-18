@@ -2,6 +2,7 @@ import { S } from '../../core/state.js';
 import { logSystemAudit } from '../../core/audit.js';
 import { fmtDate, toast } from '../../core/ui.js';
 import { APP_VER } from '../../core/version.js';
+import { _partDrawings } from '../../domain/bom.js';
 import { MM_PER_FOOT, MM_PER_METER, SD_NOMINAL_LABEL_PRICE, _sdBottlesText, _sdIsLabelRow } from '../../domain/pricing.js';
 import { _sdComputeSummary, _sdDwgSet, _sdIsToolRow, _sdPriceSource, _sdPriceSourceText, _sdSearchUrls, sdItems } from './salesDesk.js';
 import { _XL, _xlBoxed, loadExcelJS } from '../../io/excel.js';
@@ -24,6 +25,10 @@ export function exportPartStockExcel(rows, totalCount, cols){
       if(c.k==='digikey_price') return parseFloat(p.digikey_price)||'';
       if(c.k==='unit') return p.unit||p.units||'';
       if(c.k==='rfq_names') return (p.rfq_names||[]).join(', ');
+      // One line per drawing, as on screen: number · Rev · QTY · Customer PN.
+      if(c.k==='drawing_number') return _partDrawings(p).map(d=>[d.drawing_number, d.revision?`Rev ${d.revision}`:'',
+        d.qty!==''&&d.qty!=null?`${d.qty}${d.unit?' '+d.unit:''}`:'', d.atlantium_pn?`CPN ${d.atlantium_pn}`:''].filter(Boolean).join(' · ')).join('\n') || p.drawing_number || '';
+      if(c.k==='drawing_name'){ const l=_partDrawings(p); return l.length>1 ? l.map(d=>d.drawing_name||'—').join('\n') : ((l[0]&&l[0].drawing_name)||p.drawing_name||''); }
       return p[c.k]||'';
     }));
   });

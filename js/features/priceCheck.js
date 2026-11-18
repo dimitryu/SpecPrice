@@ -4,7 +4,7 @@ import { closeModal, esc, showModal, toast } from '../core/ui.js';
 import { mergePartDoc, updatePartFields } from '../data/parts.js';
 import { lookupPartPrices } from '../data/pricing.js';
 import { SD_NOMINAL_LABEL_PRICE, _parsePackMl, _priceTargetQty, _sdBottles, _sdBottlesText, _sdIsLabelRow, _sdLineCost, _sdRecalcTotal } from '../domain/pricing.js';
-import { renderPartStock } from './database.js';
+import { _wireSymbolsLegend, renderPartStock } from './database.js';
 import { _sdApplyUnits, _sdDwgKey, _sdDwgUnits, renderSalesDesk, sdItems } from './salesDesk/salesDesk.js';
 
 // mode: 'parts' → save to Firestore allParts; 'sd' → update sdItems in memory
@@ -132,7 +132,10 @@ export async function runFCCheckModal(items, mode){
            that isn't guessable, and this modal is exactly where a user meets
            them for the first time. Kept on one compact block so it explains
            without competing with the results above. -->
-      <div style="margin-top:10px;padding:9px 11px;background:var(--bg,#F8FAFC);border:1px solid var(--border);border-radius:6px;font-size:11px;line-height:1.9;color:var(--muted)">
+      <details class="sym-legend" data-legend="fc" ${(()=>{ try{ return localStorage.getItem('legendOpen_fc')==='1'?'open':''; }catch{ return ''; } })()}
+        style="margin-top:10px;padding:6px 11px;background:var(--bg,#F8FAFC);border:1px solid var(--border);border-radius:6px;font-size:11px;line-height:1.9;color:var(--muted)">
+        <summary style="cursor:pointer;user-select:none"><strong style="color:var(--text)">ℹ What the marks mean</strong>
+          <span style="margin-inline-start:10px"><strong style="color:var(--green)">✓</strong> <strong style="color:var(--green)">✓≈</strong> <strong style="color:#B45309">◑</strong> Not found · nominal · <span style="color:var(--green)">green</span>/<span style="color:var(--red)">red</span> · prices are line totals</span></summary>
         <div style="display:flex;flex-wrap:wrap;gap:6px 18px">
           <span><strong style="color:var(--green)">✓</strong> found, with a price</span>
           <span><strong style="color:var(--green)">✓ ≈</strong> found under a differently formatted part number — hover to see which</span>
@@ -146,7 +149,7 @@ export async function runFCCheckModal(items, mode){
           <span><strong style="color:var(--green)">green</strong> = cheapest of the three, <strong style="color:var(--red)">red</strong> = dearest</span>
           <span><strong>Stock 0</strong> = that vendor carries it but has none on hand; <strong>—</strong> = that vendor doesn't list it</span>
         </div>
-      </div>
+      </details>
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" id="btn-fc-stop">Stop</button>
@@ -181,6 +184,7 @@ export async function runFCCheckModal(items, mode){
     put(`fc-dk-${i}`,dk); put(`fc-mo-${i}`,mo); put(`fc-pr-${i}`,pr);
   };
 
+  _wireSymbolsLegend();
   const setStatus=(i,txt,color='var(--muted)',title='')=>{
     const el=document.getElementById(`fc-st-${i}`);
     if(el) el.innerHTML=`<span style="color:${color};font-size:11px${title?';cursor:help':''}"${title?` title="${esc(title)}"`:''}>${txt}</span>`;

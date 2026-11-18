@@ -116,7 +116,7 @@ export function openPartPickerModal(onAdd){
       return `<tr data-id="${esc(p._id)}">
         <td style="text-align:center"><input type="checkbox" class="pp-check" data-id="${esc(p._id)}"></td>
         <td>${esc(p.part_number)}</td><td>${esc(dw ? dw.drawing_number : _partDrawingNumbers(_partDrawings(p)) || p.drawing_number)}</td>
-        <td>${esc((dw && dw.drawing_name) || p.drawing_name)}</td>
+        <td>${esc((dw && dw.drawing_name) || p.drawing_name)}${dw && dw.revision?` <span style="color:var(--muted);font-size:10px">Rev ${esc(dw.revision)}</span>`:''}</td>
         <td class="wrap">${esc(p.description)}</td><td>${esc(qty)}</td><td>${esc(unit)}</td>
         <td>${pr?fmtPrice(pr):''}</td>
       </tr>`;

@@ -76,11 +76,13 @@ export const _PS_DEFAULT_COLS=[
   // (see _SD_DEFAULT_COLS): identity → description → maker → quantity → prices.
   // Each vendor's stock sits immediately beside that vendor's price, because
   // a price you can't buy is worth knowing about at a glance.
-  {k:'drawing_number',l:'Drawing #',       w:'100px'},
-  {k:'revision',      l:'Revision',        w:'60px'},
+  // Revision and Customer PN belong to a DRAWING, not to the part (the same
+  // part sits in several drawings, at different revisions, under different
+  // customer numbers) — so they are shown per drawing in the Drawing # cell,
+  // and Drawing Name lists the name of each of those drawings beside it.
+  {k:'drawing_number',l:'Drawing # · Rev · QTY · Cust PN', w:'210px'},
   {k:'part_number',   l:'MNF P/N',    w:'120px'},
-  {k:'drawing_name',  l:'Drawing Name',    w:'130px'},
-  {k:'atlantium_pn',  l:'Customer PN',     w:'100px'},
+  {k:'drawing_name',  l:'Drawing Name',    w:'150px'},
   {k:'description',   l:'Description',     w:'200px',wrap:true},
   {k:'manufacturer',  l:'Manufacturer',    w:'110px'},
   {k:'qty',           l:'QTY',              w:'55px'},
@@ -243,12 +245,21 @@ export function _psCellHTML(k,p){
     case 'drawing_number': {
       const list=_partDrawings(p);
       if(!list.length) return '';
+      const anyCpn=list.some(d=>d.atlantium_pn);
       return list.map(d=>{
-        const meta=[d.revision?`Rev ${d.revision}`:'', d.qty!==''&&d.qty!=null?`${d.qty}${d.unit?' '+d.unit:''}`:''].filter(Boolean).join(' · ');
+        const meta=[d.revision?`Rev ${d.revision}`:'', d.qty!==''&&d.qty!=null?`${d.qty}${d.unit?' '+d.unit:''}`:'',
+                    d.atlantium_pn?`CPN ${d.atlantium_pn}`:''].filter(Boolean).join(' · ');
         return `<div class="ps-dwg" style="white-space:nowrap"><a href="#" class="ps-dwg-link" data-dwg="${esc(d.drawing_number)}"
           title="Show the BOM of ${esc(d.drawing_number)}${d.drawing_name?' — '+esc(d.drawing_name):''}" style="color:var(--blue-dark);text-decoration:underline">${esc(d.drawing_number)}</a>${
           meta?` <span style="color:var(--muted);font-size:10px">${esc(meta)}</span>`:''}</div>`;
-      }).join('');
+      }).join('') + (!anyCpn && list.length>1 && p.atlantium_pn
+        ? `<div style="color:var(--muted);font-size:10px" title="Saved before Customer PN was kept per drawing — save the drawing again to file it under its drawing">CPN ${esc(p.atlantium_pn)} (drawing not recorded)</div>` : '');
+    }
+    // One line per drawing, beside its number in the Drawing # cell.
+    case 'drawing_name': {
+      const list=_partDrawings(p);
+      if(list.length<=1) return esc((list[0]&&list[0].drawing_name) || p.drawing_name || '');
+      return list.map(d=>`<div class="ps-dwg" style="white-space:nowrap" title="${esc(d.drawing_number)}">${esc(d.drawing_name||'—')}</div>`).join('');
     }
     case 'customer_supplied': return p.customer_supplied?'<span style="color:#1E40AF;font-weight:700" title="Marked customer-supplied in the latest quote/import that saved this part">✓</span>':'';
     case 'updatedAt': return fmtDate(p.updatedAt);
@@ -276,8 +287,30 @@ export function _psCellHTML(k,p){
 // The same legend the Sales Desk and Check Price modal carry. These markers
 // appear on Database price cells too, and a symbol whose meaning lives on
 // another screen may as well not be there.
+// The explanation lives in one collapsed line under the table ("ℹ What the
+// marks mean"), with the marks themselves as a preview; opening it shows the
+// full list. It used to take three or four lines on every screen.
+export function _symbolsLegend(id, ...bodies){
+  let open=false; try{ open=localStorage.getItem('legendOpen_'+id)==='1'; }catch{}
+  return `<details class="sym-legend" data-legend="${id}" ${open?'open':''}
+      style="border-top:1px solid var(--border);font-size:11px;color:var(--muted);padding:4px 12px">
+    <summary style="cursor:pointer;user-select:none;list-style-position:inside;padding:2px 0" title="What the marks next to prices mean">
+      <strong style="color:var(--text)">ℹ What the marks mean</strong>
+      <span style="margin-inline-start:10px"><strong style="color:var(--green)">✓</strong> <strong style="color:#B45309">✓≈</strong>
+      <strong style="color:#B45309">◑</strong> <strong style="color:#7C3AED">✓n</strong> <strong style="color:#B45309">≈$n</strong>
+      <strong style="color:#B45309">0</strong> —${bodies.length>1?` · <strong style="color:#b45309">nominal</strong> · AI est. · TOOL`:''}</span>
+    </summary>
+    ${bodies.join('')}
+  </details>`;
+}
+// Remembers per screen whether the user keeps the list open.
+export function _wireSymbolsLegend(root=document){
+  root.querySelectorAll('details.sym-legend').forEach(d=>d.addEventListener('toggle',()=>{
+    try{ localStorage.setItem('legendOpen_'+d.dataset.legend, d.open?'1':'0'); }catch{}
+  }));
+}
 export const _PRICE_LEGEND_HTML = `
-  <div style="padding:7px 12px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);
+  <div style="padding:5px 0;font-size:11px;color:var(--muted);
        display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center">
     <span>Mouser / DigiKey price:</span>
     <span><strong style="color:var(--green)">✓</strong> exact part number</span>
@@ -302,7 +335,8 @@ export async function renderPartStock(filter=''){
   const _dwgKey=_pnKey(_dwgQ);
   const _dwgBom=_dwgKey.length>=4 ? S.allParts.filter(p=>_partDrawings(p).some(d=>_pnKey(d.drawing_number)===_dwgKey)) : [];
   const filtered=(filter||'').trim()
-    ? S.allParts.filter(p=>predicate([p.part_number,p.drawing_number,p.drawing_name,p.atlantium_pn,p.description,
+    ? S.allParts.filter(p=>predicate([p.part_number,p.drawing_number,p.drawing_name,p.atlantium_pn,
+        _partDrawings(p).map(d=>[d.drawing_name,d.atlantium_pn,d.revision?'rev '+d.revision:''].join(' ')).join(' '),p.description,
         p.manufacturer,p.distributor,p.qty,p.unit,p.units,(p.rfq_names||[]).join(' '),
         p.pin_count].map(v=>String(v||'')).join(' | ').toLowerCase()))
     : S.allParts;
@@ -364,8 +398,9 @@ export async function renderPartStock(filter=''){
       </tr></thead>
       <tbody>${rows||`<tr class="empty-row"><td colspan="${COLS.length+1}">No parts found</td></tr>`}</tbody>
     </table></div>
-    ${_PRICE_LEGEND_HTML}
+    ${_symbolsLegend('db', _PRICE_LEGEND_HTML)}
     ${_buildPager(psPage,totalPages,'ps')}`);
+  _wireSymbolsLegend();
 
   const inp=document.getElementById('ps-search');
   wireSearchClear('ps-search','ps-search-clear');

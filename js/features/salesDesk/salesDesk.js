@@ -5,9 +5,9 @@ import { logAudit, logDrawingsOf, setLogDrawing } from '../../core/audit.js';
 import { loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../../core/table.js';
 import { closeModal, debounce, esc, progressPanel, setActions, setContent, showModal, toast } from '../../core/ui.js';
 import { loadParts, saveSalesDeskToDB } from '../../data/parts.js';
-import { _partLatestDrawing } from '../../domain/bom.js';
+import { _partDrawings, _partLatestDrawing } from '../../domain/bom.js';
 import { SD_NOMINAL_LABEL_PRICE, _SD_PRICE_SOURCES, _parsePackMl, _sdBottlesText, _sdIsAdhesiveRow, _sdLaborQtyMultiplier, _sdRecalcTotal } from '../../domain/pricing.js';
-import { _PRICE_LEGEND_HTML, _priceCellHTML, _stockCellHTML } from '../database.js';
+import { _PRICE_LEGEND_HTML, _priceCellHTML, _stockCellHTML, _symbolsLegend, _wireSymbolsLegend } from '../database.js';
 import { _sdAskUnitsThenCheck } from '../priceCheck.js';
 import { exportSalesDeskExcel } from './export.js';
 import { openPartPickerModal, openSDFileModal } from './import.js';
@@ -316,7 +316,7 @@ export function _sdPriceSource(r){
 export function _SD_COST_LEGEND_HTML(){
   const c=(t,col)=>`<strong style="color:${col}">${t}</strong>`;
   return `
-  <div class="sd-cost-legend" style="padding:7px 12px;border-top:1px dashed var(--border);font-size:11px;color:var(--muted);
+  <div class="sd-cost-legend" style="padding:5px 0;border-top:1px dashed var(--border);font-size:11px;color:var(--muted);
        display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center">
     <span>Part Cost tag:</span>
     <span>${c('Mouser / DigiKey / Priority','#166534')} the cheapest supplier price</span>
@@ -880,7 +880,7 @@ export async function renderSalesDesk(){
 
     document.querySelectorAll('.sd-qty').forEach(inp=>inp.addEventListener('change',()=>{
       const i=+inp.dataset.i, qty=parseFloat(inp.value)||1;
-      sdItems[i].qty=qty; _sdRecalcRow(sdItems[i]); renderSD();
+      sdItems[i].qty=qty; delete sdItems[i]._noDwgQty; _sdRecalcRow(sdItems[i]); renderSD();
     }));
     document.querySelectorAll('.sd-labor-time').forEach(inp=>inp.addEventListener('change',()=>{
       const i=+inp.dataset.i, v=inp.value.trim(), r=sdItems[i];
@@ -915,6 +915,7 @@ export async function renderSalesDesk(){
     }));
     document.querySelectorAll('.sd-revision').forEach(inp=>inp.addEventListener('change',()=>{
       sdItems[+inp.dataset.i].revision=inp.value.trim();
+      delete sdItems[+inp.dataset.i]._noDwgRev;
     }));
     document.querySelectorAll('.sd-cust-pn').forEach(inp=>inp.addEventListener('change',()=>{
       sdItems[+inp.dataset.i].atlantium_pn=inp.value.trim();
@@ -980,8 +981,7 @@ export async function renderSalesDesk(){
             <tbody id="sd-tbody"></tbody>
           </table>
         </div>
-        ${_PRICE_LEGEND_HTML}
-        ${_SD_COST_LEGEND_HTML()}
+        ${_symbolsLegend('sd', _PRICE_LEGEND_HTML, _SD_COST_LEGEND_HTML())}
         <div id="sd-tool-note" style="display:none;font-size:12px;color:#92400e;background:#fffbeb;border-top:1px solid #f59e0b;padding:7px 11px">
           ⚙ Rows marked <strong>TOOL</strong> were added by the system's analysis (drawing analysis, your existing tools in the Database,
           the standard tooling table or AI) — they are <strong>not</strong> in the customer's original BOM, and are never included in the cable price.
@@ -1011,6 +1011,7 @@ export async function renderSalesDesk(){
   makeColumnsReorderable(document.getElementById('sd-table'),'salesdesk',SD_COLS,()=>renderSalesDesk());
   wireScrollButtons('#sd-table-wrap','sd-scroll-left','sd-scroll-right');
   wireShiftCheck(document.getElementById('sd-table'),'.sd-check');
+  _wireSymbolsLegend();
   document.querySelectorAll('#sd-table thead th[data-col]').forEach(th=>th.addEventListener('click',()=>{
     const k=th.dataset.col;
     if(_sdSortCol===k) _sdSortAsc=!_sdSortAsc; else { _sdSortCol=k; _sdSortAsc=true; }
@@ -1038,7 +1039,12 @@ export async function renderSalesDesk(){
       for(const p of parts){
         // The drawing it was picked under, else the one it was saved from last.
         const dw=p._dwg || _partLatestDrawing(p) || {};
-        const dwQty = p._dwg && p._dwg.qty!=='' && p._dwg.qty!=null ? p._dwg.qty : '';
+        // What is known for THAT drawing. A part in one drawing only may use its
+        // own revision / Customer PN; in several, another drawing's are not borrowed.
+        const single=_partDrawings(p).length<=1;
+        const dwRev=String(dw.revision||'') || (single ? String(p.revision||'') : '');
+        const dwCpn=String(dw.atlantium_pn||'') || (single ? String(p.atlantium_pn||'') : '');
+        const dwQty = dw.qty!=='' && dw.qty!=null ? dw.qty : '';
         const origQty=String(dwQty!=='' ? dwQty : (p.qty||'')).trim();
         const qty = hadSelection ? ((qtyOverride!==1||!origQty) ? qtyOverride : (parseFloat(origQty)||1)) : (parseFloat(origQty)||1);
         const item={part_number:p.part_number||'',description:p.description||'',
@@ -1051,12 +1057,14 @@ export async function renderSalesDesk(){
           est_price:parseFloat(p.est_price)||0,
           // A part in several drawings is filed under the one it was saved from last.
           drawing_number:dw.drawing_number||p.drawing_name||'',
-          drawing_name:dw.drawing_name||p.drawing_name||'', revision:dw.revision||p.revision||'', atlantium_pn:p.atlantium_pn||'',
+          drawing_name:dw.drawing_name||(single?p.drawing_name:'')||'', revision:dwRev, atlantium_pn:dwCpn,
+          // Not known for this drawing: shown as the part's, never saved back as the drawing's.
+          _noDwgQty: dwQty==='', _noDwgRev: !dwRev,
           pin_count:p.pin_count||'',
           // Customer-supplied is decided per quote, never carried over from the Database.
           customer_supplied:false,
           pack_ml:parseFloat(p.pack_ml)>0 ? +p.pack_ml : (_parsePackMl(`${p.description||''} ${p.part_number||''}`)||''),
-          qty, unit:(p._dwg&&p._dwg.unit)||p.unit||p.units||'pcs',priority_price:parseFloat(p.priority_price)||0,
+          qty, unit:dw.unit||p.unit||p.units||'pcs',priority_price:parseFloat(p.priority_price)||0,
           mouser_price:parseFloat(p.mouser_price)||'', digikey_price:parseFloat(p.digikey_price)||'',
           ..._sdTraceFields(p),
           total:0, labor_time:'', labor_total:0};

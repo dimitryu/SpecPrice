@@ -791,7 +791,8 @@ export function _partDrawings(p){
     return p.drawings.filter(d=>d && String(d.drawing_number||'').trim()).map(d=>({...d}));
   const nums=String(p.drawing_number||'').split(/\s*,\s*/).map(s=>s.trim()).filter(Boolean);
   return nums.map(n=>({drawing_number:n, revision:nums.length===1?String(p.revision||''):'',
-    drawing_name:nums.length===1?String(p.drawing_name||''):'', qty:'', unit:''}));
+    drawing_name:nums.length===1?String(p.drawing_name||''):'', qty:'', unit:'',
+    atlantium_pn:nums.length===1?String(p.atlantium_pn||''):''}));
 }
 // The list with `row`'s drawing added — or, when it is already there, brought up
 // to date (a value missing on the row keeps the one on record). The drawing
@@ -801,8 +802,13 @@ export function _mergePartDrawing(list, row){
   if(!dn) return list;
   const k=_pnKey(dn);
   const q=row._qtyPerUnit!=null ? row._qtyPerUnit : row.qty;
-  const entry={drawing_number:dn, revision:String(row.revision||'').trim(), drawing_name:String(row.drawing_name||'').trim(),
-               qty:q==null||q===''?'':String(q).trim(), unit:_dbNormalizeUnit(row.unit)||String(row.unit||'').trim()};
+  // A row taken from the Database for a drawing whose revision / QTY was never
+  // recorded carries a guess for them (the part's own values) — that guess is
+  // not written back as the drawing's.
+  const entry={drawing_number:dn, revision:row._noDwgRev ? '' : String(row.revision||'').trim(), drawing_name:String(row.drawing_name||'').trim(),
+               qty:row._noDwgQty || q==null||q==='' ? '' : String(q).trim(), unit:row._noDwgQty ? '' : (_dbNormalizeUnit(row.unit)||String(row.unit||'').trim()),
+               // The customer's number for this part — per drawing, as each customer drawing may name it differently.
+               atlantium_pn:String(row.atlantium_pn||'').trim()};
   const old=(list||[]).find(d=>_pnKey(d.drawing_number)===k);
   const rest=(list||[]).filter(d=>_pnKey(d.drawing_number)!==k);
   const merged=old ? {...old, ...Object.fromEntries(Object.entries(entry).filter(([,v])=>v!=='')), drawing_number:old.drawing_number} : entry;
@@ -818,7 +824,7 @@ export function _partDrawingsPatch(rows, dbDoc){
   const before=_partDrawings(dbDoc);
   const after=(rows||[]).reduce(_mergePartDrawing, before);
   const patch={};
-  const norm=l=>JSON.stringify(l.map(d=>[d.drawing_number,d.revision||'',d.drawing_name||'',String(d.qty??''),d.unit||'']));
+  const norm=l=>JSON.stringify(l.map(d=>[d.drawing_number,d.revision||'',d.drawing_name||'',String(d.qty??''),d.unit||'',d.atlantium_pn||'']));
   if(after.length && (!Array.isArray(dbDoc&&dbDoc.drawings) || norm(after)!==norm(dbDoc.drawings))) patch.drawings=after;
   const nums=_partDrawingNumbers(after);
   if(nums && nums!==String((dbDoc&&dbDoc.drawing_number)||'').trim()) patch.drawing_number=nums;

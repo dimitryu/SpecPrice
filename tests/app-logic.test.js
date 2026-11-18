@@ -2512,7 +2512,7 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   ok('adhesive rows recognised', G('_sdIsAdhesiveRow')({description:'LOCTITE 401 INSTANT ADHESIVE'}) && G('_sdIsAdhesiveRow')({description:'X',unit:'ml'}) && !G('_sdIsAdhesiveRow')({description:'HEAT SHRINK'}));
 
   const pd=G('_partDrawings'), mg=G('_mergePartDrawing'), pp=G('_partDrawingsPatch');
-  t('drawings: an old record read from its drawing number', pd({drawing_number:'A-1', revision:'B', drawing_name:'Cable'}), [{drawing_number:'A-1',revision:'B',drawing_name:'Cable',qty:'',unit:''}]);
+  t('drawings: an old record read from its drawing number', pd({drawing_number:'A-1', revision:'B', drawing_name:'Cable'}), [{drawing_number:'A-1',revision:'B',drawing_name:'Cable',qty:'',unit:'',atlantium_pn:''}]);
   const l1=mg(pd({drawing_number:'A-1'}), {drawing_number:'B-2', revision:'C', qty:2, unit:'cm'});
   t('drawings: a new drawing is ADDED, not replacing', l1.map(d=>d.drawing_number), ['A-1','B-2']);
   t('drawings: per-cable QTY and unit kept', [l1[1].qty, l1[1].unit, l1[1].revision], ['2','mm','C']);
@@ -2533,6 +2533,21 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   ok('missed rows: numbered 10, 20, 30 — not missing', !ms([10,20,30].map(n=>({item:String(n)}))).missing);
   ok('missed rows: fewer than the locator counted', ms([1,2].map(n=>({item:String(n)})),5).short);
   t('union of two readings, in item order', G('_bomUnionRows')([4,5].map(n=>({item:String(n)})), [1,2,4].map(n=>({item:String(n)}))).map(r=>r.item), ['1','2','4','5']);
+}
+
+// ─────────────────────────────────────────── v1.67.2: revision / customer PN per drawing; compact legend
+{
+  const mg=G('_mergePartDrawing');
+  const l=mg([{drawing_number:'PA0017-A00',revision:'7',qty:'1',unit:'pc',atlantium_pn:'EL1'}],
+             {drawing_number:'PA0017-A00', revision:'6', qty:1, unit:'pc', _noDwgRev:true, _noDwgQty:true});
+  t('picked from the DB with a guessed revision/QTY: the drawing keeps its own', [l[0].revision, l[0].qty, l[0].atlantium_pn], ['7','1','EL1']);
+  const l2=mg([], {drawing_number:'PA0014-A00', revision:'6', qty:3, unit:'pc', atlantium_pn:'EL0000346'});
+  t('customer PN kept per drawing', l2[0].atlantium_pn, 'EL0000346');
+  const l3=mg(l2, {drawing_number:'PA0017-A00', revision:'7', qty:3, unit:'pc', atlantium_pn:'EL9'});
+  t('…a second drawing has its own customer PN', l3.map(d=>d.atlantium_pn), ['EL0000346','EL9']);
+  const lg=G('_symbolsLegend')('t', '<b>x</b>');
+  ok('legend: one collapsed line that opens to the full list', /^\s*<details class="sym-legend"/.test(lg) && /What the marks mean/.test(lg) && /<b>x<\/b>/.test(lg));
+  ok('Database: Revision / Customer PN columns folded into Drawing #', !G('_PS_DEFAULT_COLS').some(c=>c.k==='revision'||c.k==='atlantium_pn'));
 }
 
 // ─────────────────────────────────────────── report
