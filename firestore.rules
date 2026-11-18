@@ -6,37 +6,63 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // The caller's own profile. Every permission below is read from it, so
+    // the profile is the one document its owner must NOT be able to shape:
+    // see users/{uid} — only an admin (in practice the userAdmin function)
+    // writes role, company_id or disabled.
+    function myProfilePath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+    function hasProfile() {
+      return isSignedIn() && exists(myProfilePath());
+    }
+    function me() {
+      return get(myProfilePath()).data;
+    }
+
+    // A sign-in account alone grants nothing: there must be a profile, and it
+    // must not be disabled. A disabled user is locked out of every collection
+    // at once, whatever their role, and even while an old token is still valid.
+    function isActive() {
+      return hasProfile() && me().get('disabled', false) != true;
+    }
+
     function myCompanyId() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.company_id;
+      return me().get('company_id', '');
     }
 
     function myRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+      return me().get('role', '');
     }
 
     function isAdmin() {
-      return isSignedIn() && myRole() == 'admin';
+      return isActive() && myRole() == 'admin';
     }
 
     function isSameCompany(cid) {
-      return isSignedIn() && myCompanyId() == cid;
+      return isActive() && myCompanyId() == cid;
     }
 
     // ── users/{uid} ──────────────────────────────────────────────────────
-    // A user can always read/write their own profile (needed so the app can
-    // check role/company_id/disabled on login, and so admins can be looked
-    // up). Admins can read/write ANY user profile — required by
-    // Settings > Users (list all users, invite, edit role/company, disable,
-    // delete).
+    // Read: your own profile (the app checks role / company / disabled at
+    // sign-in — a disabled user must still be able to read that they are
+    // disabled), or any profile for an admin (Settings > Users).
+    //
+    // Write: ONLY an admin creates, changes or deletes a profile. A user may
+    // change their own screen settings (ui_prefs) and nothing else — not
+    // role, not company_id, not disabled. Before this, "write your own
+    // profile" let anyone with a sign-in account make themselves admin.
     match /users/{uid} {
-      allow read, write: if isSignedIn() && request.auth.uid == uid;
-      allow read, write: if isAdmin();
+      allow read: if (isSignedIn() && request.auth.uid == uid) || isAdmin();
+      allow update: if isSignedIn() && request.auth.uid == uid && isActive()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ui_prefs', 'updatedAt']);
+      allow create, update, delete: if isAdmin();
     }
 
     // ── companies/{cid} ──────────────────────────────────────────────────
-    // Any signed-in user may read company docs — this is required for the
-    // first-login "pick your company" screen, which lists all companies by
-    // name before the user has a company_id yet.
+    // Any ACTIVE user (signed in, with an enabled profile) may read company
+    // docs — this is required for the first-login "pick your company" screen,
+    // which lists all companies by name before the user has a company_id yet.
     // Only members of that company, or an admin, may write to it.
     //
     // CAVEAT: company docs currently also store anthropic_key, gemini_key
@@ -49,7 +75,7 @@ service cloud.firestore {
     // read/write that subdocument instead. Not done here since it wasn't
     // explicitly requested and changes the data model.
     match /companies/{cid} {
-      allow read: if isSignedIn();
+      allow read: if isActive();
       allow update: if isSameCompany(cid) || isAdmin();
       allow create, delete: if isAdmin();
     }
@@ -114,11 +140,11 @@ service cloud.firestore {
     }
 
     // ── roles/{roleKey}  (Settings > Roles: per-role button visibility) ────
-    // Any signed-in user must be able to read this so the Home screen can
+    // Any active user must be able to read this so the Home screen can
     // gate which buttons THEY see based on their own role. Only admins may
     // create/edit roles.
     match /roles/{roleKey} {
-      allow read: if isSignedIn();
+      allow read: if isActive();
       allow write: if isAdmin();
     }
 

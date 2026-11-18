@@ -4,14 +4,14 @@ import { _csPrompt } from '../ai/cutstrip.js';
 import { _cableProcessPrompt, _notesPrompt } from '../ai/process.js';
 import { _crimpToolPrompt } from '../ai/tooling.js';
 import { logAudit } from '../core/audit.js';
-import { FB, auth, sendPasswordResetEmail } from '../core/firebase.js';
+import { auth, sendPasswordResetEmail } from '../core/firebase.js';
 import { ADMIN_AUTO_VIEWS, PROTECTED_ROLE, PROTECTED_VIEWS, ROLES_META_DOC, SEED_ROLE_VIEWS, _isRoleDocId, _mergedRoleKeys, roleOptions } from '../core/roles.js';
 import { HOME_BUTTONS, renderHomeIfActive } from '../core/router.js';
 import { companyId, currentUserRole } from '../core/session.js';
 import { closeModal, esc, setActions, setContent, showModal, toast } from '../core/ui.js';
 import { updateCompany } from '../data/company.js';
 import { createRole, deleteRole, listRoleDocs, markRolesSeeded, updateRole } from '../data/roles.js';
-import { countUsersWithRole, createUserProfile, deleteUserProfile, listUsers, updateUserProfile } from '../data/users.js';
+import { countUsersWithRole, listUsers, userAdminCall } from '../data/users.js';
 import { _CS_SOURCE_LANG } from './cutstrip/i18n.js';
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -275,9 +275,13 @@ export function openInviteUserModal(){
     <div class="modal-body">
       <div class="form-field"><label>Full Name</label><input class="form-input" id="inv-name-inp" placeholder="e.g. Israel Israeli"></div>
       <div class="form-field" style="margin-top:10px"><label>Email</label><input class="form-input" id="inv-email-inp" type="email" placeholder="user@company.com"></div>
-      <div class="form-field" style="margin-top:10px"><label>Password</label><input class="form-input" id="inv-pass-inp" type="password" placeholder="Min. 6 characters"></div>
+      <div class="form-field" style="margin-top:10px"><label>Password</label><input class="form-input" id="inv-pass-inp" type="password" placeholder="Min. 8 characters"></div>
       <div class="form-field" style="margin-top:10px"><label>Role</label>
-        <select class="form-input" id="inv-role-sel">${roleOptions().map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select>
+        <select class="form-input" id="inv-role-sel">${(()=>{ const o=roleOptions();
+          // Least privilege by default: a new user starts as viewer (or the first
+          // non-admin role), never as admin by accident of list order.
+          const def=(o.find(([v])=>v==='viewer')||o.find(([v])=>v!=='admin')||o[0]||[''])[0];
+          return o.map(([v,l])=>`<option value="${esc(v)}" ${v===def?'selected':''}>${esc(l)}</option>`).join(''); })()}</select>
       </div>
     </div>
     <div class="modal-foot">
@@ -294,34 +298,23 @@ export function openInviteUserModal(){
     const companyIdSel=companyId; // single-company build
     const role=document.getElementById('inv-role-sel').value;
     if(!name||!email){ toast('Name and email are required','error'); return; }
-    if(pass.length<6){ toast('Password must be at least 6 characters','error'); return; }
+    if(pass.length<8){ toast('Password must be at least 8 characters','error'); return; }
     const btn=document.getElementById('btn-invite-confirm');
     btn.disabled=true; btn.textContent='Creating…';
     try{
       await adminCreateUser(email,pass,name,companyIdSel,role);
       toast(`User "${name}" created`,'success');
-      logAudit('user_created',{email,role},true);
       closeModal(); renderSettingsUsersSection();
-    }catch(e){ toast('Error: '+e.message,'error'); logAudit('user_created',{error:e.message},false); btn.disabled=false; btn.textContent='＋ Create User'; }
+    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='＋ Create User'; }
   });
 }
 
-// Creates a new Firebase Auth account via the raw Identity Toolkit REST endpoint
-// (NOT the client SDK's createUserWithEmailAndPassword, which would sign the
-// currently-signed-in admin OUT of their own session and INTO the new account).
-// A plain fetch() call never touches the SDK's in-memory auth state, so the
-// admin's session stays untouched. The new user's Firestore profile doc is then
-// written using the admin's own, still-active session/permissions.
+// Creates the sign-in account and the profile together on the server (the
+// userAdmin function, Admin SDK). The admin's own session is untouched, and
+// public sign-up can stay switched off in the Firebase console.
 export async function adminCreateUser(email,password,displayName,companyIdVal,role){
-  const resp=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FB.options.apiKey}`,{
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({email,password,returnSecureToken:true})
-  });
-  const data=await resp.json();
-  if(data.error) throw new Error(data.error.message==='EMAIL_EXISTS'?'A user with this email already exists':(data.error.message||'Failed to create user'));
-  const uid=data.localId;
-  await createUserProfile(uid,{ email, displayName, company_id:companyIdVal, role });
-  return uid;
+  const r=await userAdminCall({action:'create', email, password, displayName, company_id:companyIdVal, role});
+  return r.uid;
 }
 
 export function openEditUserModal(u){
@@ -337,6 +330,7 @@ export function openEditUserModal(u){
           <input type="checkbox" id="edu-disabled-chk" ${u.disabled===true?'checked':''} style="width:auto">
           <span>Account disabled (blocks sign-in)</span>
         </label>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Disabling blocks the sign-in account and ends every open session at once.</div>
       </div>
 
       <div style="border-top:1px solid var(--border);margin:16px 0 12px"></div>
@@ -381,22 +375,22 @@ export function openEditUserModal(u){
     try{
       // Single-company build: keep the user on the current company (also
       // backfills company_id for any older profile that never had one set).
-      await updateUserProfile(u._id,{company_id:u.company_id||companyId,role,disabled});
+      // The server disables the sign-in account too, and refuses to demote or
+      // disable yourself or the last active admin; it writes the audit entry.
+      await userAdminCall({action:'update', uid:u._id, company_id:u.company_id||companyId, role, disabled});
       toast('User updated','success');
-      logAudit('user_updated',{email:u.email||u._id,role,disabled},true);
       closeModal(); renderSettingsUsersSection();
-    }catch(e){ toast('Error: '+e.message,'error'); logAudit('user_updated',{error:e.message},false); btn.disabled=false; btn.textContent='💾 Save'; }
+    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='💾 Save'; }
   });
   document.getElementById('btn-edu-delete').addEventListener('click', async()=>{
-    if(!confirm(`Delete user "${u.displayName||u.email}"?\n\nThis removes their profile, company assignment, and role. Note: their sign-in account itself isn't deleted (that requires a backend) — use "disable" instead if you need to reliably block sign-in.`)) return;
+    if(!confirm(`Delete user "${u.displayName||u.email}"?\n\nThis deletes their sign-in account and their profile (company and role). It cannot be undone — to block someone temporarily, use "Account disabled" instead.`)) return;
     const btn=document.getElementById('btn-edu-delete');
     btn.disabled=true; btn.textContent='Deleting…';
     try{
-      await deleteUserProfile(u._id);
-      toast('User profile deleted','success');
-      logAudit('user_deleted',{email:u.email||u._id},true);
+      await userAdminCall({action:'delete', uid:u._id});
+      toast('User deleted','success');
       closeModal(); renderSettingsUsersSection();
-    }catch(e){ toast('Error: '+e.message,'error'); logAudit('user_deleted',{error:e.message},false); btn.disabled=false; btn.textContent='🗑 Delete User'; }
+    }catch(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='🗑 Delete User'; }
   });
 }
 

@@ -96,16 +96,10 @@ exports.priceProxy = onRequest(
     if (req.method !== 'GET') return void res.status(405).json({ error: 'Use GET' });
     if (!originAllowed) return void res.status(403).json({ error: `Origin not allowed: ${origin}` });
 
-    // ── Auth: must be a signed-in SpecPrice user ──
+    // ── Auth: an enabled SpecPrice user — a sign-in account alone is not enough ──
     if (REQUIRE_AUTH) {
-      const header = req.headers.authorization || '';
-      const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-      if (!token) return void res.status(401).json({ error: 'Missing auth token' });
-      try {
-        await admin.auth().verifyIdToken(token);
-      } catch (e) {
-        return void res.status(401).json({ error: 'Invalid auth token' });
-      }
+      try { await requireMember(req); }
+      catch (e) { return void res.status(e.code || 401).json({ error: e.message }); }
     }
 
     // ── Validate the target ──
@@ -891,12 +885,10 @@ exports.priceLookup = onRequest(
     if (req.method === 'OPTIONS') return void res.status(204).send('');
     if (!originAllowed) return void res.status(403).json({ error: `Origin not allowed: ${origin}` });
 
+    // ── Auth: an enabled SpecPrice user — a sign-in account alone is not enough ──
     if (REQUIRE_AUTH) {
-      const header = req.headers.authorization || '';
-      const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-      if (!token) return void res.status(401).json({ error: 'Missing auth token' });
-      try { await admin.auth().verifyIdToken(token); }
-      catch { return void res.status(401).json({ error: 'Invalid auth token' }); }
+      try { await requireMember(req); }
+      catch (e) { return void res.status(e.code || 401).json({ error: e.message }); }
     }
 
     const pn = String(req.query.pn || '').trim();
@@ -1048,14 +1040,17 @@ async function requireAdmin(req) {
   if (!token) throw Object.assign(new Error('Missing auth token'), { code: 401 });
 
   let decoded;
-  try { decoded = await admin.auth().verifyIdToken(token); }
+  // checkRevoked: a disabled or deleted account is refused at once, not when
+  // its last ID token expires an hour later.
+  try { decoded = await admin.auth().verifyIdToken(token, true); }
   catch { throw Object.assign(new Error('Invalid auth token'), { code: 401 }); }
 
   const snap = await admin.firestore().doc(`users/${decoded.uid}`).get();
-  const role = snap.exists ? (snap.data() || {}).role : '';
-  if (role !== 'admin') {
+  const u = snap.exists ? (snap.data() || {}) : {};
+  if (u.role !== 'admin' || u.disabled === true) {
     throw Object.assign(new Error('Admin role required'), { code: 403 });
   }
+  decoded.profile = u;
   return decoded;
 }
 
@@ -1335,7 +1330,7 @@ async function requireMember(req) {
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   if (!token) throw Object.assign(new Error('Missing auth token'), { code: 401 });
   let decoded;
-  try { decoded = await admin.auth().verifyIdToken(token); }
+  try { decoded = await admin.auth().verifyIdToken(token, true); }
   catch { throw Object.assign(new Error('Invalid auth token — sign in again'), { code: 401 }); }
   const snap = await admin.firestore().doc(`users/${decoded.uid}`).get();
   const u = snap.exists ? (snap.data() || {}) : null;
@@ -1417,5 +1412,191 @@ exports.aiProxy = onRequest(
     res.status(upstream.status);
     res.set('Content-Type', upstream.headers.get('content-type') || 'application/json');
     return void res.send(text);
+  }
+);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * USER ADMINISTRATION — create / change / disable / delete a user
+ * ---------------------------------------------------------------------------
+ * Who may sign in, with which role and for which company, is decided here and
+ * only here. The browser used to do it: it called Firebase's public sign-up
+ * endpoint and wrote users/{uid} itself, which meant (a) anyone with the web
+ * API key could open an account, and (b) the profile — role included — was a
+ * document its owner could write. Now the Firestore rules let nobody but an
+ * admin write a profile, sign-up can be switched off in the Firebase console,
+ * and this function does the work with the Admin SDK:
+ *   • create  — the sign-in account and the profile together (rolled back if
+ *               the profile cannot be written);
+ *   • update  — role / company / name / disabled. Disabling also disables the
+ *               sign-in account and revokes its sessions, so it takes effect
+ *               at once on every device;
+ *   • delete  — the sign-in account AND the profile; the old account can no
+ *               longer sign in or re-create anything.
+ * An admin cannot demote, disable or delete themselves, and the last active
+ * admin cannot be removed — either would lock everyone out of Settings.
+ * Every action is written to the acting admin's company audit log from the
+ * server, under the admin's real email.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+const SEED_ROLES = ['admin', 'agent', 'sales', 'viewer'];
+const ROLE_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/;
+const MIN_PASSWORD = 8;
+
+function userAdminError(code, message) { return Object.assign(new Error(message), { code }); }
+
+async function validRole(role) {
+  if (!ROLE_RE.test(String(role || ''))) return false;
+  if (SEED_ROLES.includes(role)) return true;
+  const snap = await admin.firestore().doc(`roles/${role}`).get();
+  return snap.exists;
+}
+async function validCompany(cid) {
+  if (!/^[A-Za-z0-9_-]{1,120}$/.test(String(cid || ''))) return false;
+  return (await admin.firestore().doc(`companies/${cid}`).get()).exists;
+}
+// How many enabled admins there are, not counting `exceptUid`.
+async function otherActiveAdmins(exceptUid) {
+  const snap = await admin.firestore().collection('users').where('role', '==', 'admin').get();
+  return snap.docs.filter(d => d.id !== exceptUid && (d.data() || {}).disabled !== true).length;
+}
+async function serverAudit(actor, action, details, success) {
+  const cid = actor && actor.profile && actor.profile.company_id;
+  if (!cid) return;
+  try {
+    await admin.firestore().collection(`companies/${cid}/audit_logs`).add({
+      user: actor.email || actor.uid, userId: actor.uid, action, details, success: !!success,
+      source: 'server', timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (e) { console.warn('[userAdmin] audit write failed:', e.message); }
+}
+
+async function userAdminAction(actor, body) {
+  const action = String(body.action || '');
+  const fsUsers = admin.firestore().collection('users');
+
+  if (action === 'create') {
+    const email = String(body.email || '').trim().toLowerCase();
+    const password = String(body.password || '');
+    const displayName = String(body.displayName || '').trim().slice(0, 100);
+    const role = String(body.role || '').trim();
+    const company_id = String(body.company_id || '').trim();
+    if (!EMAIL_RE.test(email)) throw userAdminError(400, 'Enter a valid email address');
+    if (!displayName) throw userAdminError(400, 'Name is required');
+    if (password.length < MIN_PASSWORD) throw userAdminError(400, `Password must be at least ${MIN_PASSWORD} characters`);
+    if (!(await validRole(role))) throw userAdminError(400, `Unknown role: ${role}`);
+    if (!(await validCompany(company_id))) throw userAdminError(400, 'Unknown company');
+    let rec;
+    try { rec = await admin.auth().createUser({ email, password, displayName, disabled: false }); }
+    catch (e) {
+      if (e.code === 'auth/email-already-exists') throw userAdminError(409, 'A user with this email already exists');
+      if (e.code === 'auth/invalid-password') throw userAdminError(400, `Password must be at least ${MIN_PASSWORD} characters`);
+      throw userAdminError(400, e.message || 'Could not create the sign-in account');
+    }
+    try {
+      await fsUsers.doc(rec.uid).set({
+        email, displayName, company_id, role, disabled: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdBy: actor.email || actor.uid,
+      });
+    } catch (e) {
+      // No half-made users: an account without a profile is removed again.
+      await admin.auth().deleteUser(rec.uid).catch(() => {});
+      throw userAdminError(500, 'Could not save the user profile — nothing was created');
+    }
+    return { ok: true, uid: rec.uid, audit: ['user_created', { email, role }] };
+  }
+
+  const uid = String(body.uid || '').trim();
+  if (!/^[A-Za-z0-9]{1,128}$/.test(uid)) throw userAdminError(400, 'Missing user');
+  const ref = fsUsers.doc(uid);
+  const snap = await ref.get();
+  const cur = snap.exists ? (snap.data() || {}) : null;
+  const self = uid === actor.uid;
+
+  if (action === 'update') {
+    if (!cur) throw userAdminError(404, 'No such user');
+    const patch = {};
+    if ('role' in body) {
+      const role = String(body.role || '').trim();
+      if (!(await validRole(role))) throw userAdminError(400, `Unknown role: ${role}`);
+      patch.role = role;
+    }
+    if ('company_id' in body) {
+      const cid = String(body.company_id || '').trim();
+      if (!(await validCompany(cid))) throw userAdminError(400, 'Unknown company');
+      patch.company_id = cid;
+    }
+    if ('displayName' in body) {
+      const n = String(body.displayName || '').trim().slice(0, 100);
+      if (n) patch.displayName = n;
+    }
+    if ('disabled' in body) patch.disabled = body.disabled === true;
+    const losesAdmin = cur.role === 'admin' && cur.disabled !== true &&
+      ((patch.role && patch.role !== 'admin') || patch.disabled === true);
+    if (self && losesAdmin) throw userAdminError(400, 'You cannot remove your own admin role or disable yourself');
+    if (losesAdmin && (await otherActiveAdmins(uid)) === 0) throw userAdminError(400, 'This is the last active admin — make someone else admin first');
+    if (!Object.keys(patch).length) throw userAdminError(400, 'Nothing to change');
+    patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    await ref.update(patch);
+    // The sign-in account follows the profile: disabled means no sign-in at
+    // all, and every open session is ended now rather than within the hour.
+    if ('disabled' in patch) {
+      try {
+        await admin.auth().updateUser(uid, { disabled: patch.disabled });
+        if (patch.disabled) await admin.auth().revokeRefreshTokens(uid);
+      } catch (e) {
+        if (e.code !== 'auth/user-not-found') throw userAdminError(500, 'Profile saved, but the sign-in account could not be updated: ' + e.message);
+      }
+    }
+    if ('displayName' in patch) await admin.auth().updateUser(uid, { displayName: patch.displayName }).catch(() => {});
+    const { updatedAt, ...shown } = patch;
+    return { ok: true, uid, audit: ['user_updated', { email: cur.email || uid, ...shown }] };
+  }
+
+  if (action === 'delete') {
+    if (self) throw userAdminError(400, 'You cannot delete your own account');
+    if (cur && cur.role === 'admin' && cur.disabled !== true && (await otherActiveAdmins(uid)) === 0)
+      throw userAdminError(400, 'This is the last active admin — make someone else admin first');
+    try { await admin.auth().deleteUser(uid); }
+    catch (e) { if (e.code !== 'auth/user-not-found') throw userAdminError(500, 'Could not delete the sign-in account: ' + e.message); }
+    if (snap.exists) await ref.delete();
+    return { ok: true, uid, audit: ['user_deleted', { email: (cur && cur.email) || uid }] };
+  }
+
+  throw userAdminError(400, `Unknown action: ${action}`);
+}
+
+exports.userAdmin = onRequest(
+  { region: 'us-central1', timeoutSeconds: 60, memory: '256MiB', cors: false },
+  async (req, res) => {
+    const origin = req.headers.origin || '';
+    const originAllowed = !origin || ALLOWED_ORIGINS.some(re => re.test(origin));
+    if (origin && originAllowed) res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Methods', 'POST,OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Authorization,Content-Type');
+    res.set('Access-Control-Max-Age', '3600');
+    res.set('Cache-Control', 'no-store');
+    if (req.method === 'OPTIONS') return void res.status(204).send('');
+    if (!originAllowed) return void res.status(403).json({ error: `Origin not allowed: ${origin}` });
+    if (req.method !== 'POST') return void res.status(405).json({ error: 'Use POST' });
+
+    let actor;
+    try { actor = await requireAdmin(req); }
+    catch (e) { return void res.status(e.code || 401).json({ error: e.message }); }
+
+    const body = req.body || {};
+    try {
+      const out = await userAdminAction(actor, body);
+      const [act, details] = out.audit; delete out.audit;
+      await serverAudit(actor, act, details, true);
+      // Logged without any password.
+      console.log(`[userAdmin] ${actor.email || actor.uid}: ${act} ${out.uid}`);
+      return void res.status(200).json(out);
+    } catch (e) {
+      await serverAudit(actor, `user_${String(body.action || 'admin')}`, { error: e.message, uid: body.uid || '', email: body.email || '' }, false);
+      return void res.status(e.code && e.code < 600 ? e.code : 500).json({ error: e.message || 'Failed' });
+    }
   }
 );

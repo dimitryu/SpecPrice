@@ -16,15 +16,37 @@ function ok(cond, name) { if (cond) pass++; else { fail++; console.log('  ✗ ' 
 const store = {};                     // 'col/doc' → data
 const tokens = {};                    // idToken → decoded
 const handlers = {};
+const authUsers = {};                 // uid → {email, disabled, revoked}
+const authCalls = [];
+let authSeq = 0;
+const fakeAuth = {
+  verifyIdToken: async t => { if (tokens[t]) return tokens[t]; throw new Error('bad'); },
+  createUser: async u => { authCalls.push(['create', u.email]);
+    if (Object.values(authUsers).some(x => x.email === u.email)) throw Object.assign(new Error('exists'), { code: 'auth/email-already-exists' });
+    const uid = 'new' + (++authSeq); authUsers[uid] = { ...u }; return { uid }; },
+  updateUser: async (uid, p) => { authCalls.push(['update', uid, p]); if (!authUsers[uid]) throw Object.assign(new Error('nf'), { code: 'auth/user-not-found' }); Object.assign(authUsers[uid], p); },
+  revokeRefreshTokens: async uid => { authCalls.push(['revoke', uid]); if (authUsers[uid]) authUsers[uid].revoked = true; },
+  deleteUser: async uid => { authCalls.push(['delete', uid]); if (!authUsers[uid]) throw Object.assign(new Error('nf'), { code: 'auth/user-not-found' }); delete authUsers[uid]; },
+};
+let addSeq = 0;
+const docRef = p => ({
+  get: async () => ({ exists: p in store, data: () => store[p] }),
+  set: async (d, o) => { store[p] = (o && o.merge) ? { ...(store[p] || {}), ...d } : d; },
+  update: async d => { if (!(p in store)) throw new Error('no doc'); store[p] = { ...store[p], ...d }; },
+  delete: async () => { delete store[p]; },
+});
+const collRef = c => ({
+  doc: id => docRef(`${c}/${id}`),
+  add: async d => { const id = 'auto' + (++addSeq); store[`${c}/${id}`] = d; return { id }; },
+  where: (f, op, v) => ({ get: async () => ({ docs: Object.keys(store)
+    .filter(k => k.startsWith(c + '/') && k.split('/').length === c.split('/').length + 1 && store[k][f] === v)
+    .map(k => ({ id: k.slice(c.length + 1), data: () => store[k] })) }) }),
+});
 const fakeAdmin = {
   initializeApp() {},
-  auth: () => ({ verifyIdToken: async t => { if (tokens[t]) return tokens[t]; throw new Error('bad'); } }),
-  firestore: Object.assign(() => ({
-    doc: p => ({
-      get: async () => ({ exists: p in store, data: () => store[p] }),
-      set: async (d, o) => { store[p] = (o && o.merge) ? { ...(store[p] || {}), ...d } : d; },
-    }),
-  }), { FieldValue: { serverTimestamp: () => new Date('2026-10-29T10:00:00Z') } }),
+  auth: () => fakeAuth,
+  firestore: Object.assign(() => ({ doc: docRef, collection: collRef }),
+    { FieldValue: { serverTimestamp: () => new Date('2026-10-29T10:00:00Z') } }),
 };
 const fakeFunctions = { onRequest: (opts, fn) => { fn._opts = opts; return fn; } };
 const origLoad = Module._load;
@@ -234,6 +256,71 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
   upstreamReplyAt = null;
   r = await call(C, { method: 'GET', token: 'tAdmin' });
   ok(r.json.farnell && r.json.farnell.configured && r.json.farnell.hint === '…4321' && r.json.farnell.store === 'il.farnell.com' && !JSON.stringify(r.json).includes('fa-secret-key-4321'), 'Farnell: status shows a hint and the store, never the key');
+
+  // ── userAdmin: only an admin manages users; the sign-in account follows the profile ──
+  {
+    const U = fns.userAdmin;
+    store['companies/c1'] = { name: 'Demo' };
+    store['users/a2'] = { role: 'admin', company_id: 'c1' };
+    tokens.tAdmin2 = { uid: 'a2', email: 'admin2@x.com' };
+    authUsers.u1 = { email: 'user@x.com' }; authUsers.a1 = { email: 'admin@x.com' }; authUsers.a2 = { email: 'admin2@x.com' };
+    r = await call(U, { token: 'tUser', body: { action: 'update', uid: 'u1', role: 'admin' } });
+    ok(r.status === 403 && store['users/u1'].role === 'sales', 'userAdmin: a non-admin cannot promote anyone, themselves included');
+    r = await call(U, { token: 'tOff', body: { action: 'create', email: 'x@y.com', password: 'longpass1', displayName: 'X', role: 'admin', company_id: 'c1' } });
+    ok(r.status === 403, 'userAdmin: a disabled user is refused');
+    r = await call(U, { token: 'tGhost', body: { action: 'create', email: 'x@y.com', password: 'longpass1', displayName: 'X', role: 'admin', company_id: 'c1' } });
+    ok(r.status === 403, 'userAdmin: an account with no profile is refused');
+    r = await call(U, { method: 'GET', token: 'tAdmin' });
+    ok(r.status === 405, 'userAdmin: POST only');
+
+    r = await call(U, { token: 'tAdmin', body: { action: 'create', email: 'New@Demo.com', password: 'short', displayName: 'New', role: 'sales', company_id: 'c1' } });
+    ok(r.status === 400 && /at least 8/.test(r.json.error), 'create: password of 8+ characters');
+    r = await call(U, { token: 'tAdmin', body: { action: 'create', email: 'new@demo.com', password: 'longpass1', displayName: 'New', role: 'owner', company_id: 'c1' } });
+    ok(r.status === 400 && /Unknown role/.test(r.json.error), 'create: unknown role refused');
+    r = await call(U, { token: 'tAdmin', body: { action: 'create', email: 'new@demo.com', password: 'longpass1', displayName: 'New', role: 'sales', company_id: 'nope' } });
+    ok(r.status === 400 && /Unknown company/.test(r.json.error), 'create: unknown company refused');
+    r = await call(U, { token: 'tAdmin', body: { action: 'create', email: 'New@Demo.com', password: 'longpass1', displayName: 'New', role: 'sales', company_id: 'c1' } });
+    const nu = r.json && r.json.uid;
+    ok(r.status === 200 && nu && authUsers[nu] && authUsers[nu].email === 'new@demo.com' && store[`users/${nu}`].role === 'sales' && store[`users/${nu}`].company_id === 'c1', 'create: sign-in account + profile together');
+    const log = Object.entries(store).find(([k, v]) => k.startsWith('companies/c1/audit_logs/') && v.action === 'user_created');
+    ok(log && log[1].user === 'admin@x.com' && log[1].source === 'server' && !JSON.stringify(log[1]).includes('longpass1'), 'create: logged by the server under the real admin, no password');
+    r = await call(U, { token: 'tAdmin', body: { action: 'create', email: 'new@demo.com', password: 'longpass1', displayName: 'New', role: 'sales', company_id: 'c1' } });
+    ok(r.status === 409, 'create: an email already in use');
+
+    r = await call(U, { token: 'tAdmin', body: { action: 'update', uid: nu, disabled: true } });
+    ok(r.status === 200 && store[`users/${nu}`].disabled === true && authUsers[nu].disabled === true && authUsers[nu].revoked === true, 'disable: profile, sign-in account and open sessions');
+    r = await call(U, { token: 'tAdmin', body: { action: 'update', uid: nu, disabled: false, role: 'viewer' } });
+    ok(r.status === 200 && authUsers[nu].disabled === false && store[`users/${nu}`].role === 'viewer', 'enable + change role');
+    r = await call(U, { token: 'tAdmin', body: { action: 'update', uid: 'a1', role: 'sales' } });
+    ok(r.status === 400 && store['users/a1'].role === 'admin', 'an admin cannot demote themselves');
+    r = await call(U, { token: 'tAdmin', body: { action: 'update', uid: 'a1', disabled: true } });
+    ok(r.status === 400 && store['users/a1'].disabled !== true, 'an admin cannot disable themselves');
+    r = await call(U, { token: 'tAdmin', body: { action: 'delete', uid: 'a1' } });
+    ok(r.status === 400 && 'users/a1' in store, 'an admin cannot delete themselves');
+    r = await call(U, { token: 'tAdmin', body: { action: 'update', uid: 'a2', role: 'sales' } });
+    ok(r.status === 200 && store['users/a2'].role === 'sales', 'another admin can be demoted while one admin remains');
+    store['users/a2'].role = 'admin';
+    store['users/a1'].disabled = true;             // a1 is now the only other admin, and disabled
+    r = await call(U, { token: 'tAdmin2', body: { action: 'delete', uid: 'a1' } });
+    ok(r.status === 200, 'a disabled admin can be deleted');
+    store['users/a1'] = { role: 'admin', company_id: 'c1' }; authUsers.a1 = { email: 'admin@x.com' };
+    store['users/a2'].disabled = true;
+    r = await call(U, { token: 'tAdmin', body: { action: 'update', uid: 'a1', role: 'sales' } });
+    ok(r.status === 400, 'the last active admin cannot be removed');
+    delete store['users/a2'].disabled;
+
+    r = await call(U, { token: 'tAdmin', body: { action: 'delete', uid: nu } });
+    ok(r.status === 200 && !authUsers[nu] && !(`users/${nu}` in store), 'delete: the sign-in account and the profile');
+    r = await call(U, { token: 'tAdmin', body: { action: 'drop_tables', uid: 'u1' } });
+    ok(r.status === 400, 'unknown action refused');
+  }
+  // ── a profile is required for the price and proxy functions, not only a sign-in ──
+  r = await call(fns.priceLookup, { method: 'GET', token: 'tGhost', query: { pn: 'X' } });
+  ok(r.status === 403, 'priceLookup: an account with no profile is refused');
+  r = await call(fns.priceLookup, { method: 'GET', token: 'tOff', query: { pn: 'X' } });
+  ok(r.status === 403, 'priceLookup: a disabled user is refused');
+  r = await call(fns.priceProxy, { method: 'GET', token: 'tOff', query: { url: 'https://iw.coinmill.com/ILS_USD.html' } });
+  ok(r.status === 403, 'priceProxy: a disabled user is refused');
 
   console.log(`functions harness: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
