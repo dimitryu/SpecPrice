@@ -23,7 +23,7 @@ export function _priorityParseSheet(sheet){
 // same flow underneath, see openPriorityImportModal below).
 export function openImportDataModal(){
   showModal(`<div class="modal modal-sm">
-    <div class="modal-head"><h3>📥 Import Data</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>📥 Import Data</h3><button class="close-modal" data-close-modal>✕</button></div>
     <div class="modal-body" style="display:flex;flex-direction:column;gap:10px">
       <p style="font-size:12px;color:var(--muted);margin:0">What would you like to import?</p>
       <button class="btn btn-blue" id="import-data-priority" style="justify-content:flex-start;padding:12px;text-align:left">
@@ -33,7 +33,7 @@ export function openImportDataModal(){
         🛠 Tools Catalog — import crimp/insertion tool part numbers + descriptions
       </button>
     </div>
-    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+    <div class="modal-foot"><button class="btn btn-ghost" data-close-modal>Cancel</button></div>
   </div>`);
   document.getElementById('import-data-priority').addEventListener('click', openPriorityImportModal);
   document.getElementById('import-data-tools').addEventListener('click', openToolsImportModal);
@@ -41,7 +41,7 @@ export function openImportDataModal(){
 
 export function openPriorityImportModal(){
   showModal(`<div class="modal">
-    <div class="modal-head"><h3>📥 Priority Import</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>📥 Priority Import</h3><button class="close-modal" data-close-modal>✕</button></div>
     <div class="modal-body" id="pi-modal-body">
       <div class="drop-zone" id="pi-drop-zone" tabindex="0">
         <span class="icon-big">📊</span>
@@ -50,7 +50,7 @@ export function openPriorityImportModal(){
         <input type="file" id="pi-file-input" accept=".xlsx,.xls,.csv" style="display:none">
       </div>
     </div>
-    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+    <div class="modal-foot"><button class="btn btn-ghost" data-close-modal>Cancel</button></div>
   </div>`);
 
   const dz=document.getElementById('pi-drop-zone');
@@ -90,7 +90,7 @@ export async function handlePriorityFile(file){
     renderPrioritySheetMapping(sheetsData, sheetsData[0].name, body, foot);
   }catch(e){
     body.innerHTML+=`<p style="color:red;margin-top:12px">Error: ${e.message}</p>`;
-    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+    foot.innerHTML=`<button class="btn btn-ghost" data-close-modal>Close</button>`;
   }
 }
 
@@ -191,7 +191,7 @@ export function renderPrioritySheetMapping(sheetsData, activeSheetName, body, fo
 
     if(!parsed.length){
       body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No valid MNF P/N + Price rows were detected with this mapping.</p>`;
-      foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+      foot.innerHTML=`<button class="btn btn-ghost" data-close-modal>Close</button>`;
       return;
     }
 
@@ -207,7 +207,7 @@ export function showPriorityPreview(rows, body, foot){
     <td contenteditable="true" data-k="part_number" data-i="${i}" style="min-width:140px">${esc(r.part_number)}</td>
     <td contenteditable="true" data-k="priority_price" data-i="${i}" style="min-width:90px">${esc(String(r.priority_price))}</td>
     <td contenteditable="true" data-k="unit" data-i="${i}" style="min-width:70px">${esc(r.unit||'')}</td>
-    <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
+    <td><button class="btn btn-red btn-sm" data-remove-row>✕</button></td>
   </tr>`).join('');
 
   body.innerHTML=`
@@ -249,7 +249,7 @@ export function showPriorityPreview(rows, body, foot){
 
 export function openToolsImportModal(){
   showModal(`<div class="modal">
-    <div class="modal-head"><h3>🛠 Tools Catalog Import</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>🛠 Tools Catalog Import</h3><button class="close-modal" data-close-modal>✕</button></div>
     <div class="modal-body" id="ti-modal-body">
       <div class="drop-zone" id="ti-drop-zone" tabindex="0">
         <span class="icon-big">📊</span>
@@ -258,7 +258,7 @@ export function openToolsImportModal(){
         <input type="file" id="ti-file-input" accept=".xlsx,.xls,.csv" style="display:none">
       </div>
     </div>
-    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+    <div class="modal-foot"><button class="btn btn-ghost" data-close-modal>Cancel</button></div>
   </div>`);
 
   const dz=document.getElementById('ti-drop-zone');
@@ -294,7 +294,7 @@ export async function handleToolsFile(file){
     renderToolsSheetMapping(sheetsData, sheetsData[0].name, body, foot);
   }catch(e){
     body.innerHTML+=`<p style="color:red;margin-top:12px">Error: ${e.message}</p>`;
-    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+    foot.innerHTML=`<button class="btn btn-ghost" data-close-modal>Close</button>`;
   }
 }
 
@@ -371,7 +371,7 @@ export function renderToolsSheetMapping(sheetsData, activeSheetName, body, foot)
 
     if(!parsed.length){
       body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No valid MNF P/N rows were detected with this mapping.</p>`;
-      foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+      foot.innerHTML=`<button class="btn btn-ghost" data-close-modal>Close</button>`;
       return;
     }
 
@@ -386,7 +386,7 @@ export function showToolsPreview(rows, body, foot){
   const tBody=rows.map((r,i)=>`<tr data-i="${i}">
     <td contenteditable="true" data-k="part_number" data-i="${i}" style="min-width:140px">${esc(r.part_number)}</td>
     <td contenteditable="true" data-k="description" data-i="${i}" style="min-width:220px">${esc(r.description||'')}</td>
-    <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
+    <td><button class="btn btn-red btn-sm" data-remove-row>✕</button></td>
   </tr>`).join('');
 
   body.innerHTML=`

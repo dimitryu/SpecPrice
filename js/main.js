@@ -10,7 +10,7 @@ import { APP_VER, autoCheckForUpdate, checkForUpdate } from './core/version.js';
 import { openAccountModal } from './features/account.js';
 import { _supStartBadgePolling, openSupportModal } from './features/support.js';
 
-try{ localStorage.removeItem('gem_key'); }catch{}   // left over from the Gemini era
+try{ localStorage.removeItem('gem_key'); localStorage.removeItem('anth_key'); }catch{}   // old browser-held AI keys: never used again
 
 // ── PDF.js ────────────────────────────────────────────────────────────────────
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -59,6 +59,16 @@ onAuthStateChanged(auth, async user => {
   _supStartBadgePolling();   // Support markers, on every screen
 });
 window.closeModal=closeModal;
+// Buttons that close a modal or remove their table row say so with a data
+// attribute instead of an inline onclick="…": the Content-Security-Policy in
+// app.html forbids inline event handlers (they are how injected HTML runs code).
+document.addEventListener('click', e => {
+  const t = e.target && typeof e.target.closest === 'function' ? e.target : null;
+  if (!t) return;
+  if (t.closest('[data-close-modal]')) { closeModal(); return; }
+  const rm = t.closest('[data-remove-row]');
+  if (rm) rm.closest('tr')?.remove();
+});
 document.getElementById('btn-home')?.addEventListener('click',()=>route('home'));
 document.getElementById('btn-support-fab')?.addEventListener('click',()=>openSupportModal());
 // Delegated so it works for BOTH drop-zone modals (RFQ + Sales Desk), which

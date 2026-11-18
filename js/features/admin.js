@@ -117,9 +117,8 @@ export function renderAdminPage(){
 
 // ── Anthropic key — stored on the server ─────────────────────────────────────
 // Saved through apiConfig into a document no client can read; the AI requests
-// then go through the server (see ai/client.js _aiFetch). If the functions
-// are not deployed yet, the key is kept in this browser as before, so the
-// switch never leaves the app without AI.
+// then go through the server (see ai/client.js _aiFetch). There is no browser
+// fallback: if the functions are unreachable, saving fails and says so.
 export async function renderAdminAiKeySection(){
   const statusEl=document.getElementById('adm-ai-status');
   const saveBtn=document.getElementById('btn-adm-save-keys');
@@ -140,8 +139,7 @@ export async function renderAdminAiKeySection(){
       const a=s.anthropic;
       if(!a){
         // An apiConfig deployed before the AI key moved to the server.
-        statusEl.innerHTML=`<span style="color:var(--red)">The server functions are out of date — run: firebase deploy --only functions</span>`+
-          (S.anthKey?`<div style="margin-top:4px">${badge(true,'Browser key','used until the server has one')}</div>`:'');
+        statusEl.innerHTML=`<span style="color:var(--red)">The server functions are out of date — run: firebase deploy --only functions</span>`;
         return;
       }
       if(a.configured) _aiSetProxy(true);
@@ -150,14 +148,11 @@ export async function renderAdminAiKeySection(){
         ? `<div>${badge(true,'Anthropic — on the server',[a.hint,a.source==='env-var'?'via env var':''].filter(Boolean).join(' · '))}</div>`+
           (when?`<div style="color:var(--muted);font-size:10px;margin-top:4px">Last changed ${esc(when)}${a.updatedBy?' by '+esc(a.updatedBy):''}</div>`:'')
         : `<div>${badge(false,'Anthropic','not on the server yet')}</div>`+
-          `<div style="color:var(--muted);font-size:10px;margin-top:4px">${S.anthKey
-            ? 'The app is still using a key saved in this browser. Enter it above and save to move it to the server.'
-            : 'Enter the key and save — every user can then use the AI features.'}</div>`;
+          `<div style="color:var(--muted);font-size:10px;margin-top:4px">Enter the key and save — every user can then use the AI features.</div>`;
     }catch(e){
       statusEl.innerHTML=`<span style="color:var(--red)">${esc(notDeployed(e.message)
         ? 'Cannot reach the server functions — run: firebase deploy --only functions'
-        : e.message)}</span>`+
-        (S.anthKey?`<div style="margin-top:4px">${badge(true,'Browser key','in use until the server is reachable')}</div>`:'');
+        : e.message)}</span>`;
     }
   }
 
@@ -176,16 +171,11 @@ export async function renderAdminAiKeySection(){
       logAudit('ai_keys_updated',{anthropic:true,storage:'server'},true);
       await refreshStatus();
     }catch(e){
-      if(notDeployed(e.message)){
-        // Server not there yet: keep the old behaviour rather than lose AI.
-        S.anthKey=v; localStorage.setItem('anth_key',v); input.value='';
-        toast('Server not reachable — key saved in this browser for now. Deploy the functions to move it to the server.','warn');
-        logAudit('ai_keys_updated',{anthropic:true,storage:'browser'},true);
-        await refreshStatus();
-      } else {
-        toast('Save failed: '+e.message,'error');
-        logAudit('ai_keys_updated',e.message,false);
-      }
+      // No browser fallback: a key is never kept in this browser.
+      toast(notDeployed(e.message)
+        ? 'Cannot reach the server functions — run: firebase deploy --only functions, then save again'
+        : 'Save failed: '+e.message,'error');
+      logAudit('ai_keys_updated',e.message,false);
     }finally{ saveBtn.disabled=false; saveBtn.textContent='💾 Save API Key'; }
   });
 
@@ -436,7 +426,7 @@ export function openAdminReplyModal(ticketId){
   if(!t) return;
   const turns=_supportThread(t);
   showModal(`<div class="modal" style="width:min(94vw,680px)">
-    <div class="modal-head"><h3>💬 ${esc(t.user||'')}</h3>${_supportStatusBadge(t.status)}<button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>💬 ${esc(t.user||'')}</h3>${_supportStatusBadge(t.status)}<button class="close-modal" data-close-modal>✕</button></div>
     <div class="modal-body" id="adm-reply-thread" style="max-height:52vh">
       ${turns.map(m=>_supTurn(m,{userLabel:t.user||'User'})).join('')}
     </div>
@@ -449,7 +439,7 @@ export function openAdminReplyModal(ticketId){
         <select class="form-input" id="adm-reply-status" style="width:auto">
           ${_SUPPORT_STATUSES.map(s=>`<option value="${s}" ${s==='open'?'selected':''}>${_SUPPORT_STATUS_LABEL[s]}</option>`).join('')}
         </select>
-        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-ghost" data-close-modal>Cancel</button>
         <button class="btn btn-green" id="btn-adm-reply-save">Send reply</button>
       </div>
       <div style="font-size:10px;color:var(--muted)">A reply re-opens the request by default — pick another status here if you are closing it in the same breath.</div>

@@ -8,7 +8,15 @@ import { companyId } from '../core/session.js';
 const ticketsCol=()=>collection(db,'companies',companyId,'support_tickets');
 const ticketRef=id=>doc(db,'companies',companyId,'support_tickets',id);
 
-// Every ticket (not attachments), newest first, as {_id, …fields}.
+// One user's own tickets, newest first. The Firestore rules let a user read
+// only their own, so the query asks for exactly those (sorted here, so it
+// needs no composite index).
+export async function listMyTickets(email){
+  const snap=await getDocs(query(ticketsCol(), where('user','==',email)));
+  return snap.docs.map(d=>({_id:d.id,...d.data()})).filter(t=>!t.kind)
+    .sort((a,b)=>((b.createdAt&&b.createdAt.toMillis)?b.createdAt.toMillis():0)-((a.createdAt&&a.createdAt.toMillis)?a.createdAt.toMillis():0));
+}
+// Every ticket (not attachments), newest first, as {_id, …fields} — admin only.
 export async function listTickets(){
   const snap=await getDocs(query(ticketsCol(),orderBy('createdAt','desc')));
   return snap.docs.map(d=>({_id:d.id,...d.data()})).filter(t=>!t.kind);

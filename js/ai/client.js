@@ -14,15 +14,15 @@ export const _AI_NO_KEY='No AI key configured — an admin can add the Anthropic
 // the function adds the key. The key is then never in any browser — not in
 // localStorage, not in the company document, not in devtools.
 //
-// Straight to Anthropic with a browser key only while the server has none
-// (before the function is deployed, or before an admin moves the key there),
-// so nothing stops working during the switch.
-export const AI_DIRECT_URL='https://api.anthropic.com/v1/messages';
+// There is no other road. The browser-key path (a key in localStorage, sent
+// straight to api.anthropic.com) was removed: a key in a browser is readable by
+// any script or extension running there, and the server path has been the
+// normal one for a long time.
 export const AI_PROXY_URL='https://us-central1-specprice-236a2.cloudfunctions.net/aiProxy';
 
 // Is there any way to reach the model right now? The checks that used to read
 // "is there a key" ask this instead.
-export function _aiReady(){ return !!(S.aiProxy || S.anthKey); }
+export function _aiReady(){ return !!S.aiProxy; }
 
 // Remembered across reloads so the very first request after login already
 // takes the right road, without waiting for the server to answer.
@@ -31,8 +31,7 @@ export function _aiSetProxy(on){
   try{
     if(on){
       localStorage.setItem('ai_proxy','1');
-      // The server has the key, so the browser copy is only a liability.
-      S.anthKey=''; localStorage.removeItem('anth_key');
+      localStorage.removeItem('anth_key');   // left over from the browser-key era
     } else localStorage.removeItem('ai_proxy');
   }catch(e){}
 }
@@ -68,18 +67,11 @@ export function _aiBodyForModel(body){
 }
 export async function _aiFetch(opts, timeoutMs){
   opts={...opts, body:_aiBodyForModel(opts.body)};
-  if(S.aiProxy && auth.currentUser){
-    const token=await auth.currentUser.getIdToken();
-    return _fetchWithRetry(AI_PROXY_URL,{
-      method:'POST',
-      headers:{Authorization:'Bearer '+token,'content-type':'application/json'},
-      body:opts.body
-    }, timeoutMs);
-  }
-  return _fetchWithRetry(AI_DIRECT_URL,{
+  if(!auth.currentUser) throw new Error('Not signed in');
+  const token=await auth.currentUser.getIdToken();
+  return _fetchWithRetry(AI_PROXY_URL,{
     method:'POST',
-    headers:{'x-api-key':S.anthKey,'anthropic-version':'2023-06-01',
-             'anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
+    headers:{Authorization:'Bearer '+token,'content-type':'application/json'},
     body:opts.body
   }, timeoutMs);
 }

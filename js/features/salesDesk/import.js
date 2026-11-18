@@ -23,7 +23,7 @@ import { encodeImage } from '../../io/pdf.js';
 // onAdd(parts, qtyOverride, hadSelection) is called once, after the modal closes.
 export function openPartPickerModal(onAdd){
   showModal(`<div class="modal" style="width:min(96vw,1100px)">
-    <div class="modal-head"><h3>📦 Select from Database</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>📦 Select from Database</h3><button class="close-modal" data-close-modal>✕</button></div>
     <div class="modal-body">
       <div class="toolbar" style="margin-bottom:8px">
         <label style="font-size:12px;color:var(--muted);white-space:nowrap">Filter by:</label>
@@ -57,7 +57,7 @@ export function openPartPickerModal(onAdd){
       </div>
     </div>
     <div class="modal-foot">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-ghost" data-close-modal>Cancel</button>
       <button class="btn btn-green" id="pp-add">＋ Add Selected</button>
     </div>
   </div>`);
@@ -149,7 +149,7 @@ export function openPartPickerModal(onAdd){
 
 export function openSDFileModal(){
   showModal(`<div class="modal">
-    <div class="modal-head"><h3>Import BOM from File</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>Import BOM from File</h3><button class="close-modal" data-close-modal>✕</button></div>
     <div class="modal-body" id="sd-modal-body">
       <div class="drop-zone" id="sd-drop-zone" tabindex="0">
         <span class="icon-big">📄</span>
@@ -158,7 +158,7 @@ export function openSDFileModal(){
         <input type="file" id="sd-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.xlsx,.xlsm,.xls,.csv" multiple style="display:none">
       </div>
     </div>
-    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+    <div class="modal-foot"><button class="btn btn-ghost" data-close-modal>Cancel</button></div>
   </div>`);
 
   const dz=document.getElementById('sd-drop-zone');
@@ -404,7 +404,7 @@ export async function handleSDFiles(files){
     body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No BOM rows were detected in ${files.length>1?`any of the ${files.length} files`:'this file'}.</p>
       ${errors.length?`<div class="sd-import-why" style="margin-top:8px;font-size:12px;line-height:1.5;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:8px 10px;color:#7F1D1D">
         <strong>What happened:</strong><ul style="margin:4px 0 0 18px;padding:0">${errors.map(m=>`<li>${esc(m)}</li>`).join('')}</ul></div>`:''}`;
-    foot.innerHTML=`<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+    foot.innerHTML=`<button class="btn btn-ghost" data-close-modal>Close</button>`;
     return;
   }
 

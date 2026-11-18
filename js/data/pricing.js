@@ -12,10 +12,10 @@ import { _detectCurrency, _normalizeCurrencyCode } from '../domain/pricing.js';
 // link, for eyeballing distributors the two APIs don't cover.
 // coinmill.com publishes currency rates as a plain web page with no CORS
 // header, so it still needs a server-side fetch. Our own Cloud Function does
-// it; allorigins stays as a fallback for the case where the function isn't
-// deployed. (This is all that's left of the old proxy chain.)
+// it. The public allorigins.win proxy that used to be the fallback was removed:
+// a third party in the middle could hand back a doctored rate, and every
+// price converted with it would be wrong without anyone noticing.
 export const RATE_PROXY_URL = 'https://us-central1-specprice-236a2.cloudfunctions.net/priceProxy?url=';
-export const RATE_PROXY_FALLBACK = 'https://api.allorigins.win/raw?url=';
 // Official Mouser/DigiKey APIs via our Cloud Function (see functions/index.js).
 // Unlike the FindChips scrape this is a documented, structured, permitted data
 // source — no HTML parsing and nothing to block — so it's the primary source
@@ -64,8 +64,8 @@ export const _COINMILL_URLS = {
 };
 export const _currencyRateCache = {};
 
-// Tries our own function first (authenticated), then the public fallback.
-// Throws only if both fail, so a rate lookup degrades rather than dying.
+// Our own function only (authenticated). Throws when it fails, so the caller
+// reports the missing rate instead of using a wrong one.
 export async function _fetchRatePage(url){
   const attempts=[];
   if(auth.currentUser){
@@ -75,8 +75,6 @@ export async function _fetchRatePage(url){
         {headers:{Authorization:'Bearer '+token}, signal:AbortSignal.timeout(30000)}));
     }catch(e){ console.warn('[Currency] no ID token:',e.message); }
   }
-  attempts.push(()=>fetch(RATE_PROXY_FALLBACK+encodeURIComponent(url),
-    {signal:AbortSignal.timeout(15000)}));
   let last='';
   for(const go of attempts){
     try{

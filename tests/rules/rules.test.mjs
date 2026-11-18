@@ -8,7 +8,7 @@
 // Every "cannot" here was possible before v1.72: any sign-in account could
 // write its own profile, role included.
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, addDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, addDoc, query, where, serverTimestamp, arrayUnion } from 'firebase/firestore';
 import fs from 'fs';
 let pass=0, fail=0;
 const t=async(name, p)=>{ try{ await p; pass++; }catch(e){ fail++; console.log('  ✗', name, '-', String(e.message||e).slice(0,160)); } };
@@ -32,11 +32,14 @@ await env.withSecurityRulesDisabled(async c=>{ const db=c.firestore();
   await setDoc(doc(db,'companies/c1/customers/cu1'),{name:'Acme'});
   await setDoc(doc(db,'companies/c1/projects/r1'),{name:'RFQ 1'});
   await setDoc(doc(db,'companies/c1/projects/r1/drawings/d1'),{name:'D1',items:[]});
-  await setDoc(doc(db,'companies/c1/support_tickets/t1'),{user:'s@x',message:'help'});
+  await setDoc(doc(db,'companies/c1/support_tickets/t1'),{user:'s@x',userId:'sales1',message:'help',status:'done'});
+  await setDoc(doc(db,'companies/c1/support_tickets/t2'),{user:'ag@x',userId:'agent1',message:'mine',status:'open'});
+  await setDoc(doc(db,'companies/c1/support_tickets/f1'),{kind:'file',ticketId:'t2',by:'ag@x',name:'a.png',data:'x'});
   await setDoc(doc(db,'companies/c1/parts_cache/old'),{part_number:'OLD',deleted:true,deletedAtMs:Date.now()-5*86400000});
   await setDoc(doc(db,'secure_config/ai_api'),{anthropic_api_key:'k'});
 });
-const as=uid=>env.authenticatedContext(uid).firestore();
+const EMAIL={admin1:'a@x',sales1:'s@x',viewer1:'v@x',off1:'off@x',offadmin:'oa@x',agent1:'ag@x',auditor1:'au@x',admin2:'a2@x',c2user:'c2@x',stranger:'str@x'};
+const as=uid=>env.authenticatedContext(uid,{email:EMAIL[uid]||(uid+'@x')}).firestore();
 const stranger=as('stranger'), sales=as('sales1'), viewer=as('viewer1'), off=as('off1'), adm=as('admin1'), offAdm=as('offadmin'), anon=env.unauthenticatedContext().firestore();
 
 // C1 — an outsider with a fresh sign-in account
@@ -45,7 +48,7 @@ await t('stranger cannot create a plain profile either', assertFails(setDoc(doc(
 await t('stranger cannot list companies', assertFails(getDocs(collection(stranger,'companies'))));
 await t('stranger cannot read roles', assertFails(getDoc(doc(stranger,'roles/sales'))));
 await t('stranger cannot read parts', assertFails(getDoc(doc(stranger,'companies/c1/parts_cache/p1'))));
-await t('stranger cannot write audit logs', assertFails(addDoc(collection(stranger,'companies/c1/audit_logs'),{a:1})));
+await t('stranger cannot write audit logs', assertFails(addDoc(collection(stranger,'companies/c1/audit_logs'),{user:'str@x',userId:'stranger',action:'x',success:true,timestamp:serverTimestamp()})));
 await t('anonymous cannot read anything', assertFails(getDoc(doc(anon,'companies/c1'))));
 // C2 — a user changing their own profile
 await t('sales cannot make themselves admin', assertFails(updateDoc(doc(sales,'users/sales1'),{role:'admin'})));
@@ -74,7 +77,7 @@ await t('sales edits parts', assertSucceeds(updateDoc(doc(sales,'companies/c1/pa
 await t('sales cannot read another company\'s parts', assertFails(getDoc(doc(sales,'companies/c2/parts_cache/p1'))));
 await t('sales reads companies (company picker)', assertSucceeds(getDoc(doc(sales,'companies/c1'))));
 await t('sales reads roles', assertSucceeds(getDoc(doc(sales,'roles/sales'))));
-await t('sales writes an audit log', assertSucceeds(addDoc(collection(sales,'companies/c1/audit_logs'),{action:'x'})));
+await t('sales writes an audit log', assertSucceeds(addDoc(collection(sales,'companies/c1/audit_logs'),{user:'s@x',userId:'sales1',action:'x',details:null,success:true,timestamp:serverTimestamp()})));
 await t('sales cannot read audit logs', assertFails(getDocs(collection(sales,'companies/c1/audit_logs'))));
 await t('admin manages profiles', assertSucceeds(updateDoc(doc(adm,'users/sales1'),{role:'viewer'})));
 await t('admin creates a profile', assertSucceeds(setDoc(doc(adm,'users/newbie'),{role:'sales',company_id:'c1'})));
@@ -93,8 +96,8 @@ await t('viewer cannot write a customer', assertFails(updateDoc(doc(viewer,'comp
 await t('viewer cannot write an RFQ', assertFails(updateDoc(doc(viewer,'companies/c1/projects/r1'),{name:'x'})));
 await t('viewer cannot write a drawing', assertFails(updateDoc(doc(viewer,'companies/c1/projects/r1/drawings/d1'),{items:[1]})));
 await t('viewer CAN read Cut & Strip sheets', assertSucceeds(getDoc(doc(viewer,'companies/c1/cut_strip_specs/s1'))));
-await t('viewer CAN open a support ticket', assertSucceeds(addDoc(collection(viewer,'companies/c1/support_tickets'),{message:'help'})));
-await t('viewer CAN write the audit log (screen opens)', assertSucceeds(addDoc(collection(viewer,'companies/c1/audit_logs'),{action:'open'})));
+await t('viewer CAN open a support ticket', assertSucceeds(addDoc(collection(viewer,'companies/c1/support_tickets'),{user:'v@x',userId:'viewer1',message:'help',status:'open'})));
+await t('viewer CAN write the audit log (screen opens)', assertSucceeds(addDoc(collection(viewer,'companies/c1/audit_logs'),{user:'v@x',userId:'viewer1',action:'screen_open',details:{screen:'x'},success:true,timestamp:serverTimestamp()})));
 await t('a read-only custom role cannot write', assertFails(updateDoc(doc(auditor,'companies/c1/parts_cache/p1'),{x:9})));
 await t('a read-only custom role can read', assertSucceeds(getDoc(doc(auditor,'companies/c1/parts_cache/p1'))));
 await t('agent writes a Cut & Strip sheet', assertSucceeds(setDoc(doc(agent,'companies/c1/cut_strip_specs/s2'),{drawing_number:'D2'})));
@@ -132,6 +135,40 @@ await t('admin of c2 cannot move a c1 user', assertFails(updateDoc(doc(adm2,'use
 await t('admin of c2 cannot create a c1 user', assertFails(setDoc(doc(adm2,'users/x9'),{role:'admin',company_id:'c1'})));
 await t('admin of c1 cannot move a user into c2', assertFails(updateDoc(doc(adm,'users/sales1'),{company_id:'c2'})));
 await t('admin of c1 cannot touch a c2 user', assertFails(updateDoc(doc(adm,'users/c2user'),{role:'viewer'})));
+
+// M2 — the audit log is written in your own name, at the server's time
+await t('log entry in someone else\'s name refused', assertFails(addDoc(collection(sales,'companies/c1/audit_logs'),{user:'a@x',userId:'sales1',action:'x',success:true,timestamp:serverTimestamp()})));
+await t('log entry with someone else\'s userId refused', assertFails(addDoc(collection(sales,'companies/c1/audit_logs'),{user:'s@x',userId:'admin1',action:'x',success:true,timestamp:serverTimestamp()})));
+await t('back-dated log entry refused', assertFails(addDoc(collection(sales,'companies/c1/audit_logs'),{user:'s@x',userId:'sales1',action:'x',success:true,timestamp:new Date(2020,0,1)})));
+await t('log entry pretending to come from the server refused', assertFails(addDoc(collection(sales,'companies/c1/audit_logs'),{user:'s@x',userId:'sales1',action:'x',success:true,timestamp:serverTimestamp(),source:'server'})));
+await t('SYSTEM entry in your own name accepted', assertSucceeds(addDoc(collection(sales,'companies/c1/audit_logs'),{user:'SYSTEM',userId:'sales1',viaUser:'s@x',action:'ai_bom',success:true,timestamp:serverTimestamp()})));
+await t('SYSTEM entry for someone else refused', assertFails(addDoc(collection(sales,'companies/c1/audit_logs'),{user:'SYSTEM',userId:'sales1',viaUser:'a@x',action:'ai_bom',success:true,timestamp:serverTimestamp()})));
+// M3 — support tickets: your own only
+await t('a user cannot read a colleague\'s ticket', assertFails(getDoc(doc(sales,'companies/c1/support_tickets/t2'))));
+await t('a user cannot list all tickets', assertFails(getDocs(collection(sales,'companies/c1/support_tickets'))));
+await t('a user lists their own tickets', assertSucceeds(getDocs(query(collection(agent,'companies/c1/support_tickets'),where('user','==','ag@x')))));
+await t('a user reads their own ticket', assertSucceeds(getDoc(doc(agent,'companies/c1/support_tickets/t2'))));
+await t('a user reads an attachment of their ticket', assertSucceeds(getDoc(doc(agent,'companies/c1/support_tickets/f1'))));
+await t('a colleague cannot read that attachment', assertFails(getDoc(doc(sales,'companies/c1/support_tickets/f1'))));
+await t('a user cannot open a ticket in someone else\'s name', assertFails(addDoc(collection(sales,'companies/c1/support_tickets'),{user:'a@x',userId:'sales1',message:'x'})));
+await t('a user cannot attach to a colleague\'s ticket', assertFails(addDoc(collection(sales,'companies/c1/support_tickets'),{kind:'file',ticketId:'t2',by:'s@x',data:'x'})));
+await t('a user replies on their own ticket', assertSucceeds(updateDoc(doc(agent,'companies/c1/support_tickets/t2'),{thread:arrayUnion({role:'user',text:'more'}),status:'open',lastMsgRole:'user',adminUnread:true})));
+await t('a user marks their done ticket read (status untouched)', assertSucceeds(updateDoc(doc(sales,'companies/c1/support_tickets/t1'),{userUnread:false})));
+await t('a user cannot close their ticket as the admin', assertFails(updateDoc(doc(agent,'companies/c1/support_tickets/t2'),{status:'done'})));
+await t('a user cannot rewrite the original message', assertFails(updateDoc(doc(agent,'companies/c1/support_tickets/t2'),{message:'changed'})));
+await t('a user cannot post as the admin', assertFails(updateDoc(doc(agent,'companies/c1/support_tickets/t2'),{lastMsgRole:'admin'})));
+await t('a user cannot touch a colleague\'s ticket', assertFails(updateDoc(doc(sales,'companies/c1/support_tickets/t2'),{userUnread:false})));
+await t('the admin reads every ticket', assertSucceeds(getDocs(collection(adm,'companies/c1/support_tickets'))));
+await t('the admin closes a ticket', assertSucceeds(updateDoc(doc(adm,'companies/c1/support_tickets/t2'),{status:'done',lastMsgRole:'admin'})));
+// M4 — company documents: your own company only
+await t('a user cannot read another company', assertFails(getDoc(doc(sales,'companies/c2'))));
+await t('a user reads their own company', assertSucceeds(getDoc(doc(sales,'companies/c1'))));
+await t('a user cannot list all companies', assertFails(getDocs(collection(sales,'companies'))));
+// M6 — shape checks
+await t('a part number that is not text refused', assertFails(updateDoc(doc(agent,'companies/c1/parts_cache/p1'),{part_number:12345})));
+await t('a 300-character part number refused', assertFails(updateDoc(doc(agent,'companies/c1/parts_cache/p1'),{part_number:'x'.repeat(300)})));
+await t('deleted that is not true/false refused', assertFails(updateDoc(doc(agent,'companies/c1/customers/cu1'),{deleted:'yes'})));
+await t('screen settings must be a small map', assertFails(updateDoc(doc(agent,'users/agent1'),{ui_prefs:'x'})));
 console.log(`rules: ${pass} passed, ${fail} failed`);
 await env.cleanup();
 process.exit(fail?1:0);

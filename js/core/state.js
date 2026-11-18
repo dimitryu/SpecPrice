@@ -29,7 +29,7 @@ export const S = {
   // re-read from the company document, so a key typed into Admin worked until
   // the page was reloaded and then silently disappeared — taking every AI
   // feature with it, with no error anywhere.
-  anthKey: localStorage.getItem('anth_key') || '',
+  anthKey: '',   // unused: the AI key lives on the server only (ai/client.js)
   // owner: ai/client.js
   // True when the Anthropic key is stored on the server and every AI request
   // goes through the aiProxy function — see _aiFetch. Remembered so the first

@@ -60,6 +60,10 @@ export function loadExcelJS(){
   _exceljsPromise=new Promise((resolve,reject)=>{
     const el=document.createElement('script');
     el.src='https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+    // Subresource Integrity: the browser refuses the file if the CDN ever
+    // serves anything but these exact bytes.
+    el.integrity='sha384-Pqp51FUN2/qzfxZxBCtF0stpc9ONI6MYZpVqmo8m20SoaQCzf+arZvACkLkirlPz';
+    el.crossOrigin='anonymous';
     el.onload=()=>window.ExcelJS?resolve(window.ExcelJS):reject(new Error('ExcelJS failed to initialise'));
     el.onerror=()=>reject(new Error('Could not load the Excel formatting library — check your connection'));
     document.head.appendChild(el);

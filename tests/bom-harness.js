@@ -4,7 +4,7 @@ const fs=require('fs'), vm=require('vm'), {JSDOM}=require('jsdom');
 const dom=new JSDOM(`<!doctype html><html><body><div id="content"></div><div id="toast-el"></div></body></html>`,{url:'https://x.test'});
 const g=dom.window;
 const src=fs.readFileSync('extracted.js','utf8');
-const pre=`var db={}, auth={currentUser:{uid:'u1'}};
+const pre=`var db={}, auth={currentUser:{uid:'u1', getIdToken:async()=>'t'}};
 var collection=()=>({}), doc=()=>({}), addDoc=async()=>({id:'x'}), serverTimestamp=()=>new Date(),
     getDocs=async()=>({docs:[]}), setDoc=async()=>{}, updateDoc=async()=>{}, query=()=>({}), orderBy=()=>({});
 var _csLang='en', _csCache={en:{},he:{},ru:{}}, psPageSize=20;
@@ -31,7 +31,7 @@ let calls=[], crops=[];
 const reply=t=>({ok:true, json:async()=>({content:[{type:'text',text:t}], stop_reason:'end_turn'})});
 function script(handler){
   ctx.__f.handler=handler;
-  vm.runInContext(`anthKey='sk'; _csModelDown=false;
+  vm.runInContext(`aiProxy=true; _csModelDown=false;
     _fetchWithRetry=async(u,o)=>__f.handler(JSON.parse(o.body));
     logSystemAudit=async()=>{};
     extractPDFPages=async()=>__f.pdf;`, ctx);

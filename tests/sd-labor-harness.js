@@ -7,7 +7,7 @@ const dom=new JSDOM(`<!doctype html><html><body>
   <div id="shell"><div class="topbar"><button id="btn-home"></button><h2 id="page-title"></h2><div id="topbar-actions"></div><div id="topbar-info"></div></div><div id="content"></div></div><div id="toast-el"></div></body></html>`,{url:'https://x.test'});
 const g=dom.window;
 const src=fs.readFileSync('extracted.js','utf8');
-const pre=`var db={}, auth={currentUser:{uid:'u1'}};
+const pre=`var db={}, auth={currentUser:{uid:'u1', getIdToken:async()=>'t'}};
 var collection=()=>({}), doc=(...a)=>({id:a[a.length-1]}), addDoc=async()=>({id:'x'}), serverTimestamp=()=>new Date(),
     getDocs=async()=>({docs:[]}), getDoc=async()=>({exists:()=>false,data:()=>({})}), setDoc=async()=>{}, updateDoc=async()=>{},
     query=()=>({}), orderBy=()=>({}), arrayUnion=(...v)=>v, deleteField=()=>null, writeBatch=()=>({update(){},commit:async()=>{}});
@@ -54,7 +54,7 @@ ctx.__f.handler=b=>{
   else if(/Bill of Materials|BOM/i.test(txt)) out=JSON.stringify(ROWS);
   return {ok:true, json:async()=>({content:[{type:'text',text:out}], stop_reason:'end_turn'})};
 };
-vm.runInContext(`anthKey='sk'; companyId='c1'; currentUserEmail='u@x'; currentUserRole='admin';
+vm.runInContext(`aiProxy=true; companyId='c1'; currentUserEmail='u@x'; currentUserRole='admin';
   sdItems=[]; allParts=[]; _sdLaborBreakdowns=[]; _sdDrawingNotes=[];
   _fetchWithRetry=async(u,o)=>__f.handler(JSON.parse(o.body));
   logSystemAudit=async()=>{}; logAudit=async()=>{};

@@ -31,7 +31,11 @@ const fakeAuth = {
 let addSeq = 0;
 const docRef = p => ({
   get: async () => ({ exists: p in store, data: () => store[p] }),
-  set: async (d, o) => { store[p] = (o && o.merge) ? { ...(store[p] || {}), ...d } : d; },
+  set: async (d, o) => {
+    const base = (o && o.merge) ? { ...(store[p] || {}) } : {};
+    for (const [k, v] of Object.entries(d)) base[k] = (v && v.__inc !== undefined) ? (base[k] || 0) + v.__inc : v;
+    store[p] = base;
+  },
   update: async d => { if (!(p in store)) throw new Error('no doc'); store[p] = { ...store[p], ...d }; },
   delete: async () => { delete store[p]; },
 });
@@ -46,7 +50,7 @@ const fakeAdmin = {
   initializeApp() {},
   auth: () => fakeAuth,
   firestore: Object.assign(() => ({ doc: docRef, collection: collRef }),
-    { FieldValue: { serverTimestamp: () => new Date('2026-10-29T10:00:00Z') } }),
+    { FieldValue: { serverTimestamp: () => new Date('2026-10-29T10:00:00Z'), increment: n => ({ __inc: n }) } }),
 };
 const fakeFunctions = { onRequest: (opts, fn) => { fn._opts = opts; return fn; } };
 const origLoad = Module._load;
@@ -328,6 +332,22 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
     r = await call(U, { token: 'tAdmin', body: { action: 'update', uid: 'legacy', company_id: 'c1', role: 'sales' } });
     ok(r.status === 200 && store['users/legacy'].company_id === 'c1', 'a profile with no company is adopted into the admin\'s company');
   }
+  // ── M1: per-user limits ──
+  {
+    tokens.tBurst = { uid: 'ub', email: 'burst@x.com' };
+    store['users/ub'] = { role: 'sales', company_id: 'c1' };
+    upstreamReplyDefault = { status: 200, body: '<html>' + 'x'.repeat(300) + '</html>' };
+    let last;
+    for (let i = 0; i < 61; i++) last = await call(fns.priceProxy, { method: 'GET', token: 'tBurst', query: { url: 'https://iw.coinmill.com/ILS_USD.html' } });
+    ok(last.status === 429 && /a minute/.test(last.json.error), 'rate: the 61st currency lookup in a minute is refused');
+    const today = new Date().toISOString().slice(0, 10);
+    ok(store[`usage/ub_proxy_${today}`] && store[`usage/ub_proxy_${today}`].count === 60, 'rate: the day\'s count is kept on the server (the refused one not counted)');
+    store[`usage/u1_ai_${today}`] = { count: 2000 };
+    const rAi = await call(fns.aiProxy, { token: 'tUser', body: { model: 'claude-sonnet-5', max_tokens: 10, messages: [{ role: 'user', content: 'x' }] } });
+    ok(rAi.status === 429 && /Daily limit/.test(rAi.json.error.message), 'rate: over the daily AI limit → 429 in Anthropic\'s error shape');
+    delete store[`usage/u1_ai_${today}`];
+  }
+
   // ── a profile is required for the price and proxy functions, not only a sign-in ──
   r = await call(fns.priceLookup, { method: 'GET', token: 'tGhost', query: { pn: 'X' } });
   ok(r.status === 403, 'priceLookup: an account with no profile is refused');

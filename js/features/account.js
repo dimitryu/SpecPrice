@@ -33,7 +33,7 @@ export function _accCheckNewPassword(cur, next, again){
 export function openAccountModal(){
   const email=S.currentUserEmail||'';
   showModal(`<div class="modal modal-sm">
-    <div class="modal-head"><h3>👤 My account</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>👤 My account</h3><button class="close-modal" data-close-modal>✕</button></div>
     <div class="modal-body">
       <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Signed in as <strong style="color:var(--text)">${esc(email)}</strong></div>
       <div style="font-size:11px;font-weight:700;color:#4A5568;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Change password</div>
@@ -49,7 +49,7 @@ export function openAccountModal(){
         <a href="#" id="acc-reset">Send me a reset link</a> — it goes to ${esc(email)}.</div>
     </div>
     <div class="modal-foot">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-ghost" data-close-modal>Cancel</button>
       <button class="btn btn-green" id="acc-save">🔒 Change password</button>
     </div>
   </div>`);

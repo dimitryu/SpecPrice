@@ -12,14 +12,15 @@ export let _csPdfPromise=null;
 export function _csLoadPdfLibs(){
   if(window.html2canvas && window.jspdf) return Promise.resolve();
   if(_csPdfPromise) return _csPdfPromise;
-  const one=src=>new Promise((res,rej)=>{
-    const el=document.createElement('script'); el.src=src;
+  // Subresource Integrity on each file: the exact bytes or nothing.
+  const one=(src,sri)=>new Promise((res,rej)=>{
+    const el=document.createElement('script'); el.src=src; el.integrity=sri; el.crossOrigin='anonymous';
     el.onload=res; el.onerror=()=>rej(new Error('Could not load the PDF library — check your connection'));
     document.head.appendChild(el);
   });
   _csPdfPromise=Promise.all([
-    window.html2canvas?Promise.resolve():one('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'),
-    window.jspdf?Promise.resolve():one('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'),
+    window.html2canvas?Promise.resolve():one('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js','sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H'),
+    window.jspdf?Promise.resolve():one('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js','sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk'),
   ]).then(()=>{
     if(!window.html2canvas||!window.jspdf) throw new Error('PDF libraries failed to initialise');
   });

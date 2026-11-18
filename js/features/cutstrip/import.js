@@ -139,7 +139,7 @@ export async function _csRefImage(b64){
 // ── Import ────────────────────────────────────────────────────────────────────
 export function openCSFileModal(){
   showModal(`<div class="modal">
-    <div class="modal-head"><h3>New Cut &amp; Strip Specification</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>New Cut &amp; Strip Specification</h3><button class="close-modal" data-close-modal>✕</button></div>
     <div class="modal-body" id="cs-modal-body">
       <div class="drop-zone" id="cs-drop-zone" tabindex="0">
         <span class="icon-big">✂️</span>
@@ -149,7 +149,7 @@ export function openCSFileModal(){
         <input type="file" id="cs-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" style="display:none">
       </div>
     </div>
-    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+    <div class="modal-foot"><button class="btn btn-ghost" data-close-modal>Cancel</button></div>
   </div>`);
   const dz=document.getElementById('cs-drop-zone'), fi=document.getElementById('cs-file-input');
   dz.addEventListener('click',()=>fi.click());
@@ -292,7 +292,7 @@ export async function handleCSFile(file){
         Nothing was saved. If the drawing is a scan, a sharper image usually fixes this.</p></div>`;
     if(foot) foot.innerHTML=(_csLastRawReply
         ? `<button class="btn btn-ghost" id="btn-cs-copy-raw">\u{1F4CB} Copy the AI reply</button>` : '')
-      + `<button class="btn btn-ghost" onclick="closeModal()">Close</button>`;
+      + `<button class="btn btn-ghost" data-close-modal>Close</button>`;
     document.getElementById('btn-cs-copy-raw')?.addEventListener('click',async ev=>{
       try{ await navigator.clipboard.writeText(_csLastRawReply);
            ev.currentTarget.textContent='\u2713 Copied'; }

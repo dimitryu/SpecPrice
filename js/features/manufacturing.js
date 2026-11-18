@@ -103,7 +103,7 @@ export function _mfgNew(){
 // says plainly what will be taken across.
 export async function _mfgImportModal(){
   showModal(`<div class="modal" style="width:min(94vw,680px)">
-    <div class="modal-head"><h3>↧ Start from a Cut &amp; Strip specification</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>↧ Start from a Cut &amp; Strip specification</h3><button class="close-modal" data-close-modal>✕</button></div>
     <div class="modal-body" id="mfg-imp-body" style="max-height:58vh">
       <div style="text-align:center;padding:30px"><div class="ring" style="margin:0 auto"></div></div>
     </div>

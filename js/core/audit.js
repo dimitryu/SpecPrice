@@ -39,7 +39,9 @@ export async function logAudit(action, details, success=true){
   if(!companyId) return; // no company context yet (e.g. very first load) — nothing to attribute this to
   try{
     await addAuditEntry({
-      user: S.currentUserEmail||'', userId: auth.currentUser?.uid||'',
+      // Who wrote it is checked by the Firestore rules against the sign-in
+      // token, so an entry cannot claim to be someone else.
+      user: auth.currentUser?.email||S.currentUserEmail||'', userId: auth.currentUser?.uid||'',
       action, details: (d=>d==null?'':d)(_withDrawing(action, details)), success: !!success,
     });
   }catch(e){ console.warn('[Audit] log failed:', e.message); }
@@ -53,7 +55,7 @@ export async function logSystemAudit(action, details, success=true){
   if(!companyId) return;
   try{
     await addAuditEntry({
-      user: 'SYSTEM', userId: 'system', viaUser: S.currentUserEmail||'',
+      user: 'SYSTEM', userId: auth.currentUser?.uid||'', viaUser: auth.currentUser?.email||S.currentUserEmail||'',
       action, details: (d=>d==null?'':d)(_withDrawing(action, details)), success: !!success,
     });
   }catch(e){ console.warn('[Audit] system log failed:', e.message); }

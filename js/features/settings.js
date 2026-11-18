@@ -6,7 +6,7 @@ import { _crimpToolPrompt } from '../ai/tooling.js';
 import { logAudit } from '../core/audit.js';
 import { auth, sendPasswordResetEmail } from '../core/firebase.js';
 import { ADMIN_AUTO_VIEWS, PROTECTED_ROLE, PROTECTED_VIEWS, ROLES_META_DOC, SEED_ROLE_VIEWS, _isRoleDocId, _mergedRoleKeys, roleOptions } from '../core/roles.js';
-import { HOME_BUTTONS, renderHomeIfActive } from '../core/router.js';
+import { HOME_BUTTONS, renderHomeIfActive, route } from '../core/router.js';
 import { companyId, currentUserRole } from '../core/session.js';
 import { closeModal, esc, setActions, setContent, showModal, toast } from '../core/ui.js';
 import { updateCompany } from '../data/company.js';
@@ -201,34 +201,25 @@ export async function renderSettingsLogoSection(){
   });
 }
 
-// Lightweight "you need an API key first" prompt — shown when a drawing import
-// is attempted with no key configured (see handleFiles/handleSDFiles). The keys
-// themselves live on the Admin screen now; this exists purely so a user isn't
-// dead-ended mid-task, and it saves to the same localStorage entries.
+// "The AI is not set up yet" — shown when a drawing import is attempted while
+// the server has no AI key. The key lives on the server only (Admin → AI API
+// Keys); no browser ever holds it, so there is nothing to type in here.
 export function showSettingsModal(onSaved){
+  const admin=currentUserRole==='admin';
   showModal(`<div class="modal modal-sm">
-    <div class="modal-head"><h3>🔑 AI API Key Required</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>🔑 AI not set up yet</h3><button class="close-modal" data-close-modal>✕</button></div>
     <div class="modal-body">
-      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Analyzing a drawing needs at least one AI key. Enter one here to continue — you can manage them later on the 🛡️ Admin screen.</p>
-      <div class="form-field">
-        <label>Anthropic API Key</label>
-        <input class="form-input" id="inp-anth-key" type="password" placeholder="sk-ant-…" value="${esc(S.anthKey)}">
-      </div>
-      <p style="font-size:11px;color:var(--muted);margin-top:10px">Saved in this browser only. Better: an admin stores the key on the server (🛡️ Admin → AI API Keys) — then nobody needs a key in the browser.</p>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:10px">Analyzing a drawing needs the Anthropic key on the server.</p>
+      <p style="font-size:12px">${admin
+        ? 'Add it in 🛡️ <strong>Admin → AI API Keys</strong>, then try again.'
+        : 'Ask an administrator to add it in 🛡️ <strong>Admin → AI API Keys</strong>.'}</p>
     </div>
     <div class="modal-foot">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-green" id="btn-save-settings">Save</button>
+      <button class="btn btn-ghost" data-close-modal>Close</button>
+      ${admin?'<button class="btn btn-green" id="btn-go-admin">Open Admin</button>':''}
     </div>
   </div>`);
-
-  document.getElementById('btn-save-settings').addEventListener('click',()=>{
-    S.anthKey=document.getElementById('inp-anth-key').value.trim();
-    localStorage.setItem('anth_key',S.anthKey);
-    toast('API keys saved','success');
-    closeModal();
-    if(onSaved) onSaved();
-  });
+  document.getElementById('btn-go-admin')?.addEventListener('click',()=>{ closeModal(); route('admin'); });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -571,7 +562,7 @@ export async function renderSettingsRolesSection(){
 export function openNewRoleModal(){
   const viewKeys=Object.keys(HOME_BUTTONS);
   showModal(`<div class="modal modal-sm">
-    <div class="modal-head"><h3>New Role</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>New Role</h3><button class="close-modal" data-close-modal>✕</button></div>
     <div class="modal-body">
       <div class="form-field">
         <label>Role Name</label>
@@ -589,7 +580,7 @@ export function openNewRoleModal(){
       </div>
     </div>
     <div class="modal-foot">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-ghost" data-close-modal>Cancel</button>
       <button class="btn btn-green" id="btn-nr-save">＋ Create</button>
     </div>
   </div>`);

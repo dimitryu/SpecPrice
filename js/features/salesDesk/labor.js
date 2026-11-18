@@ -308,11 +308,11 @@ export function openLaborBreakdownModal(onlyDwg){
     .filter(b=>!onlyDwg || b.drawingName===onlyDwg);
   if(!activeBreakdowns.length){
     showModal(`<div class="modal modal-sm">
-      <div class="modal-head"><h3>📋 Labor Time Breakdown</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+      <div class="modal-head"><h3>📋 Labor Time Breakdown</h3><button class="close-modal" data-close-modal>✕</button></div>
       <div class="modal-body">
         <p style="color:var(--muted);font-size:13px">No AI cable-process analysis for the parts currently in Sales Desk — import a drawing via "📎 New Drawing" to get a step-by-step manufacturing breakdown here.</p>
       </div>
-      <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>
+      <div class="modal-foot"><button class="btn btn-ghost" data-close-modal>Close</button></div>
     </div>`);
     return;
   }
@@ -379,7 +379,7 @@ export function openLaborBreakdownModal(onlyDwg){
   showModal(`<div class="modal" style="width:min(94vw,680px)">
     <div class="modal-head">
       <h3>📋 ${_lbTr('Labor Time Breakdown')}</h3>
-      <button class="close-modal" onclick="closeModal()">✕</button>
+      <button class="close-modal" data-close-modal>✕</button>
     </div>
     <!-- overflow-x hidden, not auto: the whole point of the wrapping above is
          that nothing should need horizontal scrolling to be read. -->
@@ -396,7 +396,7 @@ export function openLaborBreakdownModal(onlyDwg){
       ${['en','he','ru'].map(L=>`<button class="btn ${_lbLang===L?'btn-blue':'btn-ghost'} btn-sm"
           data-lb-lang="${L}" ${_lbLang===L?'disabled':''}
           style="font-size:12px">${_LB_LANG_NAMES[L]}</button>`).join('')}
-      <button class="btn btn-ghost" style="margin-left:auto" onclick="closeModal()">${_lbTr('Close')}</button>
+      <button class="btn btn-ghost" style="margin-left:auto" data-close-modal>${_lbTr('Close')}</button>
     </div>
   </div>`);
 

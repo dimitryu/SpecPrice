@@ -5,7 +5,7 @@ import { PROTECTED_ROLE, allowedViews } from '../core/roles.js';
 import { route } from '../core/router.js';
 import { companyId, currentUserRole } from '../core/session.js';
 import { esc, fmtDateTime, mkEl, showModal, toast } from '../core/ui.js';
-import { addTicketFile, appendTicketTurn, countUnreadForUser, createTicket, getTicketFile, listTickets, listUnreadForAdmin, markTicketsRead, setTicketFields } from '../data/support.js';
+import { addTicketFile, appendTicketTurn, countUnreadForUser, createTicket, getTicketFile, listMyTickets, listUnreadForAdmin, markTicketsRead, setTicketFields } from '../data/support.js';
 
 // ── Support ticket (floating headset button, every screen) ──────────────────────────
 export const _SUPPORT_ICON_SVG=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:-3px">
@@ -284,7 +284,7 @@ export async function _supMarkRead(ticketIds, asAdmin){
 export let _supOpenTicket=null;    // which ticket is expanded, so a reload keeps your place
 export async function openSupportModal(){
   showModal(`<div class="modal" style="width:min(94vw,680px)">
-    <div class="modal-head"><h3>${_SUPPORT_ICON_SVG} Support</h3><button class="close-modal" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>${_SUPPORT_ICON_SVG} Support</h3><button class="close-modal" data-close-modal>✕</button></div>
     <div class="modal-body" id="support-modal-body" style="max-height:58vh">
       <div style="text-align:center;padding:30px"><div class="ring" style="margin:0 auto"></div></div>
     </div>
@@ -303,7 +303,7 @@ export async function openSupportModal(){
   const body=document.getElementById('support-modal-body');
   const loadMine=async()=>{
     try{
-      const mine=(await listTickets()).filter(t=>t.user===S.currentUserEmail);
+      const mine=await listMyTickets(S.currentUserEmail);
       if(!mine.length){
         body.innerHTML=`<p style="color:var(--muted);font-size:12px;text-align:center;padding:10px 0">No previous requests.</p>`;
         return;

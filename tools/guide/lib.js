@@ -176,6 +176,8 @@ async function open(opts={}){
   const page=await ctx.newPage();
   const errs=[];
   page.on('pageerror',e=>errs.push(e.message));
+  // A Content-Security-Policy refusal is a bug in the page, not noise: report it.
+  page.on('console',m=>{ const t=m.text(); if(/Content Security Policy|Refused to (load|execute|connect|apply|create|frame)/i.test(t)) errs.push('CSP: '+t.slice(0,240)); });
   page.on('dialog',d=>d.accept());
   await page.route('https://www.gstatic.com/firebasejs/**', r=>r.fulfill({contentType:'application/javascript',
     body:stub(r.request().url().split('/').pop().replace('.js','.mjs'))}));

@@ -63,6 +63,24 @@ service cloud.firestore {
       return isCompanyAdmin(cid) || (isSameCompany(cid) && myRole() != 'admin' && !myRoleIsReadOnly());
     }
 
+    function myEmail() {
+      return request.auth.token.get('email', '');
+    }
+
+    // Light shape checks (M6): a document of sane size whose identifying
+    // fields have the right type, so a script cannot store junk that breaks
+    // every screen reading it. Firestore itself caps a document at 1 MB.
+    function saneDoc(maxKeys) {
+      let d = request.resource.data;
+      return d.keys().size() <= maxKeys
+          && (!('deleted' in d) || d.deleted is bool);
+    }
+    function partShapeOk() {
+      let d = request.resource.data;
+      return saneDoc(250)
+          && (!('part_number' in d) || (d.part_number is string && d.part_number.size() <= 200));
+    }
+
     // Recycle bin: a document may be marked deleted only with deletedAtMs
     // = now (±10 min), and an item already in the bin keeps its time. Without
     // this anyone could write deletedAtMs: 0 and the next admin to open the
@@ -89,7 +107,9 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if (isSignedIn() && request.auth.uid == uid) || isAdmin();
       allow update: if isSignedIn() && request.auth.uid == uid && isActive()
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ui_prefs', 'updatedAt']);
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ui_prefs', 'updatedAt'])
+                    && request.resource.data.get('ui_prefs', {}) is map
+                    && request.resource.data.get('ui_prefs', {}).size() <= 20;
       // Admin writes (in practice the userAdmin function, which applies the
       // same limits) stay inside the admin's own company.
       allow create: if isAdmin() && request.resource.data.get('company_id', '') == myCompanyId();
@@ -107,7 +127,9 @@ service cloud.firestore {
     // CAVEAT: older company docs may still hold anthropic_key / gemini_key
     // (moved to the server since); any active user can read company docs.
     match /companies/{cid} {
-      allow read: if isActive();
+      // Your own company only (M4). An admin may list them all — the company
+      // picker, for an admin profile that has no company yet.
+      allow read: if isSameCompany(cid) || isAdmin();
       // Labor rate, logo, recycle-bin retention: the company's admin only.
       // Every member could change them before, and a changed labor rate
       // silently changes every quote.
@@ -122,7 +144,7 @@ service cloud.firestore {
     // after the retention period — is the company admin's alone.
     match /companies/{cid}/parts_cache/{docId} {
       allow read: if isSameCompany(cid);
-      allow create, update: if canEdit(cid) && trashTimeOk();
+      allow create, update: if canEdit(cid) && trashTimeOk() && partShapeOk();
       allow delete: if isCompanyAdmin(cid);
     }
 
@@ -131,12 +153,12 @@ service cloud.firestore {
     // company admin deletes for good (Admin > Recycle Bin).
     match /companies/{cid}/projects/{docId} {
       allow read: if isSameCompany(cid);
-      allow create, update: if canEdit(cid) && trashTimeOk();
+      allow create, update: if canEdit(cid) && trashTimeOk() && saneDoc(100);
       allow delete: if isCompanyAdmin(cid);
 
       match /drawings/{drawingId} {
         allow read: if isSameCompany(cid);
-        allow create, update: if canEdit(cid) && trashTimeOk();
+        allow create, update: if canEdit(cid) && trashTimeOk() && saneDoc(100);
         allow delete: if isCompanyAdmin(cid);
       }
     }
@@ -147,23 +169,65 @@ service cloud.firestore {
     // (viewer); editors create and change them; deleting goes by the bin.
     match /companies/{cid}/cut_strip_specs/{docId} {
       allow read: if isSameCompany(cid);
-      allow create, update: if canEdit(cid) && trashTimeOk();
+      allow create, update: if canEdit(cid) && trashTimeOk() && saneDoc(200);
       allow delete: if isCompanyAdmin(cid);
     }
 
     // ── companies/{cid}/customers/{id} ─────────────────────────────────────
     match /companies/{cid}/customers/{docId} {
       allow read: if isSameCompany(cid);
-      allow create, update: if canEdit(cid) && trashTimeOk();
+      allow create, update: if canEdit(cid) && trashTimeOk() && saneDoc(100);
       allow delete: if isCompanyAdmin(cid);
     }
 
     // ── companies/{cid}/support_tickets/{id}  (floating Support button) ────
-    // Every member, viewers included, can open a ticket and follow it up —
-    // asking for help is not editing company data. Nobody but the company
-    // admin can delete one (the app never does).
+    // A ticket is a conversation between ONE user and the admin (M3):
+    //   • a user reads, opens and follows up only their own tickets — not
+    //     their colleagues' messages and screenshots;
+    //   • on their own ticket a user can add a turn, attach files and mark it
+    //     read, and re-open it — not rewrite who wrote it, the original
+    //     message, or the admin's status;
+    //   • the company admin reads and answers all of them; nobody else
+    //     deletes one.
+    // Attachments are documents in the same collection (kind: 'file') that
+    // belong to a ticket (ticketId); whoever may read the ticket reads them.
+    function isMyTicket(t) {
+      return t.get('userId', '') == request.auth.uid || t.get('user', '') == myEmail();
+    }
+    function ticketOf(cid, tid) {
+      return get(/databases/$(database)/documents/companies/$(cid)/support_tickets/$(tid)).data;
+    }
+    // The owner may only touch the conversation fields, may only (re)open the
+    // ticket — never set the admin's status — and writes as the user.
+    function ownerTicketChangeOk() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return changed.hasOnly(['thread', 'files', 'status', 'lastMsgRole', 'userUnread',
+                              'adminUnread', 'lastMsgAt', 'updatedAt'])
+          && (!changed.hasAny(['status']) || request.resource.data.status == 'open')
+          && (!changed.hasAny(['lastMsgRole']) || request.resource.data.lastMsgRole == 'user');
+    }
     match /companies/{cid}/support_tickets/{docId} {
-      allow read, create, update: if isSameCompany(cid);
+      allow read: if isCompanyAdmin(cid)
+                  || (isSameCompany(cid) && (
+                        (resource.data.get('kind', '') != 'file' && isMyTicket(resource.data))
+                     || (resource.data.get('kind', '') == 'file'
+                         && (resource.data.get('by', '') == myEmail()
+                             || isMyTicket(ticketOf(cid, resource.data.get('ticketId', '')))))));
+      allow create: if isCompanyAdmin(cid)
+                    || (isSameCompany(cid) && saneDoc(30) && (
+                          (request.resource.data.get('kind', '') != 'file'
+                           && request.resource.data.get('user', '') == myEmail()
+                           && request.resource.data.get('userId', '') == request.auth.uid
+                           && request.resource.data.get('message', '') is string
+                           && request.resource.data.get('message', '').size() <= 20000)
+                       || (request.resource.data.get('kind', '') == 'file'
+                           && request.resource.data.get('by', '') == myEmail()
+                           && isMyTicket(ticketOf(cid, request.resource.data.get('ticketId', ''))))));
+      allow update: if isCompanyAdmin(cid)
+                    || (isSameCompany(cid)
+                        && resource.data.get('kind', '') != 'file'
+                        && isMyTicket(resource.data)
+                        && ownerTicketChangeOk());
       allow delete: if isCompanyAdmin(cid);
     }
 
@@ -172,8 +236,19 @@ service cloud.firestore {
     // login / action needs to write one) but only admins can READ the log —
     // it's an audit trail, not something regular users should be able to
     // browse. No update/delete for anyone — logs are append-only.
+    // Every entry is written in the writer's own name (M2): userId is the
+    // signed-in account, user its email — or 'SYSTEM' with that email as
+    // viaUser for work the app did on its own — and the time is the server's.
+    // Entries marked source:'server' come only from the Cloud Functions.
     match /companies/{cid}/audit_logs/{docId} {
-      allow create: if isSameCompany(cid);
+      allow create: if isSameCompany(cid)
+                    && request.resource.data.keys().hasOnly(['user', 'userId', 'viaUser', 'action', 'details', 'success', 'timestamp'])
+                    && request.resource.data.get('userId', '') == request.auth.uid
+                    && (request.resource.data.get('user', '') == myEmail()
+                        || (request.resource.data.get('user', '') == 'SYSTEM' && request.resource.data.get('viaUser', '') == myEmail()))
+                    && request.resource.data.get('action', '') is string
+                    && request.resource.data.get('action', '').size() <= 80
+                    && request.resource.data.get('timestamp', null) == request.time;
       allow read: if isCompanyAdmin(cid);
     }
 

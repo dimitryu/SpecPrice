@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- csp:begin -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://www.gstatic.com 'sha256-6oVMYwkr3k6goOkudDReH3yq8fDAZegsWXqgBO3cM6Y='; worker-src 'self' blob: https://cdnjs.cloudflare.com; connect-src 'self' data: blob: https://*.googleapis.com https://us-central1-specprice-236a2.cloudfunctions.net; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src https://specprice-236a2.firebaseapp.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <!-- csp:end -->
   <title>SpecPrice</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }

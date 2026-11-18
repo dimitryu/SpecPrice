@@ -1,7 +1,7 @@
 import { S } from './state.js';
 import { auth, signOut } from './firebase.js';
 import { esc, mkEl } from './ui.js';
-import { getCompany, getUserProfile, listCompanies } from '../data/company.js';
+import { clearCompanyAiKeys, getCompany, getUserProfile, listCompanies } from '../data/company.js';
 import { _psTrashDaysOf } from '../data/parts.js';
 import { updateUserProfile } from '../data/users.js';
 
@@ -34,7 +34,12 @@ export async function initCompany(user) {
       // The company document is a fallback, not an override: a key saved in
       // Admin (localStorage) must not be wiped by a company doc that has none.
       // Once the key is on the server (S.aiProxy) the browser never holds one.
-      S.anthKey   = S.aiProxy ? '' : (S.anthKey || cData.anthropic_key || '');
+      // AI keys never come from the company document any more (they are on
+      // the server). An admin's session removes old copies left in it — the
+      // document is readable by everyone in the company.
+      if (currentUserRole === 'admin' && (cData.anthropic_key || cData.gemini_key)) {
+        clearCompanyAiKeys().catch(e => console.warn('[ai key] company doc cleanup:', e.message));
+      }
       S._sdLaborRateMin = parseFloat(cData.labor_rate_min) || 0.5;
       S.companyLogoB64 = cData.logo_b64 || '';
       S._psTrashDays = _psTrashDaysOf(cData.trash_days);

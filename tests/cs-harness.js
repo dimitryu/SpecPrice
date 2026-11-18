@@ -37,7 +37,7 @@ const writeBatch=()=>({update(){},commit:async()=>{}});
 const g=dom.window;
 global.window=g; global.document=g.document; global.navigator=g.navigator;
 const src=fs.readFileSync('extracted.js','utf8');
-const pre=`var db={}, auth={currentUser:{uid:'u1'}};
+const pre=`var db={}, auth={currentUser:{uid:'u1', getIdToken:async()=>'t'}};
 var collection=__f.collection, doc=__f.doc, query=__f.query, where=__f.where, orderBy=__f.orderBy,
     limit=__f.limit, serverTimestamp=__f.serverTimestamp, arrayUnion=__f.arrayUnion,
     getDocs=__f.getDocs, getDoc=__f.getDoc, addDoc=__f.addDoc, updateDoc=__f.updateDoc,
@@ -312,7 +312,7 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
              +'"markers":[{"label":"A","segment":"S1","text_lines":["TAG"]}],'
              +'"engineering_notes":[{"n":"1","text":"note one","action":""}]}';
   let calls=[];
-  vm.runInContext(`anthKey='sk-test'; _csDeadProviders={};
+  vm.runInContext(`aiProxy=true; _csDeadProviders={};
     _fetchWithRetry=async(u,o)=>{ const body=JSON.parse(o.body); __f.note(body);
       const n=__f.count();
       return {ok:true, json:async()=>n===1

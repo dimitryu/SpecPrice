@@ -79,6 +79,42 @@ const UPSTREAM_HEADERS = {
   'Sec-Fetch-User': '?1',
 };
 
+/* ── Per-user limits ─────────────────────────────────────────────────────────
+ * Every signed-in user can spend the company's Anthropic credit and the
+ * distributors' daily API quotas. These limits stop one account — a script, a
+ * stuck loop, a stolen session — from burning through them: a burst limit per
+ * minute (per server instance, in memory) and a daily total per user (in
+ * Firestore, usage/{uid}_{kind}_{date}, a collection no browser can read or
+ * write). Generous for real work: a 33-drawing quote is a few hundred AI
+ * calls; a Check Price of 1000 parts is 1000 lookups.
+ * Over a limit the answer is HTTP 429 with a plain message. */
+const RATE_LIMITS = {
+  ai:    { perMinute: 60,  perDay: 2000 },
+  price: { perMinute: 600, perDay: 30000 },
+  proxy: { perMinute: 60,  perDay: 1000 },
+};
+const _burst = new Map();   // `${uid}|${kind}` → { minute, n }
+function rateError(msg) { return Object.assign(new Error(msg), { code: 429 }); }
+async function enforceRate(uid, kind) {
+  const lim = RATE_LIMITS[kind];
+  if (!lim || !uid) return;
+  const now = Date.now();
+  const minute = Math.floor(now / 60000);
+  const k = `${uid}|${kind}`;
+  const b = _burst.get(k);
+  const n = b && b.minute === minute ? b.n + 1 : 1;
+  _burst.set(k, { minute, n });
+  if (_burst.size > 5000) for (const [key, v] of _burst) if (v.minute < minute) _burst.delete(key);
+  if (n > lim.perMinute) throw rateError(`Too many requests — limit is ${lim.perMinute} a minute. Wait a minute and try again.`);
+  const day = new Date(now).toISOString().slice(0, 10);
+  const ref = admin.firestore().doc(`usage/${uid}_${kind}_${day}`);
+  await ref.set({ uid, kind, day, count: admin.firestore.FieldValue.increment(1),
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  const snap = await ref.get();
+  const count = (snap.exists && (snap.data() || {}).count) || 0;
+  if (count > lim.perDay) throw rateError(`Daily limit reached (${lim.perDay} ${kind === 'ai' ? 'AI requests' : 'lookups'} a day for one user). It resets at midnight UTC — or ask an admin.`);
+}
+
 exports.priceProxy = onRequest(
   { region: 'us-central1', timeoutSeconds: 60, memory: '256MiB', cors: false },
   async (req, res) => {
@@ -98,7 +134,7 @@ exports.priceProxy = onRequest(
 
     // ── Auth: an enabled SpecPrice user — a sign-in account alone is not enough ──
     if (REQUIRE_AUTH) {
-      try { await requireMember(req); }
+      try { const who = await requireMember(req); await enforceRate(who.uid, 'proxy'); }
       catch (e) { return void res.status(e.code || 401).json({ error: e.message }); }
     }
 
@@ -887,7 +923,7 @@ exports.priceLookup = onRequest(
 
     // ── Auth: an enabled SpecPrice user — a sign-in account alone is not enough ──
     if (REQUIRE_AUTH) {
-      try { await requireMember(req); }
+      try { const who = await requireMember(req); await enforceRate(who.uid, 'price'); }
       catch (e) { return void res.status(e.code || 401).json({ error: e.message }); }
     }
 
@@ -1373,6 +1409,9 @@ exports.aiProxy = onRequest(
       return void res.status(200).json({ configured: !!(await getAiKey()) });
     }
     if (req.method !== 'POST') return aiError(res, 405, 'Use GET or POST');
+
+    try { await enforceRate(user.uid, 'ai'); }
+    catch (e) { return aiError(res, e.code || 429, e.message); }
 
     const key = await getAiKey();
     if (!key) {
