@@ -3,6 +3,7 @@ import { auth, signOut } from './firebase.js';
 import { esc, mkEl } from './ui.js';
 import { getCompany, getUserProfile, listCompanies } from '../data/company.js';
 import { _psTrashDaysOf } from '../data/parts.js';
+import { updateUserProfile } from '../data/users.js';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 export let companyId   = '';
@@ -21,6 +22,7 @@ export async function initCompany(user) {
     }
     companyId = uData.company_id || '';
     currentUserRole = uData.role || '';
+    S.uiPrefs = (uData.ui_prefs && typeof uData.ui_prefs==='object') ? {...uData.ui_prefs} : {};
     if (!companyId) {
       const companies = await listCompanies();
       if (companies.length === 1) companyId = companies[0].id;
@@ -38,6 +40,22 @@ export async function initCompany(user) {
       S._psTrashDays = _psTrashDaysOf(cData.trash_days);
     }
   } catch(e) { console.error('initCompany', e); if (e.isDisabled) throw e; }
+}
+// ── Per-user screen settings ──────────────────────────────────────────────────
+// Kept on the user's own document, so the choice follows them to any computer,
+// with a local copy so the screen is right even before the profile has loaded.
+export function getUiPref(key, def){
+  const v = S.uiPrefs && S.uiPrefs[key];
+  if (v != null && v !== '') return v;
+  try { const uid = auth.currentUser && auth.currentUser.uid; const l = uid && localStorage.getItem(`ui_${key}:${uid}`); if (l) return l; } catch {}
+  return def;
+}
+export function setUiPref(key, value){
+  S.uiPrefs = { ...(S.uiPrefs || {}), [key]: value };
+  const uid = auth.currentUser && auth.currentUser.uid;
+  if (!uid) return;
+  try { localStorage.setItem(`ui_${key}:${uid}`, String(value)); } catch {}
+  updateUserProfile(uid, { [`ui_prefs.${key}`]: value }).catch(e => console.warn('ui pref not saved:', e.message));
 }
 export function pickCompany(docs) {
   return new Promise(resolve => {

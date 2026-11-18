@@ -58,6 +58,26 @@ const L=require('./lib.js');
   // tools warning close-up
   const warn=await page.$('text=Final price does NOT include');
   if(warn){ await L.mark(page,[{sel:'.sd-tool-jump',pad:3,at:'right'},{sel:'.sd-tool-for',pad:2,at:'right'},{sel:'.sd-tool-src',pad:2,at:'right'},{sel:'.sd-tool-links',pad:2,at:'right'}]); await L.shot(page,'18-sd-summary','#sd-summary-host'); }
+  // Compact view: the supplier columns hidden, Part Cost names the cheapest supplier.
+  // The choice is saved on the user's own profile and is still there next time.
+  await page.click('#sd-view-compact'); await page.waitForTimeout(700);
+  const saved=await page.evaluate(()=>JSON.stringify(Object.values((window.__DB||{}).users||{}).map(u=>u.ui_prefs||null).filter(Boolean)));
+  await L.go(page,'home'); await page.waitForTimeout(400); await L.go(page,'sales-desk'); await page.waitForSelector('#sd-table'); await page.waitForTimeout(700);
+  const kept=await page.evaluate(()=>({pressed:document.querySelector('#sd-view-compact')?.getAttribute('aria-pressed'),
+    supplierCols:document.querySelectorAll('#sd-table thead th[data-col="mouser_price"],#sd-table thead th[data-col="farnell_stock"]').length,
+    chips:[...document.querySelectorAll('#sd-tbody .sd-cost-src')].map(e=>e.textContent.trim())}));
+  console.log('compact saved', saved, 'after revisit', JSON.stringify(kept));
+  if(kept.pressed!=='true' || kept.supplierCols!==0) throw new Error('Compact view not kept');
+  await page.evaluate(()=>{ window.scrollTo(0,0); const f=document.getElementById('btn-support-fab'); if(f) f.style.visibility='hidden';
+    const th=document.querySelector('#sd-table thead th[data-col="total"]');
+    let w=th; while(w && w!==document.body && !(w.scrollWidth>w.clientWidth+2 && getComputedStyle(w).overflowX!=='visible')) w=w.parentElement;
+    if(w && w!==document.body) w.scrollLeft=Math.max(0, th.offsetLeft+th.offsetWidth-w.clientWidth+90); });
+  await page.waitForTimeout(300);
+  await L.mark(page,['.sd-view-toggle',{sel:'#sd-table thead th[data-col="total"]',pad:2},{sel:'#sd-tbody .sd-cost-src',idx:1,pad:3,at:'right'}]);
+  await L.shot(page,'17c-sd-compact',{x:0,y:0,width:1200,height:520});
+  await L.unmark(page);
+  await page.evaluate(()=>{ const f=document.getElementById('btn-support-fab'); if(f) f.style.visibility=''; });
+  await page.click('#sd-view-full'); await page.waitForTimeout(500);
   // The Excel quotation for the same 50 cables — rendered to an image by excel_shot.py.
   { const [dl]=await Promise.all([page.waitForEvent('download'), page.click('#btn-sd-export')]);
     await dl.saveAs(require('path').join(__dirname,'.quote.xlsx')); console.log('saved .quote.xlsx'); }

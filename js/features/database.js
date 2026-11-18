@@ -197,6 +197,10 @@ export function _matchMarkerHTML(row, field){
   if(code==='approx'){
     return `<span title="${esc(`Matched as "${mpn}" on ${cfg.name} — same part, different punctuation/zero-padding to "${row.part_number||''}". Verify before quoting.`)}" style="margin-inline-start:4px;color:#B45309;font-weight:700;cursor:help">✓ ≈</span>`;
   }
+  if(code==='bottle'){
+    const ml=parseFloat(row[field.replace(/_price$/,'_pack_ml')])||0;
+    return `<span title="${esc(`Adhesive: the ${cfg.name} bottle that covers the ml needed for the least money${mpn?` — ${mpn}`:''}${ml?`, ${+ml} ml bottle`:''}. The price is per bottle.`)}" style="margin-inline-start:4px;color:var(--green);font-weight:700;cursor:help">🧴</span>`;
+  }
   if(code==='noprice'){
     return `<span title="${esc(`${cfg.name} lists this part${mpn?` as "${mpn}"`:''} but publishes no price — usually non-stocked or quote-only.`)}" style="margin-inline-start:4px;color:#B45309;font-weight:700;cursor:help">◑</span>`;
   }

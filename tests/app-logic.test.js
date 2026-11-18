@@ -2587,6 +2587,54 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   ok('Farnell counts in the statistics', G('_STAT_PRICE_FIELDS').includes('farnell_price'));
 }
 
+// ─────────────────────────────────────────── v1.70: adhesive — the bottle that fits best
+{
+  const fam=G('_adhesiveFamily');
+  t('family: brand + model from the description', fam({part_number:'1370555', description:'THREADLOCKER LOCTITE 243 50ML'}), 'LOCTITE 243');
+  t('family: size taken out of the part number', fam({part_number:'LOCTITE 243 50ML', description:'THREADLOCKER'}), 'LOCTITE 243');
+  t('family: maker + part number when no known brand', fam({part_number:'TL-243', description:'THREADLOCKER', manufacturer:'DemoBond'}), 'DemoBond TL-243');
+  const pick=G('_sdPickBottles')({mouser:[{mpn:'243-10',ml:10,price:10},{mpn:'243-50',ml:50,price:30},{mpn:'243-250',ml:250,price:95}],
+                                  farnell:[{mpn:'F-50',ml:50,price:28},{mpn:'F-50',ml:50,price:28}]}, 75);
+  t('bottles: per vendor the cheapest that covers the ml', [pick.perVendor.mouser.mpn, pick.perVendor.mouser.bottles, pick.perVendor.mouser.total], ['243-50',2,60]);
+  t('bottles: all sizes ranked, duplicates once', pick.all.map(o=>o.mpn+':'+o.total), ['F-50:56','243-50:60','243-10:80','243-250:95']);
+  const tie=G('_sdPickBottles')({mouser:[{mpn:'big',ml:100,price:40},{mpn:'small',ml:50,price:20}]}, 50);
+  t('bottles: same money — the least left over', tie.perVendor.mouser.mpn, 'small');
+  const r={qty:75, unit:'ml', mouser_price:30, mouser_pack_ml:50, farnell_price:28, farnell_pack_ml:50, priority_price:20, pack_ml:10};
+  G('_sdRecalcTotal')(r);
+  t('Part Cost: each vendor with its own bottle size', [r.total, r._costSource], [56,'farnell_price']);
+  t('what to buy follows the chosen vendor\'s bottle', G('_sdBottlesText')(r), '2 × 50 ml bottles (need 75 ml)');
+  t('Priority keeps the part\'s own size', G('_sdLineCost')(r,'priority_price'), 160);
+  ok('no Pack (ml) column in Sales Desk', !G('_SD_DEFAULT_COLS').some(c=>c.k==='pack_ml'));
+  ok('the bottle per vendor is saved with the part', ['mouser_pack_ml','farnell_pack_ml'].every(k=>G('_SD_DB_NUM').includes(k)));
+  const SI=G('sdItems'), note=G('_sdAdhesiveNoteHTML');
+  const keep=SI.splice(0, SI.length);
+  const ra={part_number:'TL-243', unit:'ml', qty:75, farnell_price:28, farnell_pack_ml:50, farnell_mpn:'F-50', farnell_url:'https://f/1',
+    bottle_opts:[{v:'farnell',mpn:'F-50',ml:50,bottles:2,price:28,total:56},{v:'mouser',mpn:'243-10',ml:10,bottles:8,price:10,total:80}]};
+  SI.push(ra); G('_sdRecalcTotal')(ra);
+  const html=note(SI);
+  ok('note: what to buy, from whom, the total', /Buy <strong>2 × 50 ml<\/strong> — Farnell/.test(html) && /F-50/.test(html) && /\$56\.00/.test(html) && /25 ml left over/.test(html));
+  ok('note: the other sizes that were compared', /Other sizes checked: 8 × 10 ml \$80\.00 \(Mouser\)/.test(html));
+  SI.length=0; SI.push({part_number:'X', unit:'ml', qty:5});
+  const unk=note(SI);
+  ok('note: unknown size asks for it there', /Bottle size unknown/.test(unk) && /sd-note-pack/.test(unk));
+  SI.length=0; SI.push(...keep);
+}
+
+// ─────────────────────────────────────────── v1.71: Compact / Full, cheapest supplier under Part Cost
+{
+  const cols=G('_SD_DEFAULT_COLS'), vis=G('_sdVisibleCols');
+  const compact=vis(cols,'compact').map(c=>c.k), full=vis(cols,'full').map(c=>c.k);
+  ok('Compact hides every supplier price and stock column', ['mouser_price','mouser_stock','digikey_price','digikey_stock','onlinecomp_price','onlinecomp_stock','farnell_price','farnell_stock','priority_price'].every(k=>!compact.includes(k) && full.includes(k)));
+  ok('Compact keeps Part Cost and the rest', ['part_number','description','qty','unit','total','customer_supplied'].every(k=>compact.includes(k)));
+  t('Full shows every column', full.length, cols.length);
+  const r={part_number:'X1', qty:2, unit:'pc', mouser_price:3, digikey_price:2.5, farnell_price:2.2, farnell_url:'https://f/x1', priority_price:4};
+  G('_sdRecalcTotal')(r);
+  const cell=G('_sdCellHTML')('total', r, 0);
+  ok('every row names the cheapest supplier under Part Cost', /sd-cost-src/.test(cell) && /Farnell ↗/.test(cell) && /https:\/\/f\/x1/.test(cell));
+  ok('its tooltip compares every source for the QTY, cheapest first', /Farnell: \$4\.40[\s\S]*DigiKey: \$5\.00[\s\S]*Mouser: \$6\.00[\s\S]*Priority: \$8\.00/.test(cell.replace(/&#10;|&#x0a;/gi,'\n')));
+  t('default view is Full', G('_sdViewMode')(), 'full');
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

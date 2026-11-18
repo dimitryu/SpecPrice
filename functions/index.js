@@ -764,6 +764,114 @@ async function lookupFarnell(pn, qty, apiKey, store, desc) {
                                           price: (readFarnellPart(c.item, qty, m.exact, st) || {}).price || 0 })).slice(0, 8) };
 }
 
+/* Adhesive bottles — "which bottle fits best".
+ * A glue is listed on the drawing in ml but bought by the bottle, and the same
+ * product comes in several sizes (10 ml, 50 ml, 250 ml …), each its own part
+ * number. With ?family=<product name>&need=<ml> the price function searches
+ * every configured vendor by keyword for that product, keeps the listings that
+ * name it AND state a bottle size, and prices each for the bottles needed:
+ * bottles = ceil(need / size), cost = bottles × the price at that quantity.
+ * The client picks the cheapest; ties go to the least left over. */
+function parsePackMl(text) {
+  const s = String(text || '');
+  let m = /(\d+(?:[.,]\d+)?)\s*(?:ML|MILLILIT(?:ER|RE)S?|CC)\b/i.exec(s);
+  if (m) return +parseFloat(m[1].replace(',', '.')).toFixed(3);
+  m = /(\d+(?:[.,]\d+)?)\s*(?:L|LT|LTR|LIT(?:ER|RE)S?)\b/i.exec(s);
+  if (m) return +(parseFloat(m[1].replace(',', '.')) * 1000).toFixed(3);
+  m = /(\d+(?:[.,]\d+)?)\s*FL\.?\s*OZ\b/i.exec(s);
+  if (m) return +(parseFloat(m[1].replace(',', '.')) * 29.5735).toFixed(1);
+  return 0;
+}
+function familyTokens(family) {
+  return String(family || '').toUpperCase()
+    .replace(/\d+(?:[.,]\d+)?\s*(?:ML|CC|L|LT|LTR|G|GR|OZ)\b/g, ' ')
+    .split(/[^A-Z0-9]+/).filter(t => t.length >= 2 && !/^(ML|THE|AND|FOR|OF)$/.test(t));
+}
+function namesFamily(hay, tokens) {
+  const H = ' ' + String(hay || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ') + ' ';
+  return tokens.length > 0 && tokens.every(t => H.includes(' ' + t + ' '));
+}
+function bottleOffer(item, need, mpn, mfr, desc, read) {
+  const ml = parsePackMl(`${desc} ${mpn}`);
+  if (!(ml > 0)) return null;
+  const bottles = Math.max(1, Math.ceil(need / ml - 1e-9));
+  const info = read(item, bottles) || {};
+  if (!(info.price > 0)) return null;
+  return { mpn: mpn || info.mpn || '', manufacturer: mfr || info.manufacturer || '', desc: String(desc || '').slice(0, 140),
+           ml, bottles, price: +(+info.price).toFixed(6), breakQty: info.breakQty || 0,
+           total: +(info.price * bottles).toFixed(4), waste: +(ml * bottles - need).toFixed(3),
+           stock: String(info.stock || '0'), url: info.url || '', uom: info.uom || '' };
+}
+function rankOffers(list) {
+  return list.filter(Boolean)
+    .sort((a, b) => a.total - b.total || a.waste - b.waste || ((+b.stock > 0) - (+a.stock > 0)))
+    .slice(0, 8);
+}
+async function bottleOffersFor(vendor, family, need, creds) {
+  const tokens = familyTokens(family);
+  if (!tokens.length) return [];
+  const keep = (hay) => namesFamily(hay, tokens);
+  if (vendor === 'mouser') {
+    const parts = await mouserPost('search/keyword', creds.mouser_api_key,
+      { SearchByKeywordRequest: { keyword: family, records: 50, startingRecord: 0 } });
+    return rankOffers(parts.filter(p => keep(`${p.Manufacturer} ${p.ManufacturerPartNumber} ${mouserDesc(p)}`))
+      .map(p => bottleOffer(p, need, p.ManufacturerPartNumber, p.Manufacturer, mouserDesc(p), (it, q) => readMouserPart(it, q, false))));
+  }
+  if (vendor === 'digikey') {
+    const token = await digikeyToken(creds.digikey_client_id, creds.digikey_client_secret);
+    const resp = await fetch('https://api.digikey.com/products/v4/search/keyword', {
+      method: 'POST', headers: digikeyHeaders(token, creds.digikey_client_id),
+      body: JSON.stringify({ Keywords: family, Limit: 50, Offset: 0 }), signal: AbortSignal.timeout(20000) });
+    if (!resp.ok) throw new Error(`DigiKey HTTP ${resp.status}`);
+    const data = await resp.json();
+    const products = [...(data.ExactMatches || []), ...(data.Products || [])];
+    const seen = new Set();
+    return rankOffers(products.filter(p => {
+      const k = p.ManufacturerProductNumber; if (seen.has(k)) return false; seen.add(k);
+      return keep(`${digikeyMfr(p)} ${p.ManufacturerProductNumber} ${digikeyDesc(p)}`);
+    }).map(p => bottleOffer(p, need, p.ManufacturerProductNumber, digikeyMfr(p), digikeyDesc(p), (it, q) => readDigiKeyProduct(it, q, false))));
+  }
+  if (vendor === 'onlinecomp') {
+    const url = `${OC_BASE}/${encodeURIComponent(creds.onlinecomp_api_name || OC_DEFAULT_API_NAME)}/${encodeURIComponent(family)}/false/false/50/${encodeURIComponent(creds.onlinecomp_api_key)}`;
+    let resp;
+    try { resp = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(20000) }); }
+    catch (e) { throw new Error('Online Components: network error'); }
+    if (resp.status === 404) return [];
+    if (!resp.ok) throw new Error(`Online Components HTTP ${resp.status}`);
+    const data = await resp.json().catch(() => null);
+    const parts = Array.isArray(data) ? data : [];
+    return rankOffers(parts.filter(p => keep(`${p.manufacturer} ${p.partNumber} ${p.description}`))
+      .map(p => bottleOffer(p, need, p.partNumber, p.manufacturer, p.description || '', (it, q) => readOnlineCompPart(it, q, false))));
+  }
+  if (vendor === 'farnell') {
+    const st = farnellStore(creds.farnell_store);
+    const q = new URLSearchParams({ versionNumber: '1.5', term: `any:${family}`, 'storeInfo.id': st,
+      'resultsSettings.offset': '0', 'resultsSettings.numberOfResults': '25', 'resultsSettings.responseGroup': 'large',
+      'callInfo.responseDataFormat': 'JSON', 'callInfo.apiKey': creds.farnell_api_key });
+    const data = await _farnellFetch(`${FARNELL_BASE}?${q}`);
+    if (!data) return [];
+    const ret = data.keywordSearchReturn || data.manufacturerPartNumberSearchReturn || {};
+    const parts = Array.isArray(ret.products) ? ret.products : (ret.products ? [ret.products] : []);
+    return rankOffers(parts.filter(p => keep(`${p.brandName || ''} ${p.translatedManufacturerPartNumber || ''} ${p.displayName || ''}`))
+      .map(p => bottleOffer(p, need, p.translatedManufacturerPartNumber, p.brandName || p.vendorName, p.displayName || '', (it, q2) => readFarnellPart(it, q2, false, st))));
+  }
+  return [];
+}
+async function bottleSearch(family, need, creds) {
+  const out = { family, need, offers: {}, errors: [] };
+  const have = {
+    mouser: !!creds.mouser_api_key,
+    digikey: !!(creds.digikey_client_id && creds.digikey_client_secret),
+    onlinecomp: !!creds.onlinecomp_api_key,
+    farnell: !!creds.farnell_api_key,
+  };
+  await Promise.all(Object.keys(have).filter(v => have[v]).map(async v => {
+    try { out.offers[v] = await bottleOffersFor(v, family, need, creds); }
+    catch (e) { out.errors.push(String(e.message || `${v} bottle search failed`)); }
+  }));
+  return out;
+}
+
 exports.priceLookup = onRequest(
   {
     region: 'us-central1',
@@ -797,6 +905,14 @@ exports.priceLookup = onRequest(
     // share this part number (see matchPart). Capped: it's a tie-breaker, not
     // a search query.
     const desc = String(req.query.desc || '').slice(0, 300);
+    // Bottle sizes of an adhesive (see bottleSearch): a different question, same door.
+    const family = String(req.query.family || '').trim().slice(0, 80);
+    if (family) {
+      const need = Math.max(0, parseFloat(req.query.need) || 0);
+      const out = await bottleSearch(family, need, await getCredentials());
+      res.set('Cache-Control', 'private, max-age=900');
+      return void res.status(200).json(out);
+    }
     if (!pn) return void res.status(400).json({ error: 'Missing ?pn=' });
 
     const out = { pn, qty, mouser: null, digikey: null, onlinecomp: null, farnell: null, errors: [] };

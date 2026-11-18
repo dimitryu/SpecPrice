@@ -781,7 +781,8 @@ export const _SD_DB_TEXT=['description','manufacturer','drawing_name','revision'
   'farnell_url','farnell_match','farnell_mpn','farnell_uom'];
 export const _SD_DB_NUM=['mouser_price','digikey_price','priority_price','mouser_stock','digikey_stock',
   'mouser_brk','digikey_brk','est_price','pack_ml','onlinecomp_price','onlinecomp_stock','onlinecomp_brk',
-  'farnell_price','farnell_stock','farnell_brk'];
+  'farnell_price','farnell_stock','farnell_brk',
+  'mouser_pack_ml','digikey_pack_ml','onlinecomp_pack_ml','farnell_pack_ml'];
 // ── The drawings a Database part is in ─────────────────────────────────────────
 // A part is one record however many drawings use it; `drawings` lists each of
 // them with that drawing's revision, name and per-cable QTY / unit, so a search

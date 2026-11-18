@@ -2,11 +2,12 @@ import { S } from '../../core/state.js';
 import { _aiReady } from '../../ai/client.js';
 import { _NOTE_DOC_STD_RE } from '../../ai/process.js';
 import { logAudit, logDrawingsOf, setLogDrawing } from '../../core/audit.js';
+import { getUiPref, setUiPref } from '../../core/session.js';
 import { loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../../core/table.js';
 import { closeModal, debounce, esc, progressPanel, setActions, setContent, showModal, toast } from '../../core/ui.js';
 import { loadParts, saveSalesDeskToDB } from '../../data/parts.js';
 import { _partDrawings, _partLatestDrawing } from '../../domain/bom.js';
-import { SD_NOMINAL_LABEL_PRICE, _SD_PRICE_SOURCES, _parsePackMl, _sdBottlesText, _sdIsAdhesiveRow, _sdLaborQtyMultiplier, _sdRecalcTotal } from '../../domain/pricing.js';
+import { SD_NOMINAL_LABEL_PRICE, _SD_PRICE_SOURCES, _parsePackMl, _sdBottlesFor, _sdChosenPack, _sdLaborQtyMultiplier, _sdLineCost, _sdRecalcTotal } from '../../domain/pricing.js';
 import { _PRICE_LEGEND_HTML, _priceCellHTML, _stockCellHTML, _symbolsLegend, _wireSymbolsLegend } from '../database.js';
 import { _sdAskUnitsThenCheck } from '../priceCheck.js';
 import { exportSalesDeskExcel } from './export.js';
@@ -31,7 +32,6 @@ export const _SD_DEFAULT_COLS=[
   {k:'manufacturer',   l:'Manufacturer',    w:'120px'},
   {k:'qty',            l:'QTY',             w:'75px'},
   {k:'unit',           l:'Units',           w:'55px'},
-  {k:'pack_ml',        l:'Pack (ml)',       w:'120px'},
   {k:'mouser_price',   l:'Mouser Cost',     w:'95px'},
   {k:'mouser_stock',   l:'Mouser Stock',    w:'85px'},
   {k:'digikey_price',  l:'DigiKey Cost',    w:'95px'},
@@ -128,17 +128,6 @@ export function _sdCellHTML(k,r,i){
     case 'unit': return `<select class="sd-unit" data-i="${i}" style="padding:2px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px">
            ${_SD_UNIT_OPTIONS.map(u=>`<option value="${u}" ${String(r.unit||'')===u?'selected':''}>${u||'—'}</option>`).join('')}
          </select>`;
-    // The bottle size of an adhesive bought by the bottle, and how many bottles
-    // the ml needed come to. Read from the supplier's description at Check Price
-    // when it says ("50ML"); typed here when it does not.
-    case 'pack_ml': {
-      if(String(r.unit||'').toLowerCase()!=='ml' && !_sdIsAdhesiveRow(r)) return '<span style="color:var(--muted)">—</span>';
-      const t=_sdBottlesText(r);
-      return `<input type="number" class="sd-pack-ml" data-i="${i}" value="${r.pack_ml??''}" min="0" step="any" placeholder="ml"
-           title="Bottle size in ml — Part Cost = bottles × price per bottle"
-           style="width:62px;padding:2px 5px;border:1px solid ${parseFloat(r.pack_ml)>0?'var(--border)':'#f59e0b'};border-radius:4px;font-size:12px">${
-           t?`<div class="sd-bottles" style="font-size:10px;color:${parseFloat(r.pack_ml)>0?'var(--muted)':'#b45309'};white-space:normal;line-height:1.2;margin-top:2px">${esc(t)}</div>`:''}`;
-    }
     // All price columns share the Database's comparison rule — cheapest green,
     // dearest red — so a price means the same thing on both screens.
     case 'priority_price':
@@ -161,7 +150,7 @@ export function _sdCellHTML(k,r,i){
         : '';
       return `<input type="number" class="sd-manual-total" data-i="${i}" value="${r.total?+r.total.toFixed(2):''}"
              min="0" step="any" placeholder="0.00" title="${hasManual?'Manual price override — clear to go back to FC/Priority price':'No FC/Priority price — type one in manually'}"
-             style="width:78px;padding:2px 5px;border:1px solid ${noSourcePrice?'#06b6d4':'var(--border)'};border-radius:4px;font-size:12px;font-weight:700;text-align:right;${noSourcePrice?'background:#ecfeff;color:#0e7490':''}">${ownedNote}${(_sdIsToolRow(r)&&!_sdIsToolOwned(r))||r._costSource==='nominal'||r._costSource==='customer'?_sdToolSourceChip(r):''}`;
+             style="width:78px;padding:2px 5px;border:1px solid ${noSourcePrice?'#06b6d4':'var(--border)'};border-radius:4px;font-size:12px;font-weight:700;text-align:right;${noSourcePrice?'background:#ecfeff;color:#0e7490':''}">${ownedNote}${_sdIsToolOwned(r)?'':_sdToolSourceChip(r)}`;
     }
     // Labor Time shows/edits the row's actual total minutes directly (what
     // used to be the separate read-only "Labor Total" column) — type a number
@@ -181,6 +170,13 @@ export let _sdFilterQ='';
 // Independent sort state for the Sales Desk table (separate from Part Stock's
 // sortCol/sortAsc, which is a different table with different columns).
 export let _sdSortCol=null, _sdSortAsc=true;
+// The supplier price and stock columns. In the Compact view they are hidden and
+// Part Cost carries the cheapest supplier underneath it (see _sdToolSourceChip);
+// Full shows them all. The choice is per user and remembered (getUiPref).
+export const _SD_SUPPLIER_COLS=['mouser_price','mouser_stock','digikey_price','digikey_stock',
+  'onlinecomp_price','onlinecomp_stock','farnell_price','farnell_stock','priority_price'];
+export function _sdViewMode(){ return getUiPref('sd_view','full')==='compact' ? 'compact' : 'full'; }
+export function _sdVisibleCols(cols, mode){ return mode==='compact' ? cols.filter(c=>!_SD_SUPPLIER_COLS.includes(c.k)) : cols; }
 export const _SD_NUMERIC_COLS=new Set(['qty','priority_price','mouser_price','digikey_price','onlinecomp_price','farnell_price',
                                 'mouser_stock','digikey_stock','onlinecomp_stock','farnell_stock','total','labor_time']);
 // The 'labor_time' column now displays/edits the row's final total (see
@@ -301,7 +297,10 @@ export function _sdTraceFields(p){
           onlinecomp_url:p.onlinecomp_url||'', onlinecomp_brk:p.onlinecomp_brk||0, onlinecomp_uom:p.onlinecomp_uom||'',
           onlinecomp_stock:p.onlinecomp_stock||'', onlinecomp_match:p.onlinecomp_match||'',
           farnell_url:p.farnell_url||'', farnell_brk:p.farnell_brk||0, farnell_uom:p.farnell_uom||'',
-          farnell_stock:p.farnell_stock||'', farnell_match:p.farnell_match||''};
+          farnell_stock:p.farnell_stock||'', farnell_match:p.farnell_match||'',
+          // The bottle each vendor's adhesive price is for (see _sdPickBottles).
+          mouser_pack_ml:p.mouser_pack_ml||'', digikey_pack_ml:p.digikey_pack_ml||'',
+          onlinecomp_pack_ml:p.onlinecomp_pack_ml||'', farnell_pack_ml:p.farnell_pack_ml||''};
 }
 // {kind, label, unit, brk, url, verified}: what Part Cost is using right now.
 export function _sdPriceSource(r){
@@ -356,7 +355,13 @@ export function _sdToolSourceChip(r){
   const body=s.url
     ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" style="color:${color};text-decoration:underline">${short} ↗</a>`
     : `<span style="color:${color}">${short}</span>`;
-  return `<div style="font-size:9.5px;font-weight:700;white-space:nowrap;margin-top:2px" title="${esc(_sdPriceSourceText(r))}">${body}</div>`;
+  // The tooltip compares every source for this row's QTY — what the hidden
+  // supplier columns would have shown in the Compact view.
+  const NAME={priority_price:'Priority',mouser_price:'Mouser',digikey_price:'DigiKey',onlinecomp_price:'Online Comp.',farnell_price:'Farnell'};
+  const cmp=_SD_PRICE_SOURCES.map(f=>[NAME[f],_sdLineCost(r,f)]).filter(([,c])=>c>0).sort((a,b)=>a[1]-b[1])
+    .map(([n,c])=>`  ${n}: $${c.toFixed(2)}`).join('\n');
+  const tip=_sdPriceSourceText(r)+(cmp?`\n\nFor this row's QTY:\n${cmp}`:'');
+  return `<div class="sd-cost-src" style="font-size:9.5px;font-weight:700;white-space:nowrap;margin-top:2px" title="${esc(tip)}">${body}</div>`;
 }
 // One-line description of that source, for a tooltip or a spreadsheet note.
 export function _sdPriceSourceText(r){
@@ -370,6 +375,44 @@ export function _sdPriceSourceText(r){
   if(s.kind==='ai') return `${s.label}: approximate list price ${$(s.unit)} — run Check Price or confirm with the supplier`;
   if(s.kind==='manual') return `Typed in Sales Desk: ${$(r.total)}`;
   return 'No price yet';
+}
+// The note beside the summary for adhesives bought by the bottle: which
+// bottle Part Cost is buying, how many, from whom, and what else was compared.
+export function _sdAdhesiveNoteHTML(rows){
+  const adh=(rows||[]).filter(r=>String(r.unit||'').trim().toLowerCase()==='ml' && !r.customer_supplied);
+  if(!adh.length) return '';
+  const $=v=>'$'+(+v||0).toFixed(2);
+  const NAME={mouser:'Mouser', digikey:'DigiKey', onlinecomp:'Online Comp.', farnell:'Farnell', priority:'Priority'};
+  const item=r=>{
+    const i=sdItems.indexOf(r);
+    const need=+(parseFloat(r.qty)||0).toFixed(2);
+    const src=_sdPriceSource(r);
+    const pack=_sdChosenPack(r);
+    const head=`<div><a href="#" class="sd-tool-jump" data-i="${i}" title="Go to this row's Part Cost"
+        style="color:#0c4a6e;font-weight:700;text-decoration:underline">${esc(r.part_number||r.description||'adhesive')}</a>
+        — need <strong>${need} ml</strong></div>`;
+    if(!(pack>0)) return `<div class="sd-adh-item" style="margin-top:6px;padding-top:5px;border-top:1px dashed #bae6fd">${head}
+      <div style="color:#b45309">Bottle size unknown — <input type="number" class="sd-note-pack" data-i="${i}" min="0" step="any" placeholder="ml"
+        style="width:58px;padding:1px 4px;border:1px solid #f59e0b;border-radius:4px;font-size:11px"> ml, or run Check Price to find the sizes.</div></div>`;
+    const bottles=_sdBottlesFor(r.qty, pack);
+    const v=src.kind;
+    const mpn=v&&r[v+'_mpn']&&r[v+'_mpn']!==r.part_number ? r[v+'_mpn'] : '';
+    const buy = r.total>0
+      ? `Buy <strong>${bottles} × ${+pack.toFixed(2)} ml</strong> — ${esc(NAME[v]||src.label)}${mpn?` <span title="The part number of this bottle size">${esc(mpn)}</span>`:''}
+         · ${$(src.unit||0)}/bottle = <strong>${$(r.total)}</strong>${src.url&&NAME[v]&&v!=='priority'?` <a href="${esc(src.url)}" target="_blank" rel="noopener noreferrer" style="color:#0c4a6e">↗</a>`:''}`
+      : `${bottles} × ${+pack.toFixed(2)} ml — no price yet; run Check Price`;
+    const left=+(bottles*pack-need).toFixed(2);
+    const others=(r.bottle_opts||[]).filter(o=>!(o.v===v && +o.ml===+pack && (!mpn || o.mpn===mpn))).slice(0,3)
+      .map(o=>`${o.bottles} × ${+o.ml} ml ${$(o.total)} (${esc(NAME[o.v]||o.v)})`).join(' · ');
+    return `<div class="sd-adh-item" style="margin-top:6px;padding-top:5px;border-top:1px dashed #bae6fd">${head}
+      <div class="sd-adh-buy">${buy}</div>
+      ${left>0?`<div style="color:var(--muted);font-size:11px">${left} ml left over</div>`:''}
+      ${others?`<div class="sd-adh-others" style="color:var(--muted);font-size:11px">Other sizes checked: ${others}</div>`:''}</div>`;
+  };
+  return `<div class="sd-adh-note" style="font-size:12px;color:#0c4a6e;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:7px 10px;margin-top:8px;line-height:1.45">
+    <div style="font-weight:700">🧴 Adhesive — what to buy</div>${adh.map(item).join('')}
+    <div style="font-size:10.5px;color:var(--muted);margin-top:5px">Check Price compares every bottle size the suppliers list and takes the cheapest that covers the ml needed. Type a price in Part Cost to override.</div>
+  </div>`;
 }
 // The links shown beside a tool: the source of the chosen price when there is
 // one, and searches at the vendors so a price can be found or checked.
@@ -602,7 +645,9 @@ export function _sdComputeSummary(){
 export async function renderSalesDesk(){
   await loadParts();
   setActions('');
-  const SD_COLS=loadColOrder('salesdesk',_SD_DEFAULT_COLS);
+  const SD_ALL_COLS=loadColOrder('salesdesk',_SD_DEFAULT_COLS);
+  const _sdMode=_sdViewMode();
+  const SD_COLS=_sdVisibleCols(SD_ALL_COLS,_sdMode);
 
   // Shown during the AI labor estimate. Kept out of renderSD() so a re-render
   // mid-estimate can't wipe it.
@@ -758,6 +803,7 @@ export async function renderSalesDesk(){
               </div>`;}).join('')}
             <div style="font-weight:400;font-size:11px;margin-top:6px">Click a tool's part number to jump to its price in the table.</div>
           </div>`:''}
+        ${_sdAdhesiveNoteHTML(g.rows)}
         ${g.customerRows.length?`<div class="sd-cust-note" style="font-size:11px;color:#1E40AF;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:4px;padding:5px 8px;margin-top:6px">
             ${g.customerRows.length} customer-supplied item${g.customerRows.length>1?'s':''} — not purchased, priced at $0: <strong>${esc(g.customerRows.map(r=>r.part_number||r.description||'part').join(', '))}</strong>
           </div>`:''}
@@ -794,6 +840,12 @@ export async function renderSalesDesk(){
            <div style="padding:14px;color:var(--muted);font-size:12px">No parts yet.</div></div>`;
 
     // ── wiring ──
+    host.querySelectorAll('.sd-note-pack').forEach(inp=>inp.addEventListener('change',()=>{
+      const r=sdItems[+inp.dataset.i], v=parseFloat(inp.value);
+      if(!r) return;
+      r.pack_ml = v>0 ? v : '';
+      _sdRecalcRow(r); renderSD();
+    }));
     host.querySelectorAll('[data-toggle]').forEach(el=>el.addEventListener('click',()=>{
       const d=el.dataset.toggle;
       if(_sdCollapsed.has(d)) _sdCollapsed.delete(d); else _sdCollapsed.add(d);
@@ -990,6 +1042,12 @@ export async function renderSalesDesk(){
             <input class="search-box" id="sd-search" placeholder='Search — supports AND / OR / NOT / "phrase" / (...)' value="${esc(_sdFilterQ)}">
             <button type="button" class="search-clear" id="sd-search-clear" title="Clear">✕</button>
           </div>
+          <div class="sd-view-toggle" role="group" aria-label="Table view" style="display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden">
+            ${[['compact','Compact','Only Part Cost, with the cheapest supplier under it — hides the supplier price and stock columns'],
+               ['full','Full','Every supplier\u2019s price and stock column']].map(([v,l,t])=>
+              `<button type="button" class="sd-view-btn" id="sd-view-${v}" data-view="${v}" title="${t}" aria-pressed="${_sdMode===v}"
+                 style="border:0;padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer;${_sdMode===v?'background:var(--blue-dark,#1e3a5f);color:#fff':'background:#fff;color:var(--muted)'}">${l}</button>`).join('')}
+          </div>
           <button class="tbl-scroll-btn" id="sd-scroll-left" title="Scroll left">◀</button>
           <button class="tbl-scroll-btn" id="sd-scroll-right" title="Scroll right">▶</button>
           <span class="count-badge" id="sd-flt-count" style="white-space:nowrap">${sdItems.length} parts</span>
@@ -1031,7 +1089,12 @@ export async function renderSalesDesk(){
 
   renderSD();
   makeTableResizable(document.getElementById('sd-table'));
-  makeColumnsReorderable(document.getElementById('sd-table'),'salesdesk',SD_COLS,()=>renderSalesDesk());
+  makeColumnsReorderable(document.getElementById('sd-table'),'salesdesk',SD_ALL_COLS,()=>renderSalesDesk());
+  document.querySelectorAll('.sd-view-btn').forEach(b=>b.addEventListener('click',()=>{
+    if(b.dataset.view===_sdViewMode()) return;
+    setUiPref('sd_view', b.dataset.view);
+    renderSalesDesk();
+  }));
   wireScrollButtons('#sd-table-wrap','sd-scroll-left','sd-scroll-right');
   wireShiftCheck(document.getElementById('sd-table'),'.sd-check');
   _wireSymbolsLegend();

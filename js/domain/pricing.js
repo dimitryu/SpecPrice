@@ -126,14 +126,61 @@ export function _sdBottlesFor(ml, packMl){
   if(!(p>0)) return 1;
   return Math.max(1, Math.ceil(n/p - 1e-9));
 }
-export function _sdBottles(r){ return _sdBottlesFor(r.qty, r.pack_ml); }
+// The bottle size behind one price column: the vendor's own chosen bottle
+// (mouser_pack_ml …) when Check Price found one, else the part's size.
+export function _sdPackFor(r, priceField){
+  const v=String(priceField||'').replace(/_price$/,'');
+  const own=v && v!=='priority' && v!=='est' ? parseFloat(r[v+'_pack_ml'])||0 : 0;
+  return own>0 ? own : (parseFloat(r.pack_ml)||0);
+}
+// The size of the bottle Part Cost is actually buying.
+export function _sdChosenPack(r){
+  const f=_SD_PRICE_SOURCES.includes(r._costSource) ? r._costSource : '';
+  return _sdPackFor(r, f);
+}
+export function _sdBottles(r){ return _sdBottlesFor(r.qty, _sdChosenPack(r)); }
 // "2 × 50 ml bottle (need 75 ml)" — what to buy, for the screens and the quote.
 export function _sdBottlesText(r){
   if(String(r&&r.unit||'').trim().toLowerCase()!=='ml') return '';
-  const p=parseFloat(r.pack_ml)||0, need=+(parseFloat(r.qty)||0).toFixed(2);
-  if(!(p>0)) return `bottle size unknown — need ${need} ml (type it in Pack ml)`;
-  const b=_sdBottles(r);
+  const p=_sdChosenPack(r), need=+(parseFloat(r.qty)||0).toFixed(2);
+  if(!(p>0)) return `bottle size unknown — need ${need} ml`;
+  const b=_sdBottlesFor(r.qty, p);
   return `${b} × ${+p.toFixed(2)} ml bottle${b>1?'s':''} (need ${need} ml)`;
+}
+// The product name to search every vendor for its bottle sizes: brand + model
+// ("LOCTITE 243"), else maker + the part number with any size taken out.
+const _ADHESIVE_BRANDS=/\b(LOCTITE|PERMATEX|ARALDITE|DOWSIL|DOW\s+CORNING|SCOTCH-?WELD|3M|MG\s+CHEMICALS|ELECTROLUBE|HUMISEAL|BOSTIK|SIKAFLEX|WEICON|DELO|MASTER\s?BOND|EPO-?TEK|CHEMTRONICS|PLEXUS|DYMAX)\b[\s:-]*([A-Z]{0,4}[\s-]?\d{2,5}[A-Z]{0,3})\b/i;
+const _SIZE_TOKEN=/\b\d+(?:[.,]\d+)?\s*(?:ML|CC|L|LT|LTR|LITERS?|LITRES?|G|GR|OZ|FL\.?\s*OZ)\b|\b(?:BOTTLE|TUBE|SYRINGE|CAN|CARTRIDGE)\b/gi;
+export function _adhesiveFamily(r){
+  const desc=String(r&&r.description||''), pn=String(r&&r.part_number||''), mfr=String(r&&r.manufacturer||'');
+  const m=_ADHESIVE_BRANDS.exec(`${pn} ${desc}`) || _ADHESIVE_BRANDS.exec(`${mfr} ${pn}`);
+  if(m) return `${m[1].replace(/\s+/g,' ')} ${m[2].replace(/\s+/g,'')}`.toUpperCase();
+  const core=pn.replace(_SIZE_TOKEN,' ').replace(/[\s-]+$/,'').trim();
+  if(!core) return '';
+  if(/^\d+$/.test(core) && !mfr) return core;
+  return mfr && !new RegExp('\\b'+mfr.replace(/[^A-Za-z0-9]/g,'.')+'\\b','i').test(core) ? `${mfr} ${core}` : core;
+}
+// Which bottle to buy for `need` ml. `offers` maps vendor → [{mpn, ml, bottles,
+// price, total, waste, stock, url, …}] (the price function's answer, plus what
+// the part-number search found). Per vendor the cheapest total wins; a tie goes
+// to the least left over, then to stock on hand.
+export function _sdPickBottles(offers, need){
+  const n=parseFloat(need)||0;
+  const perVendor={}, all=[];
+  for(const [v,list] of Object.entries(offers||{})){
+    const priced=(list||[]).filter(o=>o && +o.ml>0 && +o.price>0).map(o=>{
+      const bottles=Math.max(1, Math.ceil(n/(+o.ml) - 1e-9));
+      return {...o, v, bottles, total:+(o.price*bottles).toFixed(4), waste:+((+o.ml)*bottles-n).toFixed(3)};
+    });
+    // One entry per bottle: the same size can come back from both searches.
+    const seen=new Set();
+    const uniq=priced.filter(o=>{ const k=String(o.mpn||'').toUpperCase()+'|'+o.ml; if(seen.has(k)) return false; seen.add(k); return true; });
+    uniq.sort((a,b)=>a.total-b.total || a.waste-b.waste || ((+b.stock>0)-(+a.stock>0)));
+    if(uniq.length) perVendor[v]=uniq[0];
+    all.push(...uniq);
+  }
+  all.sort((a,b)=>a.total-b.total || a.waste-b.waste);
+  return {perVendor, all};
 }
 // Every price source the app can quote from. Order matters only for tie-breaks.
 export const _SD_PRICE_SOURCES=['priority_price','mouser_price','digikey_price','onlinecomp_price','farnell_price'];
@@ -150,7 +197,8 @@ export function _sdLineCost(r, priceField){
   const qty=parseFloat(r.qty)||1;
   const unit=String(r.unit||'').trim().toLowerCase();
   // ml: the price is per bottle.
-  if(unit==='ml') return price*_sdBottles(r);
+  // Each vendor may sell a different bottle size (see _sdPickBottles).
+  if(unit==='ml') return price*_sdBottlesFor(r.qty, _sdPackFor(r, priceField));
   if(unit==='mm'){
     if(priceField==='priority_price') return price*(qty/MM_PER_METER);
     // Online Components states its unit per part: by the metre or by the foot.

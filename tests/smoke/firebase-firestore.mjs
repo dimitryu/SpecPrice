@@ -23,7 +23,10 @@ export async function getDocs(q){ const col=DB[q.__col]||{}; let rows=Object.ent
 const apply=(c,patch)=>{ for(const [k,v] of Object.entries(patch||{})){ if(v&&v.__del) delete c[k]; else if(v&&v.__au) c[k]=[...(c[k]||[]),...v.__au]; else c[k]=v; } };
 export async function setDoc(r,d,o){ if(globalThis.__dbDelay) await new Promise(res=>setTimeout(res,globalThis.__dbDelay)); const t=(DB[r.__doc]=DB[r.__doc]||{}); if(o&&o.merge&&t[r.id]) apply(t[r.id],d); else { t[r.id]={}; apply(t[r.id],d); } }
 export async function addDoc(col,d){ const id='id'+(++seq); (DB[col.__col]=DB[col.__col]||{})[id]={}; apply(DB[col.__col][id],d); return { id }; }
-export async function updateDoc(r,patch){ if(globalThis.__dbDelay) await new Promise(res=>setTimeout(res,globalThis.__dbDelay)); const c=(DB[r.__doc]||{})[r.id]; if(!c) throw new Error('No document to update: '+r.__doc+'/'+r.id); apply(c,patch); }
+export async function updateDoc(r,patch){ if(globalThis.__dbDelay) await new Promise(res=>setTimeout(res,globalThis.__dbDelay)); const c=(DB[r.__doc]||{})[r.id]; if(!c) throw new Error('No document to update: '+r.__doc+'/'+r.id);
+  // updateDoc reads "a.b" as a path into a nested map, as Firestore does.
+  for(const [k,v] of Object.entries(patch||{})){ if(!k.includes('.')){ apply(c,{[k]:v}); continue; }
+    const ks=k.split('.'); let o=c; for(const x of ks.slice(0,-1)){ if(!o[x]||typeof o[x]!=='object') o[x]={}; o=o[x]; } apply(o,{[ks[ks.length-1]]:v}); } }
 export async function deleteDoc(r){ delete (DB[r.__doc]||{})[r.id]; }
 export function writeBatch(){ const ops=[]; return { update:(r,p)=>ops.push(()=>updateDoc(r,p)), set:(r,d,o)=>ops.push(()=>setDoc(r,d,o)),
   delete:r=>ops.push(()=>deleteDoc(r)), commit:async()=>{ for(const o of ops) await o(); } }; }

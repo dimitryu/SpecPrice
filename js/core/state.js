@@ -20,6 +20,10 @@ export const S = {
   // owner: core/session.js
   currentUserEmail: '',
   // owner: core/session.js
+  // The signed-in user's own screen settings (users/{uid}.ui_prefs), e.g.
+  // sd_view: 'compact' | 'full'. Follows the user to any computer.
+  uiPrefs: {},
+  // owner: core/session.js
   // Seeded from localStorage, which is where the Admin page saves them.
   // This read did not exist: the keys were written on save and then only ever
   // re-read from the company document, so a key typed into Admin worked until

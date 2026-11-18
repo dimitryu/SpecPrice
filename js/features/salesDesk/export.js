@@ -3,7 +3,7 @@ import { logSystemAudit } from '../../core/audit.js';
 import { fmtDate, toast } from '../../core/ui.js';
 import { APP_VER } from '../../core/version.js';
 import { _partDrawings } from '../../domain/bom.js';
-import { MM_PER_FOOT, MM_PER_METER, SD_NOMINAL_LABEL_PRICE, _sdBottlesText, _sdIsLabelRow } from '../../domain/pricing.js';
+import { MM_PER_FOOT, MM_PER_METER, SD_NOMINAL_LABEL_PRICE, _sdBottlesText, _sdIsLabelRow, _sdPackFor } from '../../domain/pricing.js';
 import { _sdComputeSummary, _sdDwgSet, _sdIsToolRow, _sdPriceSource, _sdPriceSourceText, _sdSearchUrls, sdItems } from './salesDesk.js';
 import { _XL, _xlBoxed, loadExcelJS } from '../../io/excel.js';
 
@@ -358,15 +358,16 @@ export async function exportSalesDeskExcel(){
         } else {
           // Adhesive in ml: the price is per bottle, so the line is bottles ×
           // price — the ml (QTY) over the bottle size, rounded up.
-          const ml=String(r.unit||'').trim().toLowerCase()==='ml', pk=parseFloat(r.pack_ml)||0;
-          const q=ml ? (pk>0 ? `MAX(1,ROUNDUP(F${n}/${_r6(pk)},0))` : '1') : `F${n}`;
+          // Each vendor may sell a different bottle size (mouser_pack_ml …).
+          const ml=String(r.unit||'').trim().toLowerCase()==='ml';
+          const qOf=f=>{ const pk=_sdPackFor(r,f); return ml ? (pk>0 ? `MAX(1,ROUNDUP(F${n}/${_r6(pk)},0))` : '1') : `F${n}`; };
           const ocPerM=/^(M|MTR|METER|METRE)$/i.test(String(r.onlinecomp_uom||'').trim());
-          const a=`IF(N(H${n})>0,H${n}*${q}*${ml?1:K_DIST(n)},9E+99)`;
-          const b=`IF(N(J${n})>0,J${n}*${q}*${ml?1:K_DIST(n)},9E+99)`;
-          const d=`IF(N(L${n})>0,L${n}*${q}*${ml?1:(ocPerM?K_PRI(n):K_DIST(n))},9E+99)`;
+          const a=`IF(N(H${n})>0,H${n}*${qOf('mouser_price')}*${ml?1:K_DIST(n)},9E+99)`;
+          const b=`IF(N(J${n})>0,J${n}*${qOf('digikey_price')}*${ml?1:K_DIST(n)},9E+99)`;
+          const d=`IF(N(L${n})>0,L${n}*${qOf('onlinecomp_price')}*${ml?1:(ocPerM?K_PRI(n):K_DIST(n))},9E+99)`;
           const faPerM=/^(M|MTR|METER|METRE)$/i.test(String(r.farnell_uom||'').trim());
-          const e=`IF(N(N${n})>0,N${n}*${q}*${ml?1:(faPerM?K_PRI(n):K_DIST(n))},9E+99)`;
-          const c=`IF(N(P${n})>0,P${n}*${q}*${ml?1:K_PRI(n)},9E+99)`;
+          const e=`IF(N(N${n})>0,N${n}*${qOf('farnell_price')}*${ml?1:(faPerM?K_PRI(n):K_DIST(n))},9E+99)`;
+          const c=`IF(N(P${n})>0,P${n}*${qOf('priority_price')}*${ml?1:K_PRI(n)},9E+99)`;
           const est=_num(r.est_price);
           // Same order as the app: a label/marker with no price takes the
           // nominal label price (per piece; one label on a row not counted in pieces).
@@ -404,6 +405,9 @@ export async function exportSalesDeskExcel(){
               c.font={...c.font, color:{argb:'FF92400E'}};
               matchFlagged=true;
               c.note=`Matched as "${r[cfg.mpn]||''}" on ${cfg.name} — different punctuation/zero-padding to "${r.part_number||''}". Verify before quoting.`;
+            } else if(code==='bottle'){
+              const pk=parseFloat(r[cfg.code.replace('_match','_pack_ml')])||0;
+              c.note=`Adhesive: the ${cfg.name} bottle that covers the ml needed for the least money — ${r[cfg.mpn]||''}${pk?`, ${pk} ml`:''}. Price per bottle.`;
             } else if(code==='noprice'){
               matchFlagged=true;
               c.note=`${cfg.name} lists this part but publishes no price (non-stocked / quote-only).`;

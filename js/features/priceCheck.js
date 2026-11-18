@@ -2,8 +2,8 @@ import { S } from '../core/state.js';
 import { logDrawingsOf, logSystemAudit, setLogDrawing } from '../core/audit.js';
 import { closeModal, esc, showModal, toast } from '../core/ui.js';
 import { mergePartDoc, updatePartFields } from '../data/parts.js';
-import { lookupPartPrices } from '../data/pricing.js';
-import { SD_NOMINAL_LABEL_PRICE, _parsePackMl, _priceTargetQty, _sdBottles, _sdBottlesText, _sdIsLabelRow, _sdLineCost, _sdRecalcTotal } from '../domain/pricing.js';
+import { lookupBottleOffers, lookupPartPrices } from '../data/pricing.js';
+import { SD_NOMINAL_LABEL_PRICE, _adhesiveFamily, _parsePackMl, _priceTargetQty, _sdBottlesFor, _sdBottlesText, _sdIsLabelRow, _sdLineCost, _sdPickBottles, _sdRecalcTotal } from '../domain/pricing.js';
 import { _wireSymbolsLegend, renderPartStock } from './database.js';
 import { _sdApplyUnits, _sdDwgKey, _sdDwgUnits, _sdSearchUrls, renderSalesDesk, sdItems } from './salesDesk/salesDesk.js';
 
@@ -96,7 +96,8 @@ export async function runFCCheckModal(items, mode){
     // different lengths (foot / metre), so compare them as the same length in mm.
     const u=String(it.unit||'').trim().toLowerCase();
     const inM=/^(m|meter|metre|meters|metres|mtr)$/.test(u);
-    return _sdLineCost({qty:inM?(parseFloat(it.qty)||1)*1000:it.qty, unit:inM?'mm':it.unit, pack_ml:it.pack_ml, onlinecomp_uom:it.onlinecomp_uom, farnell_uom:it.farnell_uom, [field]:p}, field);
+    return _sdLineCost({qty:inM?(parseFloat(it.qty)||1)*1000:it.qty, unit:inM?'mm':it.unit, pack_ml:it.pack_ml, onlinecomp_uom:it.onlinecomp_uom, farnell_uom:it.farnell_uom,
+      mouser_pack_ml:it.mouser_pack_ml, digikey_pack_ml:it.digikey_pack_ml, onlinecomp_pack_ml:it.onlinecomp_pack_ml, farnell_pack_ml:it.farnell_pack_ml, [field]:p}, field);
   };
 
   showModal(`<div class="modal" style="width:min(96vw,1160px)">
@@ -268,6 +269,44 @@ export async function runFCCheckModal(items, mode){
         }
       }
 
+      // ── Adhesive in ml: which bottle fits best ──
+      // The same glue is sold in several sizes, each its own part number. Every
+      // vendor is searched for the product's sizes; per vendor the bottle that
+      // covers the ml needed for the least money is kept (its price, size, part
+      // number and page), and Part Cost then takes the cheapest vendor as usual.
+      let _bottle=null, _bottleFamily='';
+      if(String(it.unit||'').toLowerCase()==='ml'){
+        const need=parseFloat(it.qty)||0;
+        _bottleFamily=_adhesiveFamily(it);
+        let found={offers:{}, errors:[]};
+        if(_bottleFamily){
+          try{ found=await lookupBottleOffers(_bottleFamily, need); }
+          catch(e){ found={offers:{}, errors:[e.message]}; }
+        }
+        for(const m of (found.errors||[])) apiErrors.add(m);
+        const pool={};
+        for(const v of ['mouser','digikey','onlinecomp','farnell']){
+          const list=[...(found.offers[v]||[])];
+          const hit=r[v];
+          if(hit && hit.price>0){
+            const ml=_parsePackMl(`${hit.desc||''} ${hit.mpn||''}`) || parseFloat(it.pack_ml) || _parsePackMl(`${it.description||''} ${it.part_number||''}`);
+            if(ml>0) list.push({mpn:hit.mpn||it.part_number, manufacturer:hit.manufacturer||'', desc:hit.desc||'', ml,
+                                price:hit.price, stock:hit.stock, url:hit.url||''});
+          }
+          if(list.length) pool[v]=list;
+        }
+        _bottle=_sdPickBottles(pool, need);
+        const NAME={mouser:'Mouser', digikey:'DigiKey', onlinecomp:'Online Comp.', farnell:'Farnell'};
+        for(const [v,o] of Object.entries(_bottle.perVendor)){
+          r[v]={...(r[v]||{}), price:o.price, stock:o.stock||'0', url:o.url||'', mpn:o.mpn||'',
+                manufacturer:o.manufacturer||(r[v]&&r[v].manufacturer)||'', breakQty:o.bottles, exact:true,
+                desc:o.desc||'', considered:1, candidates:[], chosenBy:'', _bottleMl:o.ml};
+          it[v+'_pack_ml']=o.ml;
+        }
+        if(_bottle.all[0]) r.best={...r[_bottle.all[0].v], name:NAME[_bottle.all[0].v]};
+        else _bottle=null;
+      }
+
       const dkNum = r.digikey ? r.digikey.price : '';
       const moNum = r.mouser  ? r.mouser.price  : '';
       const ocNum = r.onlinecomp ? r.onlinecomp.price : '';
@@ -339,9 +378,13 @@ export async function runFCCheckModal(items, mode){
       if(_nominal) setStatus(i, `◑ nominal $${SD_NOMINAL_LABEL_PRICE.toFixed(2)}`, '#B45309', tip+'\n\n'+`No supplier price for this label/marker — Part Cost uses the nominal label price, $${SD_NOMINAL_LABEL_PRICE.toFixed(2)} per piece. Type a price in Part Cost if you have a real one.`);
       else if(String(it.unit||'').toLowerCase()==='ml'){
         // What to buy: N bottles of the size found, for the ml needed.
-        const bt=_sdBottlesText(it);
-        setStatus(i, `${glyph} · ${parseFloat(it.pack_ml)>0?`${_sdBottles(it)}×${+(+it.pack_ml).toFixed(2)}ml`:'size?'}`, parseFloat(it.pack_ml)>0?(noPrice?'#B45309':'var(--green)'):'#B45309',
-          (tip?tip+'\n\n':'')+`Adhesive bought by the bottle: ${bt}. Prices shown are for all the bottles.${_packFound?' Bottle size read from the supplier\u2019s description.':''}`);
+        const top=_bottle && _bottle.all[0];
+        const bt=top ? `${top.bottles} × ${+(+top.ml).toFixed(2)} ml bottle${top.bottles>1?'s':''} (need ${+(parseFloat(it.qty)||0).toFixed(2)} ml)` : _sdBottlesText(it);
+        const known=top || parseFloat(it.pack_ml)>0;
+        const others=_bottle ? _bottle.all.slice(1,5).map(o=>`  ${o.bottles} × ${+o.ml} ml — $${o.total.toFixed(2)} (${o.v})`).join('\n') : '';
+        setStatus(i, `${glyph} · ${top?`${top.bottles}×${+(+top.ml).toFixed(2)}ml`:(parseFloat(it.pack_ml)>0?`${_sdBottlesFor(it.qty,it.pack_ml)}×${+(+it.pack_ml).toFixed(2)}ml`:'size?')}`, known?(noPrice?'#B45309':'var(--green)'):'#B45309',
+          (tip?tip+'\n\n':'')+`Adhesive bought by the bottle: ${bt}${top?` — ${top.mpn} at ${top.v}, $${top.total.toFixed(2)}`:''}. Prices shown are for all the bottles.`
+          +(others?`\n\nOther sizes checked:\n${others}`:'')+(_bottleFamily&&!top?`\n\nNo bottle sizes found for "${_bottleFamily}".`:''));
       }
       else setStatus(i, glyph, noPrice?'#B45309':'var(--green)', tip);
 
@@ -366,7 +409,7 @@ export async function runFCCheckModal(items, mode){
       //   'approx'  — priced, matched ignoring punctuation/zero-padding
       //   'noprice' — vendor lists the part but publishes no price
       //   ''        — vendor doesn't list it
-      const matchCode=v=>!v ? '' : (!(v.price>0) ? 'noprice' : (v.exact ? 'exact' : 'approx'));
+      const matchCode=v=>!v ? '' : (!(v.price>0) ? 'noprice' : (v._bottleMl ? 'bottle' : (v.exact ? 'exact' : 'approx')));
       const matchFields={
         mouser_match:  matchCode(r.mouser),
         mouser_mpn:    r.mouser  ? (r.mouser.mpn||'')  : '',
@@ -424,6 +467,9 @@ export async function runFCCheckModal(items, mode){
                          price:+c.price||0})) : [],
       };
 
+      // The bottle each vendor's price is for (adhesives only).
+      if(_bottle) for(const v of ['mouser','digikey','onlinecomp','farnell'])
+        matchFields[v+'_pack_ml'] = r[v] && r[v]._bottleMl ? r[v]._bottleMl : '';
       const stockFields={ mouser_stock:mouserStock, digikey_stock:digikeyStock, onlinecomp_stock:onlinecompStock, farnell_stock:farnellStock };
       // Legacy single field kept in step with the winning vendor so older rows
       // and any code still reading `stock` don't suddenly go blank.
@@ -459,6 +505,12 @@ export async function runFCCheckModal(items, mode){
           sdItems[sdIdx].onlinecomp_price=ocNum;
           sdItems[sdIdx].farnell_price=faNum;
           if(_packFound && !(parseFloat(sdItems[sdIdx].pack_ml)>0)) sdItems[sdIdx].pack_ml=_packFound;
+          // What was compared, for the note beside the summary.
+          if(_bottle){
+            sdItems[sdIdx].bottle_family=_bottleFamily;
+            sdItems[sdIdx].bottle_opts=_bottle.all.slice(0,6).map(o=>({v:o.v, mpn:String(o.mpn||'').slice(0,60), ml:+o.ml, bottles:o.bottles,
+              price:+o.price, total:+o.total, url:String(o.url||'').slice(0,400), stock:String(o.stock||'')}));
+          }
           Object.assign(sdItems[sdIdx], matchFields, stockFields);
           if(newMfr) sdItems[sdIdx].manufacturer=newMfr;
           if(candidates.length>1 && chosenPn && chosenPn!==sdItems[sdIdx].part_number){

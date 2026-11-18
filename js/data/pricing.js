@@ -40,6 +40,19 @@ export async function _apiPriceLookup(pn, qty, desc){
   return resp.json();
 }
 
+// Every bottle size of an adhesive at every configured vendor, priced for
+// `need` ml (see bottleSearch in the price function). {offers:{vendor:[…]}, errors}.
+// An older deployment answers without `offers` — then there is nothing to choose from.
+export async function lookupBottleOffers(family, need){
+  if(!family || !auth.currentUser) return {offers:{}, errors:[]};
+  const token=await auth.currentUser.getIdToken();
+  const q=`family=${encodeURIComponent(String(family).slice(0,80))}&need=${encodeURIComponent(+need||0)}`;
+  const resp=await fetch(`${PRICE_API_URL}?${q}`, {headers:{Authorization:'Bearer '+token}, signal:AbortSignal.timeout(45000)});
+  if(!resp.ok) return {offers:{}, errors:[`bottle search HTTP ${resp.status}`]};
+  const j=await resp.json().catch(()=>null);
+  return {offers:(j&&j.offers&&typeof j.offers==='object')?j.offers:{}, errors:(j&&j.errors)||[]};
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // ── Currency conversion → USD (via coinmill.com, same CORS proxy as FindChips) ─
 export const _COINMILL_URLS = {

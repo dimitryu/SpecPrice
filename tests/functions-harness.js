@@ -215,6 +215,22 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
     { sku: '7', displayName: 'CABLE 14AWG', unitOfMeasure: 'METER', unitOfMeasureCode: 'M', packSize: 1, translatedManufacturerPartNumber: 'WL-14-3C', brandName: 'W', prices: [{ from: 1, cost: 2.5 }] }] } }) } : null;
   r = await call(fns.priceLookup, { method: 'GET', token: 'tUser', query: { pn: 'WL-14-3C', qty: '1' } });
   ok(r.json.farnell && r.json.farnell.uom === 'M' && r.json.farnell.price === 2.5, 'Farnell: cable sold by the metre keeps its per-metre price');
+  // ── Adhesive bottles: every size of the product, priced for the ml needed ──
+  upstreamReplyAt = url => {
+    if (/mouser\.com/.test(url)) return { status: 200, body: JSON.stringify({ Errors: [], SearchResults: { Parts: [
+      { ManufacturerPartNumber: '243-10ML', Manufacturer: 'Loctite', Description: 'Threadlocker 243 medium strength 10ML bottle', PriceBreaks: [{ Quantity: 1, Price: '$12.00' }, { Quantity: 10, Price: '$10.00' }], Availability: '50 In Stock', ProductDetailUrl: 'https://www.mouser.com/p/1' },
+      { ManufacturerPartNumber: '243-50ML', Manufacturer: 'Loctite', Description: 'Threadlocker 243 medium strength 50ML bottle', PriceBreaks: [{ Quantity: 1, Price: '$30.00' }], Availability: '12 In Stock', ProductDetailUrl: 'https://www.mouser.com/p/2' },
+      { ManufacturerPartNumber: '243-250ML', Manufacturer: 'Loctite', Description: 'Threadlocker 243 250ML', PriceBreaks: [{ Quantity: 1, Price: '$95.00' }], Availability: '3 In Stock' },
+      { ManufacturerPartNumber: '2430-50ML', Manufacturer: 'Loctite', Description: 'Threadlocker 2430 50ML', PriceBreaks: [{ Quantity: 1, Price: '$1.00' }] },
+      { ManufacturerPartNumber: '243-KIT', Manufacturer: 'Loctite', Description: 'Threadlocker 243 dispenser', PriceBreaks: [{ Quantity: 1, Price: '$5.00' }] }] } }) };
+    return { status: 200, body: '[]' };
+  };
+  r = await call(fns.priceLookup, { method: 'GET', token: 'tUser', query: { family: 'LOCTITE 243', need: '75' } });
+  const mo = (r.json.offers || {}).mouser || [];
+  ok(r.status === 200 && mo.length === 3, 'bottles: only listings that name the product and state a size (2430 and the kit left out)');
+  ok(mo[0] && mo[0].mpn === '243-50ML' && mo[0].bottles === 2 && mo[0].total === 60, 'bottles: 75 ml → 2 × 50 ml is the cheapest fit');
+  ok(mo[1] && mo[1].mpn === '243-10ML' && mo[1].bottles === 8 && mo[1].price === 10 && mo[1].total === 80, 'bottles: 8 × 10 ml priced at the 10+ break');
+  ok(mo[2] && mo[2].mpn === '243-250ML' && mo[2].waste === 175, 'bottles: what is left over is reported');
   upstreamReplyAt = null;
   r = await call(C, { method: 'GET', token: 'tAdmin' });
   ok(r.json.farnell && r.json.farnell.configured && r.json.farnell.hint === '…4321' && r.json.farnell.store === 'il.farnell.com' && !JSON.stringify(r.json).includes('fa-secret-key-4321'), 'Farnell: status shows a hint and the store, never the key');
