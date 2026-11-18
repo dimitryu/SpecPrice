@@ -5,7 +5,7 @@ import { aiAnalyzeCableProcess, aiExtractDrawingNotes } from '../../ai/process.j
 import { logAudit, logDrawingsOf, setLogDrawing } from '../../core/audit.js';
 import { isReadOnlyUser } from '../../core/roles.js';
 import { parseBoolQuery, wireSearchClear, wireShiftCheck } from '../../core/table.js';
-import { closeModal, debounce, esc, fmtPrice, showModal, stagesPanel, toast } from '../../core/ui.js';
+import { closeModal, debounce, esc, fmtDuration, fmtPrice, showModal, stagesPanel, toast } from '../../core/ui.js';
 import { loadParts, saveBOMToPartStock } from '../../data/parts.js';
 import { _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, _parseDrawingFileName, _partDrawingNumbers, _partDrawings, _partLatestDrawing, _pnKey, parseExcelSheetsStructured } from '../../domain/bom.js';
 import { _parsePackMl } from '../../domain/pricing.js';
@@ -424,7 +424,7 @@ export async function handleSDFiles(files){
   stages.set('desk',{state:'run', text:`${allRows.length} rows…`});
   const added=_sdAddImportedRows(allRows);
   stages.set('desk',{state:'done', text:`${added.length} row${added.length===1?'':'s'} added`});
-  logAudit('sales_desk_add_from_drawing',{count:added.length},true);
+
   document.getElementById('sd-tbody')&&renderSalesDesk();
 
   // ── 3. Into the Database ── (a read-only role can look, not write)
@@ -474,9 +474,13 @@ export async function handleSDFiles(files){
   // The new rows are what the Database holds now (see _sdLeaveGuard); rows the
   // user had already changed stay changed.
   if(dbOk) _sdMarkCleanExcept(_dirtyBefore);
-  const when=new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  // How long it all took, per step and in total — on screen and in the log.
+  const totalMs=stages.totalMs();
+  logAudit('sales_desk_add_from_drawing',{count:added.length, files:files.length, ms:totalMs, stage_ms:stages.times(), priced:pr?pr.found:0},true);
   body.insertAdjacentHTML('beforeend',`<div class="sd-import-done" style="margin-top:12px;font-size:13px;color:#1B6B3A;font-weight:600">
-    ✓ Done (${when}) — ${added.length} row${added.length===1?'':'s'} on the Sales Desk${pr?` · ${pr.found}/${pr.total} priced`:''}.
+    <div class="sd-import-total" style="display:flex;justify-content:space-between;gap:10px;padding:6px 10px;margin-bottom:6px;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px">
+      <span>⏱ Total time</span><span style="font-variant-numeric:tabular-nums">${fmtDuration(totalMs)}</span></div>
+    ✓ Done — ${added.length} row${added.length===1?'':'s'} on the Sales Desk${pr?` · ${pr.found}/${pr.total} priced`:''}.
     <div style="font-weight:400;color:var(--muted);font-size:12px;margin-top:3px">Prices are for ${items.length&&new Set(added.map(r=>_sdDwgKey(r))).size>1?'the number of cables each drawing is set to':'one cable'} — for a larger order, set <strong>Units</strong> and run 🔍 Check Price again. Fix any cell on the desk; 💾 Save to Database stores the changes.</div></div>`);
   foot.innerHTML=`<button class="btn btn-green" id="sd-import-close">Close</button>`;
   document.getElementById('sd-import-close').addEventListener('click',()=>closeModal());

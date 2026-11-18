@@ -75,6 +75,10 @@ vm.runInContext(`aiProxy=true; companyId='c1'; currentUserEmail='u@x'; currentUs
   ok('database: the rows were saved without asking', ctx.__f.saved.length===1 && ctx.__f.saved[0]===8);
   const fc=ctx.__f.fc[0]||{};
   ok('prices: checked right away, in the import window (headless)', fc.n===8 && fc.mode==='sd' && fc.opts && fc.opts.headless===true && fc.opts.saveToDb===true);
+  const times=[...g.document.querySelectorAll('#sd-modal-body .stage')].map(e=>!!e.querySelector('.stage-time'));
+  ok('time: every step that ran shows how long it took', times.every(Boolean));
+  ok('time: the total time is shown at the end', /Total time/.test(g.document.querySelector('.sd-import-total')?.textContent||''));
+  ok('time: durations read naturally', M.fmtDuration(4300)==='4.3 s' && M.fmtDuration(42000)==='42 s' && M.fmtDuration(83000)==='1 min 23 s' && M.fmtDuration(119800)==='2 min');
   ok('stages: the price stage says how many were found', /3 of 8 found/.test(g.document.getElementById('sd-modal-body').textContent));
   const items=vm.runInContext('sdItems', ctx);
   ok('sales desk: all 8 rows were added', items.length===8);
