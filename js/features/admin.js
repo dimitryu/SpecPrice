@@ -37,7 +37,7 @@ export function renderAdminPage(){
 
     <div class="settings-panel" style="padding:20px 22px;margin-top:20px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🔌 Distributor Price APIs</h3>
-      <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Official Mouser, DigiKey and Online Components APIs, used by CHECK PRICE to fill their price columns. Set up any of them on its own — you don't need all three.</p>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Official Mouser, DigiKey, Online Components and Farnell (element14) APIs, used by CHECK PRICE to fill their price columns. Set up any of them on its own — you don't need all of them.</p>
       <div id="adm-dist-status" style="font-size:11px;color:var(--muted);margin-bottom:14px">Loading current status…</div>
 
       <div class="form-field">
@@ -59,6 +59,14 @@ export function renderAdminPage(){
       <div class="form-field" style="margin-top:12px">
         <label>Online Components API Name</label>
         <input class="form-input" id="adm-oc-name" type="text" placeholder="cgpriceavailability (leave blank to keep current)" autocomplete="off">
+      </div>
+      <div class="form-field" style="margin-top:12px">
+        <label>Farnell API Key <span style="font-weight:400;text-transform:none;color:var(--muted)">— free from <a href="https://partner.element14.com/" target="_blank" rel="noopener noreferrer">partner.element14.com</a></span></label>
+        <input class="form-input" id="adm-fa-key" type="password" placeholder="leave blank to keep current" autocomplete="off">
+      </div>
+      <div class="form-field" style="margin-top:12px">
+        <label>Farnell Store</label>
+        <input class="form-input" id="adm-fa-store" type="text" placeholder="il.farnell.com (leave blank to keep current)" autocomplete="off">
       </div>
 
       <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:6px;padding:9px 11px;margin-top:12px;font-size:11px;color:#0C4A6E;line-height:1.5">
@@ -229,14 +237,16 @@ export async function renderAdminDistributorApiSection(){
         ? `<div>${pill(true,name,[h,src(o)].filter(Boolean).join(' · '))}</div>`
         : `<div><span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:#F1F5F9;color:#64748B">– ${name}</span> <span style="color:var(--muted);font-size:10px">not set up</span></div>`;
       const oc=s.onlinecomp||{configured:false};
-      const none=!s.mouser.configured && !s.digikey.configured && !oc.configured;
+      const fa=s.farnell||{configured:false};
+      const none=!s.mouser.configured && !s.digikey.configured && !oc.configured && !fa.configured;
       statusEl.innerHTML=
         `<div style="display:flex;flex-direction:column;gap:6px">
            ${row(s.mouser,'Mouser',s.mouser.hint)}
            ${row(s.digikey,'DigiKey',s.digikey.clientIdHint)}
            ${row(oc,'Online Components',[oc.hint, oc.apiName?'API name '+oc.apiName:''].filter(Boolean).join(' · '))}
+           ${row(fa,'Farnell',[fa.hint, fa.store?'store '+fa.store:''].filter(Boolean).join(' · '))}
            <div style="color:var(--muted);font-size:10px">${none
-             ? 'Neither vendor is set up yet — add either one to start.'
+             ? 'No vendor is set up yet — add any one to start.'
              : 'Each vendor works on its own — one is enough.'}</div>
            ${when?`<div style="color:var(--muted);font-size:10px">Last changed ${esc(when)}${s.updatedBy?' by '+esc(s.updatedBy):''}</div>`:''}
          </div>`;
@@ -256,6 +266,8 @@ export async function renderAdminDistributorApiSection(){
     const ds=document.getElementById('adm-dk-secret').value.trim();
     const ok=document.getElementById('adm-oc-key').value.trim();
     const on=document.getElementById('adm-oc-name').value.trim();
+    const fk=document.getElementById('adm-fa-key').value.trim();
+    const fs=document.getElementById('adm-fa-store').value.trim();
     // Only send the fields actually filled in — an omitted field means "keep",
     // which is what lets the admin change one credential without re-typing all.
     const body={};
@@ -264,6 +276,8 @@ export async function renderAdminDistributorApiSection(){
     if(ds) body.digikey_client_secret=ds;
     if(ok) body.onlinecomp_api_key=ok;
     if(on) body.onlinecomp_api_name=on;
+    if(fk) body.farnell_api_key=fk;
+    if(fs) body.farnell_store=fs;
     if(!Object.keys(body).length){ toast('Nothing to save — fill in at least one field','warn'); return; }
 
     saveBtn.disabled=true; saveBtn.textContent='Saving…';
@@ -271,7 +285,7 @@ export async function renderAdminDistributorApiSection(){
       const r=await _apiConfigCall('POST',body);
       // Clear the inputs immediately: there is no reason for a secret to sit in
       // a DOM node after it's been stored.
-      ['adm-mouser-key','adm-dk-id','adm-dk-secret','adm-oc-key','adm-oc-name'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+      ['adm-mouser-key','adm-dk-id','adm-dk-secret','adm-oc-key','adm-oc-name','adm-fa-key','adm-fa-store'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
       toast('Credentials saved','success');
       logAudit('distributor_api_keys_updated',{fields:(r.updated||[]).join(', ')},true);
       await refreshStatus();
@@ -297,9 +311,9 @@ export async function renderAdminDistributorApiSection(){
       testEl.innerHTML=
         `<div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px">
            <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Test part: ${esc(r.pn)}</div>
-           ${line('Mouser',r.mouser)}${line('DigiKey',r.digikey)}${r.onlinecomp?line('Online Components',r.onlinecomp):''}
+           ${line('Mouser',r.mouser)}${line('DigiKey',r.digikey)}${r.onlinecomp?line('Online Components',r.onlinecomp):''}${r.farnell?line('Farnell',r.farnell):''}
          </div>`;
-      logAudit('distributor_api_test',`mouser=${r.mouser.ok} digikey=${r.digikey.ok} onlinecomp=${!!(r.onlinecomp&&r.onlinecomp.ok)}`,r.mouser.ok||r.digikey.ok||!!(r.onlinecomp&&r.onlinecomp.ok));
+      logAudit('distributor_api_test',`mouser=${r.mouser.ok} digikey=${r.digikey.ok} onlinecomp=${!!(r.onlinecomp&&r.onlinecomp.ok)} farnell=${!!(r.farnell&&r.farnell.ok)}`,r.mouser.ok||r.digikey.ok||!!(r.onlinecomp&&r.onlinecomp.ok)||!!(r.farnell&&r.farnell.ok));
     }catch(e){
       testEl.innerHTML=`<span style="color:var(--red);font-size:11px">${esc(e.message)}</span>`;
     }finally{ testBtn.disabled=false; testBtn.textContent='🧪 Test Connection'; }

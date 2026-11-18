@@ -5,7 +5,7 @@ import { mergePartDoc, updatePartFields } from '../data/parts.js';
 import { lookupPartPrices } from '../data/pricing.js';
 import { SD_NOMINAL_LABEL_PRICE, _parsePackMl, _priceTargetQty, _sdBottles, _sdBottlesText, _sdIsLabelRow, _sdLineCost, _sdRecalcTotal } from '../domain/pricing.js';
 import { _wireSymbolsLegend, renderPartStock } from './database.js';
-import { _sdApplyUnits, _sdDwgKey, _sdDwgUnits, renderSalesDesk, sdItems } from './salesDesk/salesDesk.js';
+import { _sdApplyUnits, _sdDwgKey, _sdDwgUnits, _sdSearchUrls, renderSalesDesk, sdItems } from './salesDesk/salesDesk.js';
 
 // mode: 'parts' → save to Firestore allParts; 'sd' → update sdItems in memory
 //
@@ -65,7 +65,7 @@ export function _sdAskUnitsThenCheck(targets){
     picks.forEach(([d,v])=>_sdApplyUnits(d,v));
     const items=targets.filter(r=>r.part_number).map(r=>({
       part_number:r.part_number, qty:parseFloat(r.qty)||1, unit:r.unit||'',
-      pack_ml:r.pack_ml||'', drawing_number:r.drawing_number||'', onlinecomp_uom:r.onlinecomp_uom||'',
+      pack_ml:r.pack_ml||'', drawing_number:r.drawing_number||'', onlinecomp_uom:r.onlinecomp_uom||'', farnell_uom:r.farnell_uom||'',
       description:r.description||'', _sdIdx:sdItems.indexOf(r)}));
     if(!items.length){ closeModal(); toast('No parts to check','error'); return; }
     runFCCheckModal(items,'sd');   // replaces this modal with its own
@@ -96,10 +96,10 @@ export async function runFCCheckModal(items, mode){
     // different lengths (foot / metre), so compare them as the same length in mm.
     const u=String(it.unit||'').trim().toLowerCase();
     const inM=/^(m|meter|metre|meters|metres|mtr)$/.test(u);
-    return _sdLineCost({qty:inM?(parseFloat(it.qty)||1)*1000:it.qty, unit:inM?'mm':it.unit, pack_ml:it.pack_ml, onlinecomp_uom:it.onlinecomp_uom, [field]:p}, field);
+    return _sdLineCost({qty:inM?(parseFloat(it.qty)||1)*1000:it.qty, unit:inM?'mm':it.unit, pack_ml:it.pack_ml, onlinecomp_uom:it.onlinecomp_uom, farnell_uom:it.farnell_uom, [field]:p}, field);
   };
 
-  showModal(`<div class="modal" style="width:min(96vw,1040px)">
+  showModal(`<div class="modal" style="width:min(96vw,1160px)">
     <div class="modal-head"><h3>🔍 Check Price</h3><button class="close-modal" id="fc-close-x">✕</button></div>
     <div class="modal-body" id="fc-modal-body">
       <div class="ai-status" style="margin-bottom:8px"><div class="ring"></div><span id="fc-status">Starting…</span></div>
@@ -114,6 +114,8 @@ export async function runFCCheckModal(items, mode){
             <th title="Units DigiKey has on hand">DigiKey Stock</th>
             <th title="Total for the row's QTY, not a per-unit price">Online Comp.</th>
             <th title="Units Online Components has on hand">OC Stock</th>
+            <th title="Total for the row's QTY, not a per-unit price">Farnell</th>
+            <th title="Units Farnell has on hand">Farnell Stock</th>
             <th title="Total for the row's QTY, not a per-unit price">Priority</th>
             <th>Status</th>
           </tr></thead>
@@ -130,6 +132,8 @@ export async function runFCCheckModal(items, mode){
               <td id="fc-ds-${i}" style="color:var(--muted)">—</td>
               <td id="fc-oc-${i}" style="color:var(--muted)">—</td>
               <td id="fc-os-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-fa-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-fs-${i}" style="color:var(--muted)">—</td>
               <td id="fc-pr-${i}" style="color:var(--muted)">${money(_lineCost(it,'priority_price',parseFloat(it.priority_price)||0))||'—'}</td>
               <td id="fc-st-${i}"><span class="ring" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle"></span></td>
             </tr>`).join('')}
@@ -153,7 +157,7 @@ export async function runFCCheckModal(items, mode){
           <span><strong style="color:var(--red)">red text</strong> the lookup failed — hover for the reason</span>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:4px;border-top:1px dashed var(--border);padding-top:5px">
-          <span><strong>Prices are the TOTAL for the row's QTY</strong>, not per unit — that's the only basis on which the sources compare (Priority quotes per metre, Mouser and DigiKey per foot, Online Components by its own unit)</span>
+          <span><strong>Prices are the TOTAL for the row's QTY</strong>, not per unit — that's the only basis on which the sources compare (Priority quotes per metre, Mouser and DigiKey per foot, Online Components and Farnell by their own unit)</span>
           <span><strong style="color:var(--green)">green</strong> = cheapest, <strong style="color:var(--red)">red</strong> = dearest</span>
           <span><strong>Stock 0</strong> = that vendor carries it but has none on hand; <strong>—</strong> = that vendor doesn't list it</span>
         </div>
@@ -178,8 +182,8 @@ export async function runFCCheckModal(items, mode){
   // cheapest green, dearest red. Priority is included so the comparison the
   // user actually cares about — "is the distributor cheaper than our ERP?" —
   // is answerable without leaving this modal.
-  const paintRow=(i, dk, mo, pr, oc=0)=>{
-    const vals=[dk,mo,pr,oc].filter(v=>v>0);
+  const paintRow=(i, dk, mo, pr, oc=0, fa=0)=>{
+    const vals=[dk,mo,pr,oc,fa].filter(v=>v>0);
     const lo=vals.length?Math.min(...vals):0, hi=vals.length?Math.max(...vals):0;
     const put=(id,v)=>{
       const el=document.getElementById(id); if(!el) return;
@@ -189,7 +193,7 @@ export async function runFCCheckModal(items, mode){
                      : (v<=lo ? 'var(--green)' : (v>=hi ? 'var(--red)' : 'var(--text)'));
       el.style.fontWeight = (vals.length>1 && v<=lo) ? '700' : '400';
     };
-    put(`fc-dk-${i}`,dk); put(`fc-mo-${i}`,mo); put(`fc-pr-${i}`,pr); put(`fc-oc-${i}`,oc);
+    put(`fc-dk-${i}`,dk); put(`fc-mo-${i}`,mo); put(`fc-pr-${i}`,pr); put(`fc-oc-${i}`,oc); put(`fc-fa-${i}`,fa);
   };
 
   _wireSymbolsLegend();
@@ -268,11 +272,13 @@ export async function runFCCheckModal(items, mode){
       const moNum = r.mouser  ? r.mouser.price  : '';
       const ocNum = r.onlinecomp ? r.onlinecomp.price : '';
       if(r.onlinecomp) it.onlinecomp_uom=r.onlinecomp.uom||'';
+      const faNum = r.farnell ? r.farnell.price : '';
+      if(r.farnell) it.farnell_uom=r.farnell.uom||'';
       // An adhesive in ml with no bottle size yet: the supplier's description
       // usually states it ("…, 50 ml bottle"). Read it before the line is costed.
       let _packFound=0;
       if(String(it.unit||'').toLowerCase()==='ml' && !(parseFloat(it.pack_ml)>0)){
-        _packFound=[r.best, r.mouser, r.digikey, r.onlinecomp].filter(Boolean).map(v=>_parsePackMl(`${v.desc||''} ${v.mpn||''}`)).find(v=>v>0)
+        _packFound=[r.best, r.mouser, r.digikey, r.onlinecomp, r.farnell].filter(Boolean).map(v=>_parsePackMl(`${v.desc||''} ${v.mpn||''}`)).find(v=>v>0)
           || _parsePackMl(`${it.description||''} ${it.part_number||''}`) || 0;
         if(_packFound) it.pack_ml=_packFound;
       }
@@ -282,7 +288,8 @@ export async function runFCCheckModal(items, mode){
         _lineCost(it,'digikey_price',dkNum),
         _lineCost(it,'mouser_price',moNum),
         _lineCost(it,'priority_price',prPrice),
-        _lineCost(it,'onlinecomp_price',ocNum));
+        _lineCost(it,'onlinecomp_price',ocNum),
+        _lineCost(it,'farnell_price',faNum));
 
       // Stock PER VENDOR. A single "Stock" column showed only whichever vendor
       // won on price, so you could not tell whether the other one had any —
@@ -293,6 +300,7 @@ export async function runFCCheckModal(items, mode){
       const mouserStock  = stockOf(r.mouser);
       const digikeyStock = stockOf(r.digikey);
       const onlinecompStock = stockOf(r.onlinecomp);
+      const farnellStock = stockOf(r.farnell);
       const paintStock=(id,val)=>{
         const el=document.getElementById(id); if(!el) return;
         if(val===''){ el.textContent='—'; el.style.color='var(--muted)'; el.title=''; return; }
@@ -304,14 +312,15 @@ export async function runFCCheckModal(items, mode){
       paintStock(`fc-ms-${i}`, mouserStock);
       paintStock(`fc-ds-${i}`, digikeyStock);
       paintStock(`fc-os-${i}`, onlinecompStock);
+      paintStock(`fc-fs-${i}`, farnellStock);
 
       // A label or marker nobody prices (and no Priority price) is costed at the
       // nominal label price — say so, rather than a bare "Not found".
       const _nominal=_sdIsLabelRow(it) && !(prPrice>0) && !(r.best && r.best.price>0);
       if(!r.best){
         if(_nominal) setStatus(i,`nominal $${SD_NOMINAL_LABEL_PRICE.toFixed(2)}`,'#B45309',`No supplier price for this label/marker — Part Cost uses the nominal label price, $${SD_NOMINAL_LABEL_PRICE.toFixed(2)} per piece. Type a price in Part Cost if you have a real one.`);
-        else setStatus(i,'Not found','var(--muted)',
-          'None of the distributors lists this part number.');
+        else setStatus(i,`Not found · <a href="${esc(_sdSearchUrls(it.part_number).farnell)}" target="_blank" rel="noopener noreferrer" style="color:#1d4ed8">Farnell ↗</a>`,'var(--muted)',
+          'None of the distributors lists this part number. The link searches Farnell for it.');
         return;
       }
       found++;
@@ -400,9 +409,22 @@ export async function runFCCheckModal(items, mode){
                          pn:String(c.pn||'').slice(0,60), mfr:String(c.mfr||'').slice(0,40),
                          desc:String(c.desc||'').slice(0,90), score:c.score||0,
                          price:+c.price||0})) : [],
+        farnell_match: matchCode(r.farnell),
+        farnell_mpn:   r.farnell ? (r.farnell.mpn||'') : '',
+        farnell_url:   r.farnell ? String(r.farnell.url||'').slice(0,400) : '',
+        farnell_brk:   r.farnell ? (parseInt(r.farnell.breakQty,10)||0) : 0,
+        farnell_mfr:   r.farnell ? (r.farnell.manufacturer||'') : '',
+        farnell_alts:  r.farnell ? (r.farnell.considered||1) : 0,
+        farnell_desc:  r.farnell ? String(r.farnell.desc||'').slice(0,160) : '',
+        farnell_by:    r.farnell ? (r.farnell.chosenBy||'') : '',
+        farnell_uom:   r.farnell ? (r.farnell.uom||'') : '',
+        farnell_cands: r.farnell ? (r.farnell.candidates||[]).slice(0,6).map(c=>({
+                         pn:String(c.pn||'').slice(0,60), mfr:String(c.mfr||'').slice(0,40),
+                         desc:String(c.desc||'').slice(0,90), score:c.score||0,
+                         price:+c.price||0})) : [],
       };
 
-      const stockFields={ mouser_stock:mouserStock, digikey_stock:digikeyStock, onlinecomp_stock:onlinecompStock };
+      const stockFields={ mouser_stock:mouserStock, digikey_stock:digikeyStock, onlinecomp_stock:onlinecompStock, farnell_stock:farnellStock };
       // Legacy single field kept in step with the winning vendor so older rows
       // and any code still reading `stock` don't suddenly go blank.
       const stock=String(r.best ? (parseInt(r.best.stock,10)||0) : 0);
@@ -410,7 +432,7 @@ export async function runFCCheckModal(items, mode){
         if(it._id){
           try{
             const patch={
-              mouser_price:moNum, digikey_price:dkNum, onlinecomp_price:ocNum, ...matchFields, ...stockFields,
+              mouser_price:moNum, digikey_price:dkNum, onlinecomp_price:ocNum, farnell_price:faNum, ...matchFields, ...stockFields,
               stock, qty:1, ...(_packFound ? {pack_ml:_packFound} : {})
             };
             if(newMfr) patch.manufacturer=newMfr;
@@ -422,7 +444,7 @@ export async function runFCCheckModal(items, mode){
             await updatePartFields(it._id,patch);
             const ap=S.allParts.find(p=>p._id===it._id);
             if(ap){
-              ap.mouser_price=moNum; ap.digikey_price=dkNum; ap.onlinecomp_price=ocNum; ap.stock=stock;
+              ap.mouser_price=moNum; ap.digikey_price=dkNum; ap.onlinecomp_price=ocNum; ap.farnell_price=faNum; ap.stock=stock;
               Object.assign(ap, matchFields, stockFields);
               if(newMfr) ap.manufacturer=newMfr;
               if(patch.part_number){ ap.part_number=patch.part_number; ap.manufacturer=chosenMfr||ap.manufacturer; }
@@ -435,6 +457,7 @@ export async function runFCCheckModal(items, mode){
           sdItems[sdIdx].mouser_price=moNum;
           sdItems[sdIdx].digikey_price=dkNum;
           sdItems[sdIdx].onlinecomp_price=ocNum;
+          sdItems[sdIdx].farnell_price=faNum;
           if(_packFound && !(parseFloat(sdItems[sdIdx].pack_ml)>0)) sdItems[sdIdx].pack_ml=_packFound;
           Object.assign(sdItems[sdIdx], matchFields, stockFields);
           if(newMfr) sdItems[sdIdx].manufacturer=newMfr;
@@ -451,12 +474,12 @@ export async function runFCCheckModal(items, mode){
             const existing=S.allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
             if(existing){
               const sdPatch={
-                mouser_price:moNum, digikey_price:dkNum, onlinecomp_price:ocNum, ...matchFields, ...stockFields,
+                mouser_price:moNum, digikey_price:dkNum, onlinecomp_price:ocNum, farnell_price:faNum, ...matchFields, ...stockFields,
                 stock, qty:1, ...(_packFound && !(parseFloat(existing.pack_ml)>0) ? {pack_ml:_packFound} : {})
               };
               if(newMfr) sdPatch.manufacturer=newMfr;
               await updatePartFields(existing._id,sdPatch);
-              existing.mouser_price=moNum; existing.digikey_price=dkNum; existing.onlinecomp_price=ocNum; existing.stock=stock;
+              existing.mouser_price=moNum; existing.digikey_price=dkNum; existing.onlinecomp_price=ocNum; existing.farnell_price=faNum; existing.stock=stock;
               Object.assign(existing, matchFields, stockFields);
               if(newMfr) existing.manufacturer=newMfr;
             } else {
@@ -467,10 +490,10 @@ export async function runFCCheckModal(items, mode){
                 unit:it.unit, ...(_packFound?{pack_ml:_packFound}:{})}).filter(([,v])=>v!=null && v!==''));
               await mergePartDoc(key,{
                 part_number:pn, ...known, qty:1, stock, ...matchFields, ...stockFields,
-                mouser_price:moNum, digikey_price:dkNum, onlinecomp_price:ocNum, deleted:false
+                mouser_price:moNum, digikey_price:dkNum, onlinecomp_price:ocNum, farnell_price:faNum, deleted:false
               });
               S.allParts.push({_id:key, part_number:pn, qty:1, stock, ...matchFields, ...stockFields,
-                mouser_price:moNum, digikey_price:dkNum, onlinecomp_price:ocNum, manufacturer:newMfr||''});
+                mouser_price:moNum, digikey_price:dkNum, onlinecomp_price:ocNum, farnell_price:faNum, manufacturer:newMfr||''});
             }
           }
         }catch(e){ console.warn('price->Database save error:',e.message); }

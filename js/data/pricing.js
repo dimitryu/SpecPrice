@@ -127,6 +127,7 @@ export const _FC_DISTRIBUTORS=[
   [/future ?electronics/, 'Future Electronics'],
   [/verical/,      'Verical'],
   [/onlinecomponents/, 'OnlineComponents'],
+  [/farnell|element14|newark/, 'Farnell'],
   [/bisco/,        'Bisco'],
   [/allied/,       'Allied'],
 ];
@@ -142,7 +143,7 @@ export function _fcPrettyDistributor(haystack){
 // legitimate answer, only for an actual transport/credential failure.
 export async function lookupPartPrices(partNumber, qty=0, desc=''){
   const data=await _apiPriceLookup(partNumber, qty||1, desc);
-  if(!data) return {mouser:null, digikey:null, onlinecomp:null, best:null, errors:[]};
+  if(!data) return {mouser:null, digikey:null, onlinecomp:null, farnell:null, best:null, errors:[]};
   // Keep an entry whenever the vendor LISTS the part, even at price 0.
   // A non-stocked or quote-only part still answers the question "does this
   // exist and where?", and dropping it was reporting real parts as missing.
@@ -158,16 +159,16 @@ export async function lookupPartPrices(partNumber, qty=0, desc=''){
     considered:v.considered||1, descScore:v.descScore||0, desc:v.desc||'',
     candidates:Array.isArray(v.candidates)?v.candidates:[],
     chosenBy:v.chosenBy||'',
-    // Online Components states the unit it prices by (EA, FT, M …).
+    // Online Components and Farnell state the unit they price by (EA, FT, M …).
     uom:v.uom||'',
   } : null;
-  const mouser=norm(data.mouser), digikey=norm(data.digikey), onlinecomp=norm(data.onlinecomp);
+  const mouser=norm(data.mouser), digikey=norm(data.digikey), onlinecomp=norm(data.onlinecomp), farnell=norm(data.farnell);
   const listed=[mouser&&{...mouser,name:'Mouser'}, digikey&&{...digikey,name:'DigiKey'},
-                onlinecomp&&{...onlinecomp,name:'Online Comp.'}].filter(Boolean);
+                onlinecomp&&{...onlinecomp,name:'Online Comp.'}, farnell&&{...farnell,name:'Farnell'}].filter(Boolean);
   // "best" = cheapest among those that actually quoted a price; if nobody did,
   // fall back to any listing so the caller still gets stock and a link.
   const priced=listed.filter(v=>v.price>0);
   const best = priced.length ? priced.reduce((a,b)=>b.price<a.price?b:a)
              : (listed[0]||null);
-  return {mouser, digikey, onlinecomp, best, listed, errors:data.errors||[]};
+  return {mouser, digikey, onlinecomp, farnell, best, listed, errors:data.errors||[]};
 }

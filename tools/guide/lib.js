@@ -39,6 +39,7 @@ function partsJS(){
     const f={part_number:pn,drawing_number:dwg,drawing_name:dname,atlantium_pn:cpn,description:desc,manufacturer:mfr,qty,unit,own_stock:own};
     if(mo!==''){ f.mouser_price=mo; f.mouser_stock=String(mos); f.mouser_match='exact'; }
     if(dk!==''){ f.digikey_price=dk; f.digikey_stock=String(dks); f.digikey_match='exact'; }
+    if(FA[pn]){ f.farnell_price=FA[pn][0]; f.farnell_stock=String(FA[pn][1]); f.farnell_match='exact'; if(/^(WL|GR|HS)-/.test(pn)) f.farnell_uom='M'; }
     if(OC[pn]){ f.onlinecomp_price=OC[pn][0]; f.onlinecomp_stock=String(OC[pn][1]); f.onlinecomp_match='exact'; if(/^(WL|GR|HS)-/.test(pn)) f.onlinecomp_uom='M'; }
     if(pr!=='') f.priority_price=pr;
     return `'${pn}':Object.assign(${JSON.stringify(f)},{updatedAt:${ts(i%9+1)}})`;
@@ -164,6 +165,10 @@ PRICE['HT-RL6']={mo:96.4,mos:22,dk:104.1,dks:9,mfr:'ProCrimp',desc:'HAND CRIMP T
 const OC={'DCX-4P-90':[11.95,310],'WL-14-3C':[2.09,5400],'TF-2.5-BU':[0.055,72000],'HS-12-BK':[1.02,450],'DCX-8S-ST':[18.20,95],
   'PC-24-S':[0.40,22000],'CT-100-BK':[0.028,150000],'RL-M6-6':[0.21,8000],'HT-RL6':[99.8,6]};
 Object.entries(OC).forEach(([pn,[oc,ocs]])=>{ if(PRICE[pn]){ PRICE[pn].oc=oc; PRICE[pn].ocs=ocs; } });
+// Farnell demo prices (fifth distributor).
+const FA={'DCX-4P-90':[12.10,140],'WL-14-3C':[2.30,900],'TF-2.5-BU':[0.058,40000],'HS-12-BK':[1.15,220],'LB-25-WH':[0.16,8000],
+  'DCX-8S-ST':[18.60,40],'PC-24-S':[0.37,12000],'BS-8-ST':[6.10,25],'GR-6-YG':[1.35,1500],'HT-RL6':[94.9,4]};
+Object.entries(FA).forEach(([pn,[fa,fas]])=>{ if(PRICE[pn]){ PRICE[pn].fa=fa; PRICE[pn].fas=fas; } });
 
 async function open(opts={}){
   const b=await chromium.launch(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{});
@@ -190,8 +195,8 @@ async function open(opts={}){
       const pn=u.searchParams.get('pn'), p=PRICE[pn];
       if(opts.priceDelay) await new Promise(res=>setTimeout(res,opts.priceDelay));
       const v=(price,stock,site)=>price===''||price==null?null:{price,stock:String(stock),mpn:pn,manufacturer:p.mfr,breakQty:1,exactMatch:true,desc:p.desc,
-        url: site==='m' ? `https://www.mouser.com/ProductDetail/${encodeURIComponent(p.mfr)}/${encodeURIComponent(pn)}` : site==='o' ? `https://www.onlinecomponents.com/en/productdetail/${encodeURIComponent(p.mfr.toLowerCase())}/${encodeURIComponent(pn.toLowerCase())}.html` : `https://www.digikey.com/en/products/detail/${encodeURIComponent(p.mfr.toLowerCase())}/${encodeURIComponent(pn)}`, uom:site==='o'&&/^(WL|GR|HS)-/.test(pn)?'M':'EA'};
-      return json({pn,qty:1,mouser:p?v(p.mo,p.mos,'m'):null,digikey:p?v(p.dk,p.dks,'d'):null,onlinecomp:p?v(p.oc,p.ocs,'o'):null,errors:[]});
+        url: site==='m' ? `https://www.mouser.com/ProductDetail/${encodeURIComponent(p.mfr)}/${encodeURIComponent(pn)}` : site==='o' ? `https://www.onlinecomponents.com/en/productdetail/${encodeURIComponent(p.mfr.toLowerCase())}/${encodeURIComponent(pn.toLowerCase())}.html` : site==='f' ? `https://il.farnell.com/${encodeURIComponent(p.mfr.toLowerCase())}/${encodeURIComponent(pn.toLowerCase())}/dp/${1000000+pn.length*7919}` : `https://www.digikey.com/en/products/detail/${encodeURIComponent(p.mfr.toLowerCase())}/${encodeURIComponent(pn)}`, uom:(site==='o'||site==='f')&&/^(WL|GR|HS)-/.test(pn)?'M':'EA'};
+      return json({pn,qty:1,mouser:p?v(p.mo,p.mos,'m'):null,digikey:p?v(p.dk,p.dks,'d'):null,onlinecomp:p?v(p.oc,p.ocs,'o'):null,farnell:p?v(p.fa,p.fas,'f'):null,errors:[]});
     }
     if(u.pathname==='/priceProxy'){
       const cur=(decodeURIComponent(u.search).match(/([A-Z]{3})_USD/)||[])[1]||'ILS';
@@ -199,10 +204,10 @@ async function open(opts={}){
       return r.fulfill({status:200,contentType:'text/html',body:'<html><body>'+'x'.repeat(300)+` 1 ${cur} = ${rate} USD </body></html>`});
     }
     if(u.pathname==='/apiConfig'){
-      if(m==='GET') return json({mouser:{configured:true,hint:'…7f2a',source:'ui'},digikey:{configured:true,clientIdHint:'…91cc',secretHint:'…04de',source:'ui'},onlinecomp:{configured:true,hint:'…d3e8',apiName:'cgpriceavailability',source:'ui'},
+      if(m==='GET') return json({mouser:{configured:true,hint:'…7f2a',source:'ui'},digikey:{configured:true,clientIdHint:'…91cc',secretHint:'…04de',source:'ui'},onlinecomp:{configured:true,hint:'…d3e8',apiName:'cgpriceavailability',source:'ui'},farnell:{configured:true,hint:'…k7mp',store:'il.farnell.com',source:'ui'},
         updatedAt:new Date(NOW-20*86400000).toISOString(),updatedBy:'dana.cohen@demo-co.com',
         anthropic:{configured:true,hint:'…x9Qa',source:'ui',updatedAt:new Date(NOW-3*86400000).toISOString(),updatedBy:'dana.cohen@demo-co.com'}});
-      return json({ok:true,message:'Connected — the key works',mouser:{ok:true,message:'Found — $1.10 @ qty 1'},digikey:{ok:true,message:'Found — $0.95 @ qty 1'},onlinecomp:{ok:true,message:'Found — $1.02 @ qty 1'},pn:'HS-12-BK'});
+      return json({ok:true,message:'Connected — the key works',mouser:{ok:true,message:'Found — $1.10 @ qty 1'},digikey:{ok:true,message:'Found — $0.95 @ qty 1'},onlinecomp:{ok:true,message:'Found — $1.02 @ qty 1'},farnell:{ok:true,message:'Found — $1.15 @ qty 1'},pn:'HS-12-BK'});
     }
     return json({});
   });

@@ -42,6 +42,8 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
       {drawing_number:'D2', part_number:'LAB-2', description:'LABEL, PRINTABLE', qty:3, unit:'pc'},
       {drawing_number:'D2', part_number:'MRK-3', description:'MARKER SLEEVE', qty:2, unit:'pc', mouser_price:0.35},
       {drawing_number:'D2', part_number:'OC-1', description:'TERMINAL', qty:2, unit:'pc', mouser_price:6, onlinecomp_price:4.5, onlinecomp_match:'exact'},
+      {drawing_number:'D2', part_number:'FA-1', description:'SPLICE', qty:4, unit:'pc', mouser_price:1, onlinecomp_price:0.9, farnell_price:0.5, farnell_match:'exact'},
+      {drawing_number:'D2', part_number:'FA-2', description:'WIRE', qty:2000, unit:'mm', mouser_price:1, farnell_price:1.2, farnell_uom:'M', farnell_match:'exact'},
       {drawing_number:'D2', revision:'C', part_number:'CS-4', description:'CABLE FROM CUSTOMER', qty:3, unit:'pc', mouser_price:5, customer_supplied:true},
       {drawing_number:'D2', part_number:'TL-2', description:'INSERTION TOOL for CON-2', qty:1, unit:'pc', tool_for:'CON-2',
        est_price:120, mouser_price:96.5, mouser_brk:1, mouser_url:'https://www.mouser.com/ProductDetail/TL-2'},
@@ -60,13 +62,13 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
   const cells=[]; ws.eachRow(r=>r.eachCell(c=>cells.push(c)));
   const find=re=>cells.find(c=>typeof c.value==='string' && re.test(c.value));
   const label=re=>cells.find(c=>c.col===1 && typeof c.value==='string' && re.test(c.value));
-  const right=(cell)=>ws.getCell(cell.row, 15);           // values sit in column O
+  const right=(cell)=>ws.getCell(cell.row, 17);           // values sit in column Q
   const head=find(/^Mouser Price$/);
   ok('columns: the price columns are per-unit prices', !!head && !!find(/^Priority Price$/) && !find(/^Mouser Cost$/));
   ok('columns: the header explains feet / metres', /per FOOT/.test((head||{}).note?.texts?.map(t=>t.text).join('')||head?.note||''));
 
   const rowOf=pn=>cells.find(c=>c.col===3 && c.value===pn).row;
-  const pc=pn=>ws.getCell(rowOf(pn),15).value;
+  const pc=pn=>ws.getCell(rowOf(pn),17).value;
   const item=pn=>items.find(r=>r.part_number===pn);
   ['CAB-1','CON-1','LAB-1','TL-1','CON-2'].forEach(pn=>{
     const v=pc(pn);
@@ -76,14 +78,14 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
   const cab=rowOf('CAB-1');
   ok('cable: QTY and the per-foot / per-metre prices feed the formula',
      /F\d+/.test(pc('CAB-1').formula) && /304\.8/.test(pc('CAB-1').formula) && /1000/.test(pc('CAB-1').formula));
-  ok('cable: Mouser shows "/ft", Priority "/m"', /\/ft/.test(ws.getCell(cab,8).numFmt) && /\/m/.test(ws.getCell(cab,14).numFmt));
+  ok('cable: Mouser shows "/ft", Priority "/m"', /\/ft/.test(ws.getCell(cab,8).numFmt) && /\/m/.test(ws.getCell(cab,16).numFmt));
   ok('cable: the unit price itself is in the cell, not the line cost', near(ws.getCell(cab,8).value, 2.15));
   ok('manual price: follows QTY as a per-unit price', /^0\.15\*F\d+$/.test(pc('LAB-1').formula));
   ok('tool: priced from its estimate when no source has it', /185\*F/.test(pc('TL-1').formula));
 
   const d1=S.groups.find(x=>x.dwg==='D1'), d2=S.groups.find(x=>x.dwg==='D2');
   const parts=label(/^Parts {2}\(per cable — parts table ÷ 10\)$/);
-  ok('parts: sum of the table less the tool, per cable', parts && /SUM\(O\d+:O\d+\)-\(O\d+\)\)\/10/.test(right(parts).value.formula)
+  ok('parts: sum of the table less the tool, per cable', parts && /SUM\(Q\d+:Q\d+\)-\(Q\d+\)\)\/10/.test(right(parts).value.formula)
      && near(right(parts).value.result, d1.partsTotalPerUnit));
   const minutes=label(/^Labor time/), rate=label(/^Labor rate/), pct=label(/^Profit %$/);
   ok('inputs: minutes, rate and profit are plain editable values',
@@ -107,21 +109,26 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
   ok('tool 1: for its connector', ws.getCell(t1,7).value==='CON-1');
   ok('tool 1: priced by the AI estimate, and says so', ws.getCell(t1,9).value==='AI estimate — not verified');
   ok('tool 1: links a Mouser search to check it', /mouser\.com\/c\/\?q=TL-1/.test(ws.getCell(t1,11).value.hyperlink||''));
-  ok('tool 2: priced from Mouser', ws.getCell(t2,9).value==='Mouser' && near(ws.getCell(t2,15).value.result,96.5));
+  ok('tool 2: priced from Mouser', ws.getCell(t2,9).value==='Mouser' && near(ws.getCell(t2,17).value.result,96.5));
   ok('tool 2: links the product page the price came from', ws.getCell(t2,11).value.hyperlink==='https://www.mouser.com/ProductDetail/TL-2');
   const S2=x=>vm.runInContext(`_sdPriceSource(sdItems.find(r=>r.part_number==='${x}'))`, ctx);
   // Labels/markers: a supplier price wins; with none, the nominal $0.20 per piece.
   ok('label: no price → nominal $0.20 × 3 pieces', near(item('LAB-2').total,0.6) && S2('LAB-2').kind==='nominal');
   ok('label: ...the same fallback as an Excel formula, with a note', /^IF\(.*,0\.2\*F\d+\)$/.test(pc('LAB-2').formula) && near(pc('LAB-2').result,0.6)
-     && /Nominal label price/.test(ws.getCell(rowOf('LAB-2'),15).note||''));
+     && /Nominal label price/.test(ws.getCell(rowOf('LAB-2'),17).note||''));
   ok('customer supplied: Part Cost is 0 in the app and in Excel, with a note',
-     item('CS-4').total===0 && pc('CS-4').formula==='0' && /Customer-supplied/.test(ws.getCell(rowOf('CS-4'),15).note||''));
+     item('CS-4').total===0 && pc('CS-4').formula==='0' && /Customer-supplied/.test(ws.getCell(rowOf('CS-4'),17).note||''));
   ok('customer supplied: marked in the description and listed under the drawing',
      /CUSTOMER SUPPLIED/.test(ws.getCell(rowOf('CS-4'),4).value) && !!find(/D2: 1 customer-supplied item\(s\).*CS-4/));
   ok('revision: shown in the drawing heading', !!find(/^DRAWING D2\s+REV C/));
   ok('Online Components: the cheapest price wins, in the app and as a formula over its column (L)',
      near(item('OC-1').total,9) && S2('OC-1').kind==='onlinecomp' && /L\d+/.test(pc('OC-1').formula) && near(pc('OC-1').result,9)
      && ws.getCell(rowOf('OC-1'),12).value===4.5 && cells.some(c=>c.value==='Online Comp. Price'));
+  ok('Farnell: the cheapest price wins, in the app and as a formula over its column (N)',
+     near(item('FA-1').total,2) && S2('FA-1').kind==='farnell' && /N\d+/.test(pc('FA-1').formula) && near(pc('FA-1').result,2)
+     && ws.getCell(rowOf('FA-1'),14).value===0.5 && cells.some(c=>c.value==='Farnell Price'));
+  ok('Farnell: cable sold by the metre is costed per metre (2000 mm × $1.20/m = $2.40, below Mouser $1/ft = $6.56)',
+     near(item('FA-2').total,2.4) && near(pc('FA-2').result,2.4) && /\/m/.test(ws.getCell(rowOf('FA-2'),14).numFmt));
   ok('label: a marker with a Mouser price uses that price', near(item('MRK-3').total,0.7) && S2('MRK-3').kind==='mouser');
   ok('source: the cheapest verified price wins over the estimate', S2('TL-2').kind==='mouser' && S2('TL-1').kind==='ai');
   ok('source: a manual price is reported as such', S2('LAB-1').kind==='manual');

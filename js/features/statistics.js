@@ -120,7 +120,7 @@ export function _statDrawings(logs){
 }
 // Price coverage: of the parts in the Database, how many carry a price from any
 // source. Answers "can we actually quote what we hold?".
-export const _STAT_PRICE_FIELDS=['priority_price','mouser_price','digikey_price','onlinecomp_price'];
+export const _STAT_PRICE_FIELDS=['priority_price','mouser_price','digikey_price','onlinecomp_price','farnell_price'];
 export function _statCoverage(parts){
   let withPrice=0;
   const byDwg={};

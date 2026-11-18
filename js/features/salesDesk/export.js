@@ -24,6 +24,7 @@ export function exportPartStockExcel(rows, totalCount, cols){
       if(c.k==='mouser_price') return parseFloat(p.mouser_price)||'';
       if(c.k==='digikey_price') return parseFloat(p.digikey_price)||'';
       if(c.k==='onlinecomp_price') return parseFloat(p.onlinecomp_price)||'';
+      if(c.k==='farnell_price') return parseFloat(p.farnell_price)||'';
       if(c.k==='unit') return p.unit||p.units||'';
       if(c.k==='rfq_names') return (p.rfq_names||[]).join(', ');
       // One line per drawing, as on screen: number · Rev · QTY · Customer PN.
@@ -97,14 +98,14 @@ export async function exportSalesDeskExcel(){
     });
 
     const COLS=['Item','Drawing #','MNF P/N','Description','Manufacturer','QTY','Units',
-                'Mouser Price','Mouser Stock','DigiKey Price','DigiKey Stock','Online Comp. Price','Online Comp. Stock',
+                'Mouser Price','Mouser Stock','DigiKey Price','DigiKey Stock','Online Comp. Price','Online Comp. Stock','Farnell Price','Farnell Stock',
                 'Priority Price','Part Cost','Labor Time (min)'];
-    const LAST=COLS.length;                 // 16 columns, A..P
-    // Where things are (0-based within a parts row): the three distributor
-    // prices, Priority, Part Cost (column O) and labor.
-    const C_MO=7, C_DK=9, C_OC=11, C_PR=13, C_COST=14, C_LAB=15;
+    const LAST=COLS.length;                 // 18 columns, A..R
+    // Where things are (0-based within a parts row): the four distributor
+    // prices, Priority, Part Cost (column Q) and labor.
+    const C_MO=7, C_DK=9, C_OC=11, C_FA=13, C_PR=15, C_COST=16, C_LAB=17;
     ws.columns=[{width:6},{width:18},{width:24},{width:40},{width:22},{width:9},{width:8},
-                {width:13},{width:12},{width:13},{width:12},{width:13},{width:12},{width:13},{width:12},{width:15}];
+                {width:13},{width:12},{width:13},{width:12},{width:13},{width:12},{width:13},{width:12},{width:13},{width:12},{width:15}];
 
     const merge=(r,c1,c2)=>ws.mergeCells(r,c1,r,c2);
     const fill=(cell,argb)=>{cell.fill={type:'pattern',pattern:'solid',fgColor:{argb}};};
@@ -301,8 +302,9 @@ export async function exportSalesDeskExcel(){
       [C_MO]:'Price per unit from Mouser. On a cable row (unit mm) it is per FOOT. Edit it and Part Cost and the totals update.',
       [C_DK]:'Price per unit from DigiKey. On a cable row (unit mm) it is per FOOT. Edit it and Part Cost and the totals update.',
       [C_OC]:'Price per unit from Online Components. On a cable row (unit mm) it is per FOOT, or per METRE when they sell it by the metre. Edit it and Part Cost and the totals update.',
+      [C_FA]:'Price per unit from Farnell (per piece; a part sold in packs is the pack price over its pieces). On a cable row (unit mm) it is per METRE when Farnell sells it by the metre, otherwise per FOOT. Edit it and Part Cost and the totals update.',
       [C_PR]:'Price per unit from Priority. On a cable row (unit mm) it is per METRE. Edit it and Part Cost and the totals update.',
-      [C_COST]:'The cheapest of the four prices for this row\'s QTY (mm converted to ft for Mouser/DigiKey/Online Comp., to m for Priority).',
+      [C_COST]:'The cheapest of the five prices for this row\'s QTY (mm converted to ft for Mouser/DigiKey, to m for Priority, by their own unit for Online Comp./Farnell).',
     };
     const bomHeaderRow=()=>{
       const hr=row;
@@ -341,6 +343,7 @@ export async function exportSalesDeskExcel(){
         const mo=r.mouser_match==='noprice'?null:_num(r.mouser_price);
         const dk=r.digikey_match==='noprice'?null:_num(r.digikey_price);
         const oc=r.onlinecomp_match==='noprice'?null:_num(r.onlinecomp_price);
+        const fa=r.farnell_match==='noprice'?null:_num(r.farnell_price);
         const pr=_num(r.priority_price);
         // Part Cost. Manual price in the app → kept as a per-unit price, so a
         // QTY change still moves it. No price anywhere → the estimate (tools).
@@ -361,19 +364,21 @@ export async function exportSalesDeskExcel(){
           const a=`IF(N(H${n})>0,H${n}*${q}*${ml?1:K_DIST(n)},9E+99)`;
           const b=`IF(N(J${n})>0,J${n}*${q}*${ml?1:K_DIST(n)},9E+99)`;
           const d=`IF(N(L${n})>0,L${n}*${q}*${ml?1:(ocPerM?K_PRI(n):K_DIST(n))},9E+99)`;
-          const c=`IF(N(N${n})>0,N${n}*${q}*${ml?1:K_PRI(n)},9E+99)`;
+          const faPerM=/^(M|MTR|METER|METRE)$/i.test(String(r.farnell_uom||'').trim());
+          const e=`IF(N(N${n})>0,N${n}*${q}*${ml?1:(faPerM?K_PRI(n):K_DIST(n))},9E+99)`;
+          const c=`IF(N(P${n})>0,P${n}*${q}*${ml?1:K_PRI(n)},9E+99)`;
           const est=_num(r.est_price);
           // Same order as the app: a label/marker with no price takes the
           // nominal label price (per piece; one label on a row not counted in pieces).
           const pcs=!['mm','gr'].includes(String(r.unit||'').trim().toLowerCase());
           const fb = _sdIsLabelRow(r) ? (pcs ? `${SD_NOMINAL_LABEL_PRICE}*F${n}` : `${SD_NOMINAL_LABEL_PRICE}`)
                    : est ? `${est}*F${n}*${K_DIST(n)}` : '0';
-          cost=F(`IF(MIN(${a},${b},${d},${c})<9E+98,MIN(${a},${b},${d},${c}),${fb})`, r.total||0);
+          cost=F(`IF(MIN(${a},${b},${d},${e},${c})<9E+98,MIN(${a},${b},${d},${e},${c}),${fb})`, r.total||0);
         }
         const _bt=_sdBottlesText(r);
         const vals=[itemNo, r.drawing_number||'', r.part_number||'', (r.description||'')+(_bt?` — buy ${_bt}`:''),
                     r.manufacturer||'', qty, r.unit||'',
-                    mo, stockVal('mouser_stock'), dk, stockVal('digikey_stock'), oc, stockVal('onlinecomp_stock'), pr,
+                    mo, stockVal('mouser_stock'), dk, stockVal('digikey_stock'), oc, stockVal('onlinecomp_stock'), fa, stockVal('farnell_stock'), pr,
                     cost, +(r.labor_total||0)];
         vals.forEach((v,ci)=>{
           const c=ws.getCell(row,ci+1);
@@ -382,16 +387,18 @@ export async function exportSalesDeskExcel(){
           c.border=_xlBoxed;
           if(ci===C_MO||ci===C_DK) c.numFmt = mm ? '$#,##0.0000" /ft"' : '$#,##0.0000';
           if(ci===C_OC) c.numFmt = mm ? (/^(M|MTR|METER|METRE)$/i.test(String(r.onlinecomp_uom||'').trim()) ? '$#,##0.0000" /m"' : '$#,##0.0000" /ft"') : '$#,##0.0000';
+          if(ci===C_FA) c.numFmt = mm ? (/^(M|MTR|METER|METRE)$/i.test(String(r.farnell_uom||'').trim()) ? '$#,##0.0000" /m"' : '$#,##0.0000" /ft"') : '$#,##0.0000';
           if(ci===C_PR) c.numFmt = mm ? '$#,##0.0000" /m"'  : '$#,##0.0000';
           if(ci===C_COST) c.numFmt='$#,##0.00';
-          if(ci===C_MO+1||ci===C_DK+1||ci===C_OC+1) c.numFmt='#,##0';
+          if(ci===C_MO+1||ci===C_DK+1||ci===C_OC+1||ci===C_FA+1) c.numFmt='#,##0';
           if(ci===C_LAB) c.numFmt='0.0';
           if(ci===5)  c.numFmt='#,##0.###';
           let matchFlagged=false;
-          if(ci===C_MO||ci===C_DK||ci===C_OC){
+          if(ci===C_MO||ci===C_DK||ci===C_OC||ci===C_FA){
             const cfg = ci===C_MO ? {code:'mouser_match', mpn:'mouser_mpn', name:'Mouser'}
                       : ci===C_DK ? {code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey'}
-                                  : {code:'onlinecomp_match', mpn:'onlinecomp_mpn', name:'Online Components'};
+                      : ci===C_OC ? {code:'onlinecomp_match', mpn:'onlinecomp_mpn', name:'Online Components'}
+                                  : {code:'farnell_match', mpn:'farnell_mpn', name:'Farnell'};
             const code=r[cfg.code]||'';
             if(code==='approx'){
               c.font={...c.font, color:{argb:'FF92400E'}};
@@ -440,7 +447,7 @@ export async function exportSalesDeskExcel(){
       // This drawing's own price build-up, immediately under its parts — as
       // formulas over the cells above, with its three settings as yellow inputs.
       const U=g.units;
-      const partsSum = `SUM(O${firstRow}:O${lastRow})` + (toolCells.length ? `-(${toolCells.map(t=>t.cell).join('+')})` : '');
+      const partsSum = `SUM(Q${firstRow}:Q${lastRow})` + (toolCells.length ? `-(${toolCells.map(t=>t.cell).join('+')})` : '');
       const b={g};
       b.minutes=A(row,LAST-1);
       money('Labor time  (minutes per cable)', +(+g.laborMinutesPerUnit).toFixed(2), {fmt:'0.0', bold:false});

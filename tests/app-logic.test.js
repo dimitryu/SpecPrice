@@ -2566,6 +2566,27 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('tool price fields from Online Components', [tf.onlinecomp_price, tf.onlinecomp_stock, tf.onlinecomp_brk, tf.onlinecomp_match, tf.onlinecomp_uom], [0.19,'32358',70,'exact','EA']);
 }
 
+// ─────────────────────────────────────────── v1.69: Farnell as a fifth price source
+{
+  const lc=G('_sdLineCost');
+  t('Farnell: per piece', lc({qty:4, unit:'pc', farnell_price:0.5},'farnell_price'), 2);
+  t('Farnell: cable by the metre', +lc({qty:2000, unit:'mm', farnell_price:1.2, farnell_uom:'M'},'farnell_price').toFixed(6), 2.4);
+  t('Farnell: cable not by the metre is per foot', +lc({qty:304.8, unit:'mm', farnell_price:1},'farnell_price').toFixed(6), 1);
+  const r={part_number:'FA-9', qty:4, unit:'pc', mouser_price:1, onlinecomp_price:0.9, farnell_price:0.5};
+  G('_sdRecalcTotal')(r);
+  t('Part Cost: the cheapest of the five sources', [r.total, r._costSource], [2,'farnell_price']);
+  const src=G('_sdPriceSource')(r);
+  t('price source: Farnell, linked to its search when no product page', [src.kind, src.url], ['farnell','https://il.farnell.com/search?st=FA-9']);
+  t('Farnell search link by part number', G('_sdSearchUrls')('39-00-0047').farnell, 'https://il.farnell.com/search?st=39-00-0047');
+  ok('Database and Sales Desk show its price and stock', ['farnell_price','farnell_stock'].every(k=>G('_PS_DEFAULT_COLS').some(c=>c.k===k) && G('_SD_DEFAULT_COLS').some(c=>c.k===k)));
+  ok('saved to the Database with the other prices', G('_SD_DB_NUM').includes('farnell_price') && G('_SD_DB_TEXT').includes('farnell_url') && G('_SD_DB_TEXT').includes('farnell_uom'));
+  const tf=G('_toolPriceFields')({farnell:{price:96.4,stock:'3',url:'https://il.farnell.com/x/dp/1',breakQty:1,exact:true,mpn:'63819-1000',uom:'EA'}});
+  t('tool price fields from Farnell', [tf.farnell_price, tf.farnell_stock, tf.farnell_brk, tf.farnell_match, tf.farnell_uom], [96.4,'3',1,'exact','EA']);
+  const tr=G('_sdTraceFields')({farnell_url:'https://f/1', farnell_brk:10, farnell_uom:'M', farnell_stock:'5', farnell_match:'exact'});
+  t('Database part carries its Farnell link and unit to Sales Desk', [tr.farnell_url, tr.farnell_brk, tr.farnell_uom], ['https://f/1',10,'M']);
+  ok('Farnell counts in the statistics', G('_STAT_PRICE_FIELDS').includes('farnell_price'));
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

@@ -296,7 +296,8 @@ export function showBOMPreview(rows, body, foot, btnLabel, saveCallback){
       // prices and links found for it during the import.
       for(const k of ['tool_for','tool_source','tool_url','tool_in_db','tool_note','tool_pages','mouser_price','digikey_price','mouser_url','digikey_url',
                       'mouser_stock','digikey_stock','mouser_brk','digikey_brk','mouser_match','digikey_match','mouser_mpn','digikey_mpn',
-                      'onlinecomp_price','onlinecomp_url','onlinecomp_stock','onlinecomp_brk','onlinecomp_match','onlinecomp_mpn','onlinecomp_uom'])
+                      'onlinecomp_price','onlinecomp_url','onlinecomp_stock','onlinecomp_brk','onlinecomp_match','onlinecomp_mpn','onlinecomp_uom',
+                      'farnell_price','farnell_url','farnell_stock','farnell_brk','farnell_match','farnell_mpn','farnell_uom'])
         if(rows[origIdx] && rows[origIdx][k]!=null && rows[origIdx][k]!=='') row[k]=rows[origIdx][k];
       if(Object.values(row).some(v=>v)){
         row.customer_supplied=!!tr.querySelector('.pv-cust')?.checked;

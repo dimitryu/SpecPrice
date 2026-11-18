@@ -35,9 +35,11 @@ Module._load = function (req, ...rest) {
 };
 
 let upstreamCalls = [];
-let upstreamReply = { status: 200, body: '{"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}' };
+let upstreamReplyAt = null;
+let upstreamReplyDefault = { status: 200, body: '{"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}' };
 global.fetch = async (url, init) => {
   upstreamCalls.push({ url, init });
+  const upstreamReply = typeof upstreamReplyAt === 'function' ? (upstreamReplyAt(url, upstreamCalls.length) || upstreamReplyDefault) : upstreamReplyDefault;
   return {
     ok: upstreamReply.status < 300, status: upstreamReply.status,
     headers: { get: () => 'application/json' },
@@ -131,10 +133,10 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
   r = await call(P, { token: 'tUser', body: { ...req, tools: [{ type: 'bash_20250124', name: 'bash' }, { name: 'my_fn', input_schema: {} }] } });
   ok(!('tools' in JSON.parse(upstreamCalls.pop().init.body)), 'other tools are not forwarded');
 
-  upstreamReply = { status: 529, body: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}' };
+  upstreamReplyDefault = { status: 529, body: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}' };
   r = await call(P, { token: 'tUser', body: req });
   ok(r.status === 529 && r.json.error.message === 'Overloaded', 'Anthropic error status + message passed through');
-  upstreamReply = { status: 200, body: '{"content":[]}' };
+  upstreamReplyDefault = { status: 200, body: '{"content":[]}' };
 
   // ── limits ──
   r = await call(P, { token: 'tUser', body: { ...req, model: 'gpt-4o' } });
@@ -160,7 +162,7 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
   r = await call(C, { token: 'tAdmin', body: { onlinecomp_api_key: 'oc-secret-key-7777', onlinecomp_api_name: 'cgpriceavailability' } });
   ok(r.status === 200 && store['secure_config/distributor_api'].onlinecomp_api_key === 'oc-secret-key-7777', 'Online Components key saved');
   await new Promise(res => setTimeout(res, 0));
-  upstreamReply = { status: 200, body: JSON.stringify([
+  upstreamReplyDefault = { status: 200, body: JSON.stringify([
     { partNumber: 'D38999/26WC35SN', manufacturer: 'TE Connectivity / Deutsch', description: 'Circular plug', quantityAvailable: '36', unitOfMeasure: 'EA',
       productUrl: 'https://www.onlinecomponents.com/en/productdetail/te/d38999-1.html?utm_source=Radion', currency: 'USD',
       price_breaks: [{ pricebreak: '1', pricelist: '185.27' }, { pricebreak: '5', pricelist: '182.24' }] },
@@ -175,6 +177,47 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
   ok(r.json.onlinecomp && r.json.onlinecomp.url === 'https://www.onlinecomponents.com/en/productdetail/ae/d38999-2.html' && r.json.onlinecomp.uom === 'EA', 'Online Components: product page without referral tags, unit kept');
   r = await call(C, { method: 'GET', token: 'tAdmin' });
   ok(r.json.onlinecomp && r.json.onlinecomp.configured && r.json.onlinecomp.hint === '…7777' && !JSON.stringify(r.json).includes('oc-secret-key-7777'), 'Online Components: status shows a hint, never the key');
+
+  // ── Farnell (element14 Product Search API): key + store saved, lookup by manufacturer P/N ──
+  r = await call(C, { token: 'tAdmin', body: { farnell_api_key: 'fa-secret-key-4321', farnell_store: 'il.farnell.com' } });
+  ok(r.status === 200 && store['secure_config/distributor_api'].farnell_api_key === 'fa-secret-key-4321', 'Farnell key saved');
+  await new Promise(res => setTimeout(res, 0));
+  const FA_BODY = JSON.stringify({ manufacturerPartNumberSearchReturn: { numberOfResults: 3, products: [
+    { sku: '1012345', displayName: 'MOLEX - 39-00-0047 - CONTACT, SOCKET, CRIMP', productURL: 'https://il.farnell.com/molex/39-00-0047/contact/dp/1012345?ost=x',
+      packSize: 100, unitOfMeasure: 'EACH', unitOfMeasureCode: 'EA', packageName: 'Pack of 100', brandName: 'MOLEX',
+      translatedManufacturerPartNumber: '39-00-0047', prices: [{ from: 1, to: 9, cost: 25.0 }, { from: 10, to: 99999, cost: 20.0 }],
+      stock: { level: 4200 }, datasheets: [{ url: 'http://www.farnell.com/datasheets/1.pdf' }] },
+    { sku: '1012346', displayName: 'MOLEX - 39-00-0047 - CONTACT, SOCKET, CRIMP, REEL', packSize: 1, unitOfMeasure: 'EACH', brandName: 'MOLEX',
+      translatedManufacturerPartNumber: '39-00-0047', prices: { from: 1, to: 999999, cost: 0.31 }, inv: 0 },
+    { sku: '9', displayName: 'other', translatedManufacturerPartNumber: '39-00-0048', prices: { from: 1, cost: 0.01 } }] } });
+  let faCalls = 0;
+  upstreamReplyAt = url => {
+    if (!/api\.element14\.com/.test(url)) return null;
+    faCalls++;
+    return faCalls === 1 ? { status: 403, body: '{"error":{"code":403,"message":"Developer Over Qps"}}' } : { status: 200, body: FA_BODY };
+  };
+  upstreamCalls = [];
+  r = await call(fns.priceLookup, { method: 'GET', token: 'tUser', query: { pn: '39-00-0047', qty: '100', desc: 'contact socket crimp' } });
+  const faCall = upstreamCalls.filter(c => /element14/.test(c.url)).pop();
+  const faQ = faCall ? new URL(faCall.url).searchParams : new URLSearchParams();
+  ok(faCall && faQ.get('term') === 'manuPartNum:39-00-0047' && faQ.get('storeInfo.id') === 'il.farnell.com' && faQ.get('callInfo.responseDataFormat') === 'JSON' && faQ.get('callInfo.apiKey') === 'fa-secret-key-4321', 'Farnell: documented query (manuPartNum, store, JSON, key)');
+  ok(faCalls === 2, 'Farnell: "over QPS" is retried, not reported');
+  ok(r.json.farnell && Math.abs(r.json.farnell.price - 0.25) < 1e-9 && r.json.farnell.breakQty === 100, 'Farnell: a pack of 100 is priced per piece, the break counted in pieces');
+  ok(r.json.farnell && r.json.farnell.url === 'https://il.farnell.com/molex/39-00-0047/contact/dp/1012345' && r.json.farnell.stock === '4200' && r.json.farnell.uom === 'EA', 'Farnell: product page, stock and unit');
+  ok(r.json.farnell && r.json.farnell.candidates.length === 2, 'Farnell: a different part number is left out');
+  faCalls = 1;
+  r = await call(fns.priceLookup, { method: 'GET', token: 'tUser', query: { pn: '39-00-0047', qty: '5', desc: 'contact socket crimp' } });
+  ok(r.json.farnell && r.json.farnell.price === 0.31, 'Farnell: 5 pieces — the single pieces win over a whole pack of 100');
+  upstreamReplyAt = url => /element14/.test(url) ? { status: 403, body: '{"error":{"code":403,"message":"Developer Inactive"}}' } : null;
+  r = await call(fns.priceLookup, { method: 'GET', token: 'tUser', query: { pn: '39-00-0047', qty: '1' } });
+  ok(!r.json.farnell && r.json.errors.some(e => /Farnell auth failed/.test(e)) && !r.json.errors.join(' ').includes('fa-secret-key-4321'), 'Farnell: a bad key is reported without the key');
+  upstreamReplyAt = url => /element14/.test(url) ? { status: 200, body: JSON.stringify({ manufacturerPartNumberSearchReturn: { numberOfResults: 1, products: [
+    { sku: '7', displayName: 'CABLE 14AWG', unitOfMeasure: 'METER', unitOfMeasureCode: 'M', packSize: 1, translatedManufacturerPartNumber: 'WL-14-3C', brandName: 'W', prices: [{ from: 1, cost: 2.5 }] }] } }) } : null;
+  r = await call(fns.priceLookup, { method: 'GET', token: 'tUser', query: { pn: 'WL-14-3C', qty: '1' } });
+  ok(r.json.farnell && r.json.farnell.uom === 'M' && r.json.farnell.price === 2.5, 'Farnell: cable sold by the metre keeps its per-metre price');
+  upstreamReplyAt = null;
+  r = await call(C, { method: 'GET', token: 'tAdmin' });
+  ok(r.json.farnell && r.json.farnell.configured && r.json.farnell.hint === '…4321' && r.json.farnell.store === 'il.farnell.com' && !JSON.stringify(r.json).includes('fa-secret-key-4321'), 'Farnell: status shows a hint and the store, never the key');
 
   console.log(`functions harness: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

@@ -93,6 +93,8 @@ export const _PS_DEFAULT_COLS=[
   {k:'digikey_stock', l:'DigiKey Stock',    w:'85px'},
   {k:'onlinecomp_price', l:'Online Comp. Price', w:'100px'},
   {k:'onlinecomp_stock', l:'Online Comp. Stock', w:'90px'},
+  {k:'farnell_price', l:'Farnell Price',    w:'95px'},
+  {k:'farnell_stock', l:'Farnell Stock',    w:'90px'},
   {k:'priority_price',l:'Priority Price',   w:'95px'},
   {k:'own_stock',     l:'In Stock (ours)',  w:'95px'},
   // Recorded from the latest quote or import that marked it — for reference
@@ -111,7 +113,7 @@ export const _PS_DEFAULT_COLS=[
 // Across all the prices a row actually HAS: cheapest → green, dearest → red,
 // anything in between → uncoloured. A single price is left uncoloured, since
 // "cheapest" is meaningless with nothing to compare against.
-export const _PRICE_FIELDS=['priority_price','mouser_price','digikey_price','onlinecomp_price'];
+export const _PRICE_FIELDS=['priority_price','mouser_price','digikey_price','onlinecomp_price','farnell_price'];
 
 // WHAT IS COMPARED, and why it isn't the displayed number.
 // The cells show a per-unit price, but the sources don't quote on the same
@@ -145,7 +147,9 @@ export const _MATCH_FOR={
   digikey_price:{code:'digikey_match', mpn:'digikey_mpn', name:'DigiKey',
                  mfr:'digikey_mfr', alts:'digikey_alts', desc:'digikey_desc', cands:'digikey_cands', by:'digikey_by'},
   onlinecomp_price:{code:'onlinecomp_match', mpn:'onlinecomp_mpn', name:'Online Components',
-                 mfr:'onlinecomp_mfr', alts:'onlinecomp_alts', desc:'onlinecomp_desc', cands:'onlinecomp_cands', by:'onlinecomp_by'}};
+                 mfr:'onlinecomp_mfr', alts:'onlinecomp_alts', desc:'onlinecomp_desc', cands:'onlinecomp_cands', by:'onlinecomp_by'},
+  farnell_price:{code:'farnell_match', mpn:'farnell_mpn', name:'Farnell',
+                 mfr:'farnell_mfr', alts:'farnell_alts', desc:'farnell_desc', cands:'farnell_cands', by:'farnell_by'}};
 
 // Tells the reader whether this price is for THE part or merely a close one.
 // Same three symbols as the Check Price modal, now attached to the number
@@ -240,10 +244,12 @@ export function _psCellHTML(k,p){
     case 'priority_price':
     case 'mouser_price':
     case 'digikey_price':
-    case 'onlinecomp_price': return _priceCellHTML(p,k);
+    case 'onlinecomp_price':
+    case 'farnell_price': return _priceCellHTML(p,k);
     case 'mouser_stock':
     case 'digikey_stock':
-    case 'onlinecomp_stock': return _stockCellHTML(p,k);
+    case 'onlinecomp_stock':
+    case 'farnell_stock': return _stockCellHTML(p,k);
     case 'unit': return esc(p.unit||p.units||'');
     case 'rfq_names': return esc((p.rfq_names||[]).join(', '));
     // Every drawing the part is in, each with its revision and per-cable QTY;
@@ -318,7 +324,7 @@ export function _wireSymbolsLegend(root=document){
 export const _PRICE_LEGEND_HTML = `
   <div style="padding:5px 0;font-size:11px;color:var(--muted);
        display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center">
-    <span>Mouser / DigiKey / Online Comp. price:</span>
+    <span>Mouser / DigiKey / Online Comp. / Farnell price:</span>
     <span><strong style="color:var(--green)">✓</strong> exact part number</span>
     <span><strong style="color:#B45309">✓ ≈</strong> matched under a differently formatted part number — hover to see which</span>
     <span><strong style="color:#B45309">◑</strong> listed, but no published price</span>
@@ -351,7 +357,7 @@ export async function renderPartStock(filter=''){
   // never just the rows currently visible on screen.
   const sorted=[...filtered].sort((a,b)=>{
     let va=String(a[sortCol]||'').toLowerCase(), vb=String(b[sortCol]||'').toLowerCase();
-    if(['price','priority_price','mouser_price','digikey_price','onlinecomp_price'].includes(sortCol)){va=parseFloat(a[sortCol])||0;vb=parseFloat(b[sortCol])||0;}
+    if(['price','priority_price','mouser_price','digikey_price','onlinecomp_price','farnell_price'].includes(sortCol)){va=parseFloat(a[sortCol])||0;vb=parseFloat(b[sortCol])||0;}
     return sortAsc?(va<vb?-1:va>vb?1:0):(va<vb?1:va>vb?-1:0);
   });
 

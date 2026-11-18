@@ -250,7 +250,7 @@ function descScore(wanted, candidate) {
 // `candidates` lists what was compared (part number, manufacturer, description,
 // score) so the UI can SHOW the choice rather than assert it — without that,
 // a wrong pick is indistinguishable from a right one.
-function matchPart(items, wantedPn, getPn, wantedDesc, getDesc, getMfr) {
+function matchPart(items, wantedPn, getPn, wantedDesc, getDesc, getMfr, getKey) {
   const wantRaw = String(wantedPn || '').trim().toUpperCase();
   const wantKey = pnKey(wantedPn);
   if (!wantKey) return null;
@@ -269,7 +269,9 @@ function matchPart(items, wantedPn, getPn, wantedDesc, getDesc, getMfr) {
   if (pool.length > 1) {
     const seen = new Set();
     pool = pool.filter(it => {
-      const k = `${String(getMfr ? getMfr(it) : '').trim().toUpperCase()}|${String(getPn(it) || '').trim().toUpperCase()}`;
+      // getKey: a vendor whose listings differ by more than maker + P/N (Farnell
+      // sells one part as single pieces AND in packs, each its own SKU).
+      const k = (getKey ? String(getKey(it) || '') + '|' : '') + `${String(getMfr ? getMfr(it) : '').trim().toUpperCase()}|${String(getPn(it) || '').trim().toUpperCase()}`;
       if (seen.has(k)) return false;
       seen.add(k); return true;
     });
@@ -654,6 +656,114 @@ async function lookupOnlineComp(pn, qty, apiKey, apiName, desc) {
                                           price: (readOnlineCompPart(c.item, qty, m.exact) || {}).price || 0 })).slice(0, 8) };
 }
 
+/* Farnell lookup — the element14 Product Search API (REST), the official API
+ * behind farnell.com / newark.com / element14.com.
+ * GET https://api.element14.com/catalog/products?term=manuPartNum:<PN>&storeInfo.id=il.farnell.com
+ *     &resultsSettings.responseGroup=large&callInfo.responseDataFormat=JSON&callInfo.apiKey=<key>
+ * Needs a free key from partner.element14.com. Their web site cannot be read
+ * from a server (it answers "Access Denied" to anything that is not a
+ * browser), so without a key the app only offers the search link.
+ * storeInfo.id picks the country store and its currency: il.farnell.com
+ * prices in US$. The key travels in the query string, so errors below never
+ * include the URL. Prices are per unit of sale: a "pack of 100" is priced per
+ * pack, so it is divided by packSize to give the per-piece price the app
+ * compares with the other vendors (a part pack bought for fewer pieces is
+ * charged in full); metre goods stay per metre. */
+const FARNELL_BASE = 'https://api.element14.com/catalog/products';
+const FARNELL_DEFAULT_STORE = 'il.farnell.com';
+const FARNELL_STORE_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
+function farnellStore(v) {
+  const s = String(v || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  return FARNELL_STORE_RE.test(s) ? s : FARNELL_DEFAULT_STORE;
+}
+function farnellIsMetre(p) {
+  const u = `${p.unitOfMeasureCode || ''} ${p.unitOfMeasure || ''} ${p.packageName || ''}`.toUpperCase();
+  return /(^|\W)(M|MTR|METER|METRE|METERS|METRES)(\W|$)/.test(u) && !/REEL OF|PACK OF/.test(u);
+}
+function readFarnellPart(p, qty, exact, store) {
+  const metre = farnellIsMetre(p);
+  const pack = metre ? 1 : Math.max(1, parseInt(p.packSize, 10) || 1);
+  const list = Array.isArray(p.prices) ? p.prices : (p.prices ? [p.prices] : []);
+  // A pack is bought whole: 5 pieces from a pack of 100 cost the whole pack.
+  // So the per-piece price is what the packs needed for this quantity cost,
+  // spread over the pieces actually wanted — never less than cost / pack.
+  const want = qty > 0 ? qty : 1;
+  const packs = Math.ceil(want / pack);
+  const inPacks = list.map(b => ({ qty: parseInt(b.from, 10) || 1, price: numFrom(b.cost) }));
+  const nb = pickNearestBreak(inPacks, packs);
+  const best = nb ? { qty: nb.qty * pack, price: pack > 1 ? nb.price * packs / Math.max(want, 1) : nb.price } : null;
+  const st = p.stock || {};
+  const stock = parseInt(st.level != null ? st.level : p.inv, 10) || 0;
+  const sheet = Array.isArray(p.datasheets) && p.datasheets.length ? p.datasheets[0].url : '';
+  return {
+    price: best ? +best.price.toFixed(6) : 0,
+    currency: 'USD',
+    breakQty: best ? best.qty : 0,
+    stock: String(stock),
+    mpn: p.translatedManufacturerPartNumber || '',
+    exactMatch: exact,
+    manufacturer: p.brandName || p.vendorName || '',
+    url: String(p.productURL || '').replace(/[?#].*$/, '') || (p.sku ? `https://${store}/search?st=${encodeURIComponent(p.sku)}` : ''),
+    sku: p.sku || '',
+    datasheet: sheet || '',
+    status: p.productStatus || '',
+    uom: metre ? 'M' : 'EA',
+    packSize: pack,
+    moq: parseInt(p.translatedMinimumOrderQuality, 10) || 0,
+  };
+}
+async function _farnellFetch(url) {
+  // Default keys allow a couple of calls per second; a Check Price runs
+  // several parts at once, so an "over QPS" answer is retried after a pause.
+  for (let attempt = 0; ; attempt++) {
+    let resp;
+    try { resp = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(20000) }); }
+    catch (e) { throw new Error('Farnell: ' + (e.name === 'TimeoutError' ? 'timed out' : 'network error')); }
+    let data = null;
+    try { data = await resp.json(); } catch { /* status below */ }
+    const errMsg = data && data.error ? String(data.error.message || '') : '';
+    const fault = data && data.Fault ? String((data.Fault.Reason && data.Fault.Reason.Text) || data.Fault.faultstring || '') : '';
+    if ((resp.status === 403 || resp.status === 429) && /QPS|rate|over/i.test(errMsg) && !/Over Rate/i.test(errMsg) && attempt < 3) {
+      await new Promise(r => setTimeout(r, 700 * (attempt + 1)));
+      continue;
+    }
+    if (/Over Rate/i.test(errMsg)) throw new Error('Farnell daily call limit reached — try again tomorrow');
+    if (resp.status === 401 || resp.status === 403) throw new Error(`Farnell auth failed (HTTP ${resp.status}${errMsg ? ': ' + errMsg : ''}) — check the API key`);
+    if (resp.status === 404) return null;
+    if (!resp.ok) {
+      // "Manufacturer Part Number is not valid" (200004) just means: no such part.
+      if (/not valid|200004|200001/i.test(errMsg + ' ' + fault)) return null;
+      throw new Error(`Farnell HTTP ${resp.status}${errMsg ? ': ' + errMsg : ''}`);
+    }
+    return data;
+  }
+}
+async function lookupFarnell(pn, qty, apiKey, store, desc) {
+  const st = farnellStore(store);
+  const q = new URLSearchParams({
+    versionNumber: '1.5',
+    term: `manuPartNum:${pn}`,
+    'storeInfo.id': st,
+    'resultsSettings.offset': '0',
+    'resultsSettings.numberOfResults': '20',
+    'resultsSettings.responseGroup': 'large',
+    'callInfo.responseDataFormat': 'JSON',
+    'callInfo.apiKey': apiKey,
+  });
+  const data = await _farnellFetch(`${FARNELL_BASE}?${q}`);
+  if (!data) return null;
+  const ret = data.manufacturerPartNumberSearchReturn || data.keywordSearchReturn || data.premierFarnellPartNumberReturn || {};
+  const parts = Array.isArray(ret.products) ? ret.products : (ret.products ? [ret.products] : []);
+  const m = matchPart(parts, pn, p => p.translatedManufacturerPartNumber, desc, p => p.displayName || '', p => p.brandName || p.vendorName, p => p.sku);
+  if (!m) return null;
+  const pick = chooseCandidate(m.pool, it => readFarnellPart(it, qty, m.exact, st));
+  return { ...pick.info,
+           considered: m.considered, descScore: pick.score, desc: pick.desc,
+           chosenBy: pick.chosenBy,
+           candidates: m.pool.map(c => ({ pn: c.pn, mfr: c.mfr, desc: c.desc, score: c.score,
+                                          price: (readFarnellPart(c.item, qty, m.exact, st) || {}).price || 0 })).slice(0, 8) };
+}
+
 exports.priceLookup = onRequest(
   {
     region: 'us-central1',
@@ -689,7 +799,7 @@ exports.priceLookup = onRequest(
     const desc = String(req.query.desc || '').slice(0, 300);
     if (!pn) return void res.status(400).json({ error: 'Missing ?pn=' });
 
-    const out = { pn, qty, mouser: null, digikey: null, onlinecomp: null, errors: [] };
+    const out = { pn, qty, mouser: null, digikey: null, onlinecomp: null, farnell: null, errors: [] };
 
     // Both vendors are queried in parallel and failures are isolated: a missing
     // key or a vendor outage must never take the other one down with it.
@@ -698,6 +808,7 @@ exports.priceLookup = onRequest(
     const dkId = creds.digikey_client_id;
     const dkSecret = creds.digikey_client_secret;
     const ocKey = creds.onlinecomp_api_key;
+    const faKey = creds.farnell_api_key;
 
     await Promise.all([
       (async () => {
@@ -706,6 +817,11 @@ exports.priceLookup = onRequest(
         if (!ocKey) return;
         try { out.onlinecomp = await lookupOnlineComp(pn, qty, ocKey, creds.onlinecomp_api_name, desc); }
         catch (e) { out.errors.push(e.message || 'Online Components lookup failed'); }
+      })(),
+      (async () => {
+        if (!faKey) return;
+        try { out.farnell = await lookupFarnell(pn, qty, faKey, creds.farnell_store, desc); }
+        catch (e) { out.errors.push(e.message || 'Farnell lookup failed'); }
       })(),
       (async () => {
         if (!mouserKey) { out.errors.push('Mouser: no API key configured'); return; }
@@ -753,7 +869,7 @@ exports.priceLookup = onRequest(
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 const CONFIG_DOC = 'secure_config/distributor_api';
-const CRED_FIELDS = ['mouser_api_key', 'digikey_client_id', 'digikey_client_secret', 'onlinecomp_api_key', 'onlinecomp_api_name'];
+const CRED_FIELDS = ['mouser_api_key', 'digikey_client_id', 'digikey_client_secret', 'onlinecomp_api_key', 'onlinecomp_api_name', 'farnell_api_key', 'farnell_store'];
 
 // A price check runs one lookup per part, so re-reading Firestore for every
 // row would add a pointless round-trip to each. 60s is short enough that a
@@ -770,6 +886,8 @@ async function getCredentials() {
     digikey_client_secret: (process.env.DIGIKEY_CLIENT_SECRET || '').trim(),
     onlinecomp_api_key: (process.env.ONLINECOMP_API_KEY || '').trim(),
     onlinecomp_api_name: (process.env.ONLINECOMP_API_NAME || '').trim(),
+    farnell_api_key: (process.env.FARNELL_API_KEY || '').trim(),
+    farnell_store: (process.env.FARNELL_STORE || '').trim(),
   };
 
   try {
@@ -878,6 +996,12 @@ exports.apiConfig = onRequest(
             apiName: creds.onlinecomp_api_name || OC_DEFAULT_API_NAME,
             source: meta.onlinecomp_api_key ? 'ui' : (creds.onlinecomp_api_key ? 'env-var' : null),
           },
+          farnell: {
+            configured: !!creds.farnell_api_key,
+            hint: hint(creds.farnell_api_key),
+            store: farnellStore(creds.farnell_store),
+            source: meta.farnell_api_key ? 'ui' : (creds.farnell_api_key ? 'env-var' : null),
+          },
           // Normally a Firestore Timestamp, but tolerate a plain Date or an
           // ISO string too — a stale field format must not 500 the whole panel
           // and hide the configured/not answer the admin actually came for.
@@ -918,7 +1042,7 @@ exports.apiConfig = onRequest(
       if (body.action === 'test') {
         const creds = await getCredentials();
         const pn = String(body.pn || '').trim() || '1-794610-2';
-        const result = { pn, mouser: null, digikey: null, onlinecomp: null };
+        const result = { pn, mouser: null, digikey: null, onlinecomp: null, farnell: null };
 
         // "Not configured" is reported distinctly from "configured but broken":
         // one is a deliberate choice, the other is a problem to fix.
@@ -939,6 +1063,12 @@ exports.apiConfig = onRequest(
         result.onlinecomp = !creds.onlinecomp_api_key
           ? { ok: false, skipped: true, message: 'Not configured — skipped' }
           : await lookupOnlineComp(pn, 1, creds.onlinecomp_api_key, creds.onlinecomp_api_name).then(
+              r => ({ ok: true, message: r ? `Found — $${r.price} @ qty ${r.breakQty}` : 'Connected, but this part was not found' }),
+              e => ({ ok: false, message: e.message }));
+
+        result.farnell = !creds.farnell_api_key
+          ? { ok: false, skipped: true, message: 'Not configured — skipped' }
+          : await lookupFarnell(pn, 1, creds.farnell_api_key, creds.farnell_store).then(
               r => ({ ok: true, message: r ? `Found — $${r.price} @ qty ${r.breakQty}` : 'Connected, but this part was not found' }),
               e => ({ ok: false, message: e.message }));
 
