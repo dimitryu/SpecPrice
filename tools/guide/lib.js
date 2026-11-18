@@ -152,7 +152,7 @@ function aiReply(body){
     {operation:'Heat shrink',row_idx:3,unit_minutes:0.8,qty_in_drawing:1},
     {operation:'Apply labels',row_idx:4,unit_minutes:0.4,qty_in_drawing:2},
     {operation:'Continuity test',row_idx:null,unit_minutes:2,qty_in_drawing:1}],single_unit_minutes:10.6});
-  if(/NOTES/.test(txt)&&/MANUFACTURING INSTRUCTIONS/.test(txt)) return '["Note 1: strip 70 mm of jacket on side A","Note 2: labels 20 mm from each end"]';
+  if(/NOTES/.test(txt)&&/MANUFACTURING INSTRUCTIONS/.test(txt)) return '{"notes":["1. ALL DIMENSIONS IN MM","2. STRIP 70 MM OF JACKET ON SIDE A","3. CRIMP PER IPC/WHMA-A-620 CLASS 2","4. LABELS 20 MM FROM EACH END"]}';
   if(/translat/i.test(txt)){ const m=txt.match(/\[[\s\S]*\]/); return m?m[0]:'[]'; }
   if(/Bill of Materials|BOM/i.test(txt)) return JSON.stringify(BOM_ROWS);
   return '{}';

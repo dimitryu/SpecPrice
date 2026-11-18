@@ -31,7 +31,7 @@ web/
    │   projects.js     RFQ + שרטוטים (BOM)
    │   customers.js specs.js support.js
    ├─ ai/              ★ כל הקריאות למודל
-   │   client.js       _aiFetch (דרך aiProxy או ישיר), בחירת מודל, נפילה ל-Haiku,
+   │   client.js       _aiFetch (תמיד דרך aiProxy), בחירת מודל, נפילה ל-Haiku,
    │                   ניסיון חוזר, תיקון JSON
    │   bom.js          זיהוי BOM (טקסט, תמונה, איתור טבלה)
    │   cutstrip.js     ניתוח חיתוך וחשיפה
@@ -122,12 +122,11 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
 
 כל בקשה למודל עוברת ב-`_aiFetch` (`ai/client.js`):
 
-- **כשהמפתח שמור בשרת** (`S.aiProxy`) — הבקשה נשלחת ל-Cloud Function ‏`aiProxy` עם
-  ה-ID token של Firebase. הפונקציה בודקת שהמשתמש קיים ולא מושבת, מוסיפה את המפתח
-  מ-`secure_config/ai_api` (חסום לכל דפדפן ב-`firestore.rules`), ומחזירה את תשובת
-  Anthropic כמו שהיא — אותו status, אותו JSON. הקוד שקורא את התשובה לא יודע איזו דרך נלקחה.
-- **כל עוד אין מפתח בשרת** — ישירות ל-Anthropic עם מפתח מהדפדפן, כמו קודם. כך שום דבר
-  לא נשבר לפני שהפונקציות נפרסו.
+- הבקשה נשלחת תמיד ל-Cloud Function ‏`aiProxy` עם ה-ID token של Firebase. הפונקציה בודקת
+  שהמשתמש קיים ולא מושבת, אוכפת מכסה (`enforceRate`), מוסיפה את המפתח מ-`secure_config/ai_api`
+  (חסום לכל דפדפן ב-`firestore.rules`), ומחזירה את תשובת Anthropic כמו שהיא — אותו status, אותו JSON.
+- **אין יותר קריאה ישירה מהדפדפן ל-Anthropic** (בוטלה ב-v1.74.0, M5). בלי מפתח בשרת — `_aiReady()` מחזיר false
+  ומוצג חלון "AI not set up".
 
 המפתח נשמר במסך Admin → AI API Keys דרך `apiConfig` (רק admin). אחרי שמירה בשרת
 האפליקציה מוחקת את העותקים הישנים: `localStorage` ו-`anthropic_key`/`gemini_key`
@@ -138,3 +137,26 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
 - כל קריאות Firestore עברו מהמסכים ל-`data/`.
 - התרגום של פירוק זמן העבודה עבר ל-`ai/translate.js` (`aiTranslateOperations`).
 - `aiProxy` — מפתח Anthropic לא נמצא יותר בדפדפן.
+
+## אבטחה (v1.72–v1.74)
+
+- **הרשאות** נאכפות ב-`firestore.rules` (בדיקות: `tests/rules/rules.test.mjs` באמולטור). viewer = קריאה בלבד בכל מקום;
+  משתמש לא יכול לשנות לעצמו role / company / disabled; יצירה ושינוי משתמשים רק דרך Cloud Function ‏`userAdmin`.
+- **מחיקה**: כולם מעבירים לסל מחזור (`deleted:true` + `deleted_at`), רק admin מוחק לצמיתות.
+- **יומן**: רשומה נכתבת רק בשם המשתמש המחובר (`user`, `userId`) ובשעת השרת. פעולות admin נכתבות בשרת (`serverAudit`).
+- **תמיכה**: משתמש רואה רק את הפניות שלו (`listMyTickets`) ולא משנה status ל-done.
+- **מכסות** בשרת: `RATE_LIMITS` ב-`functions/index.js` (מסמכי `usage/{uid}_{kind}_{date}`).
+- **CSP** נכתבת ע"י `tools/stamp-release.js` (עם hash של ה-inline scripts) בין `<!-- csp:begin -->` ל-`<!-- csp:end -->`
+  ב-`app.html` וב-`index.html`. לא להוסיף `onclick=` או סקריפט inline בלי להריץ stamp מחדש; כפתורי סגירה: `data-close-modal`.
+- ספריות CDN עם `integrity` (SRI); `xlsx` נשמר מקומית ב-`web/vendor/`.
+- גיבויים: `docs/BACKUPS.md`.
+
+## עמודות קבועות וחלונית ההערות (v1.75)
+
+- `freezeLeftColumns(table, count)` (`core/table.js`): תיבת הסימון + 5 העמודות הראשונות (`SD_FROZEN_COLS`, `PS_FROZEN_COLS`)
+  נשארות במקום בגלילה ימינה (position:sticky). המיקומים נמדדים מכותרות העמודות ומתעדכנים בשינוי רוחב/סדר/Compact
+  ובכל רינדור של ה-tbody. בחלון צר (הבלוק > 75% מהרוחב) נשארות פחות עמודות. טבלה כזו מקבלת `has-frozen`
+  (border-collapse:separate), אחרת הגבולות "נשארים מאחור" והטקסט הנגלל מציץ ביניהם.
+  שורה שמשתרעת על כל הטבלה (שורת שרטוט) שומרת את התווית שלה בעזרת `.row-label-sticky`.
+- חלונית Notes ב-Sales Desk היא `<details>`: מקופלת לשורה אחת עם מספר ההערות ומספר ההערות שמזכירות מסמך/תקן.
+  פתוח/סגור נשמר לכל משתמש (`ui_prefs.sd_notes_open`).

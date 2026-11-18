@@ -3,7 +3,7 @@ import { _aiReady } from '../../ai/client.js';
 import { _NOTE_DOC_STD_RE } from '../../ai/process.js';
 import { logAudit, logDrawingsOf, setLogDrawing } from '../../core/audit.js';
 import { getUiPref, setUiPref } from '../../core/session.js';
-import { loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../../core/table.js';
+import { freezeLeftColumns, loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../../core/table.js';
 import { closeModal, debounce, esc, progressPanel, setActions, setContent, showModal, toast } from '../../core/ui.js';
 import { loadParts, saveSalesDeskToDB } from '../../data/parts.js';
 import { _partDrawings, _partLatestDrawing } from '../../domain/bom.js';
@@ -23,6 +23,8 @@ export let sdItems     = [];
 // ══════════════════════════════════════════════════════════════════════════════
 // Canonical column order — identical to the Database's (see the Part Stock
 // column list) so the same data reads the same way on every screen.
+// Columns that stay in place when the table scrolls sideways (after the checkbox).
+export const SD_FROZEN_COLS=5;
 export const _SD_DEFAULT_COLS=[
   {k:'drawing_number', l:'Drawing #',       w:'100px'},
   {k:'revision',       l:'Revision',        w:'60px'},
@@ -221,15 +223,33 @@ export function _sdRenderNotesPanel(){
   const active=_sdActiveNotes();
   if(!active.length){ panel.style.display='none'; panel.innerHTML=''; return; }
   panel.style.display='block';
-  panel.innerHTML=`<div style="font-size:12px;font-weight:700;color:var(--blue-dark);margin-bottom:6px">📋 Notes / Manufacturing Instructions</div>
+  // Folds to one line, like "What the marks mean". The line still says how many
+  // notes there are and how many name a document or standard (the red ones),
+  // so nothing that affects the quote hides behind the fold. Open/closed is
+  // remembered per user.
+  const all=active.flatMap(d=>d.notes);
+  const std=all.filter(n=>_NOTE_DOC_STD_RE.test(n)).length;
+  const open=_sdNotesOpen();
+  panel.innerHTML=`<details id="sd-notes-details" ${open?'open':''}>
+    <summary style="cursor:pointer;user-select:none;list-style-position:inside;font-size:12px;font-weight:700;color:var(--blue-dark);padding:2px 0" title="Show or hide the notes">
+      📋 Notes / Manufacturing Instructions
+      <span style="font-weight:400;color:var(--muted);font-size:11px;margin-inline-start:8px">${all.length} note${all.length===1?'':'s'}${active.length>1?` · ${active.length} drawings`:''}</span>
+      ${std?`<span style="margin-inline-start:8px;color:#E53E3E;font-size:11px" title="Notes that name a document or standard">⚠ ${std} with a document / standard</span>`:''}
+    </summary>
+    <div style="margin-top:6px">
     ${active.map(d=>`
       <div style="margin-bottom:8px">
         ${active.length>1?`<div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:3px">${esc(d.drawingName||'')}</div>`:''}
         <ul style="margin:0;padding-inline-start:18px">
           ${d.notes.map(n=>`<li style="font-size:12px;line-height:1.5;${_NOTE_DOC_STD_RE.test(n)?'color:#E53E3E;font-weight:600':'color:var(--text)'}">${esc(n)}</li>`).join('')}
         </ul>
-      </div>`).join('')}`;
+      </div>`).join('')}
+    </div>
+  </details>`;
+  panel.querySelector('#sd-notes-details').addEventListener('toggle',e=>setUiPref('sd_notes_open', e.target.open?'1':'0'));
 }
+// Notes start open (a new user should see them); after that, the last choice.
+export function _sdNotesOpen(){ return getUiPref('sd_notes_open','1')!=='0'; }
 
 // Sums generalMinutes from every analyzed drawing that still has at least one
 // row present in sdItems — once every row belonging to a drawing is deleted
@@ -923,10 +943,10 @@ export async function renderSalesDesk(){
         const hidden=_sdCollapsedRows.has(dwg);
         head=`<tr class="sd-group-head" data-dwg="${esc(dwg)}" style="background:#EEF2F7;cursor:pointer">
           <td colspan="${SD_COLS.length+2}" style="padding:6px 10px;font-weight:700;color:var(--blue-dark)">
-            <span style="display:inline-block;width:12px">${hidden?'▸':'▾'}</span>
+            <span class="row-label-sticky"><span style="display:inline-block;width:12px">${hidden?'▸':'▾'}</span>
             ${esc(dwg)}
             ${_sdDwgUnits(dwg)>1?`<span style="margin-inline-start:6px;padding:1px 6px;border-radius:8px;background:#EDE9FE;color:#5B21B6;font-size:10px;font-weight:700" title="QTY on every row below is multiplied by this">× ${_sdDwgUnits(dwg)} cables</span>`:''}
-            <span style="font-weight:400;color:var(--muted);font-size:11px;margin-inline-start:8px">${g?g.rows.length:0} rows</span>
+            <span style="font-weight:400;color:var(--muted);font-size:11px;margin-inline-start:8px">${g?g.rows.length:0} rows</span></span>
             ${g?`<span style="float:inline-end;color:var(--green)">$${g.final.toFixed(2)}</span>`:''}
           </td></tr>`;
       }
@@ -1089,6 +1109,9 @@ export async function renderSalesDesk(){
 
   renderSD();
   makeTableResizable(document.getElementById('sd-table'));
+  // The checkbox + the first five columns (Drawing #, Revision, MNF P/N …) stay
+  // put while the price columns scroll sideways.
+  freezeLeftColumns(document.getElementById('sd-table'), 1+SD_FROZEN_COLS);
   makeColumnsReorderable(document.getElementById('sd-table'),'salesdesk',SD_ALL_COLS,()=>renderSalesDesk());
   document.querySelectorAll('.sd-view-btn').forEach(b=>b.addEventListener('click',()=>{
     if(b.dataset.view===_sdViewMode()) return;

@@ -32,7 +32,11 @@ const L=require('./lib.js');
     await L.mark(page,[{sel:'.sd-tool-search',pad:2,at:'right'},{sel:'.sd-tool-src',pad:2,at:'right'},{sel:'.sd-tool-links',pad:2,at:'right'}]);
     await L.shot(page,'14b-sd-tool-ai',host); await page.evaluate(()=>window.scrollTo(0,0)); }
   const notes=await page.$('#sd-notes-panel'); 
-  if(notes && await notes.isVisible()){ await L.mark(page,['#sd-notes-panel']); await L.shot(page,'14b-sd-notes','#sd-notes-panel'); }
+  if(notes && await notes.isVisible()){
+    await notes.evaluate(e=>e.scrollIntoView({block:'center'})); await page.waitForTimeout(300);
+    await L.mark(page,[{sel:'#sd-notes-details summary',pad:2}]); await L.shot(page,'14f-sd-notes','#sd-notes-panel'); await L.unmark(page);
+    await page.evaluate(()=>window.scrollTo(0,0)); }
+  else throw new Error('notes panel did not appear');
   await page.click('.sd-btn-breakdown'); await page.waitForTimeout(800);
   await L.shot(page,'15-sd-labor','.modal');
   await page.evaluate(()=>closeModal()); await page.waitForTimeout(300);
@@ -46,7 +50,10 @@ const L=require('./lib.js');
   const exp=await page.evaluate(()=>{
     const th=document.querySelector('#sd-table thead th[data-col="mouser_price"]');
     let w=th; while(w && w!==document.body && !(w.scrollWidth>w.clientWidth+2 && getComputedStyle(w).overflowX!=='visible')) w=w.parentElement;
-    if(w && w!==document.body) w.scrollLeft=Math.max(0, th.offsetLeft-260);
+    // The frozen columns stay on the left, so the price column has to come out right of them.
+    const fz=document.querySelector('#sd-table thead th.col-frozen-last');
+    const fzRight=fz ? fz.offsetLeft+fz.offsetWidth : 0;
+    if(w && w!==document.body) w.scrollLeft=Math.max(0, th.offsetLeft-fzRight-12);
     const b=document.querySelector('#btn-sd-export'); const r=b&&b.getBoundingClientRect();
     return r?{top:r.top,bottom:r.bottom,left:r.left}:null;
   });

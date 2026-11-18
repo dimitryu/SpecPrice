@@ -1,6 +1,6 @@
 import { S } from '../core/state.js';
 import { logAudit } from '../core/audit.js';
-import { loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../core/table.js';
+import { freezeLeftColumns, loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../core/table.js';
 import { _buildPager, closeModal, debounce, esc, fmtDate, fmtPrice, setActions, setContent, showModal, toast } from '../core/ui.js';
 import { _PS_TRASH_DAY_OPTIONS, _psAutoPurge, _psDaysLeft, _psDeletedMs, _psIsAdmin, _psPurge, _psRestore, _psSetTrashDays, _psSoftDelete, loadParts, purgeLegacyFindChipsFields, updatePartFields } from '../data/parts.js';
 import { _partDrawings, _pnKey } from '../domain/bom.js';
@@ -71,6 +71,8 @@ export function openTrashModal(onChange){
   render();
 }
 
+// Columns that stay in place when the table scrolls sideways (after the checkbox).
+export const PS_FROZEN_COLS=5;
 export const _PS_DEFAULT_COLS=[
   // Canonical column order, shared with Sales Desk and the Check Price modal
   // (see _SD_DEFAULT_COLS): identity → description → maker → quantity → prices.
@@ -425,6 +427,7 @@ export async function renderPartStock(filter=''){
   }));
   wireShiftCheck(document.querySelector('#ps-table'),'.ps-check');
   makeTableResizable(document.querySelector('#ps-table'));
+  freezeLeftColumns(document.querySelector('#ps-table'), 1+PS_FROZEN_COLS);
   makeColumnsReorderable(document.querySelector('#ps-table'),'partstock',COLS,()=>renderPartStock(inp.value));
   wireScrollButtons('#ps-table-wrap','ps-scroll-left','ps-scroll-right');
   inp.addEventListener('input',debounce(()=>{

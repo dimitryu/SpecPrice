@@ -109,6 +109,56 @@ export function makeColumnsReorderable(table, storageKey, cols, rerenderFn){
     });
   });
 }
+// Keeps the first `count` columns of a table in place while the rest scroll
+// sideways (position:sticky; left:…). The offsets are measured from the header
+// cells, so they follow column resizing, reordering and Compact/Full, and they
+// are re-applied whenever the body is re-rendered. Cells that span several
+// columns (the drawing group rows) are left alone. If the frozen block would
+// take more than `maxShare` of the visible width (a narrow window), columns are
+// dropped from its right end until it fits — otherwise nothing could scroll.
+export function freezeLeftColumns(table, count, maxShare=0.75){
+  if(!table || !(count>0)) return;
+  const wrap=table.closest('.table-wrap')||table.parentElement;
+  const head=table.tHead && table.tHead.rows[0];
+  if(!head) return;
+  table.classList.add('has-frozen');
+  const apply=()=>{
+    const ths=[...head.cells];
+    const avail=(wrap && wrap.clientWidth) || 0;
+    // Fractional positions (getBoundingClientRect), not offsetLeft: offsetLeft is
+    // rounded, and half a pixel between two frozen cells lets the scrolled
+    // text show through as a thin stripe.
+    const rects=ths.map(th=>th.getBoundingClientRect());
+    const base=rects.length ? rects[0].left : 0;
+    let n=Math.min(count, ths.length);
+    const leftOf=i=>rects[i].left-base;
+    while(n>1 && avail && (rects[n-1].right-base) > avail*maxShare) n--;
+    if(n===1 && avail && rects[0].width > avail*maxShare) n=0;
+    const lefts=ths.slice(0,n).map((_,i)=>leftOf(i));
+    for(const tr of table.rows){
+      let col=0;
+      for(const cell of tr.cells){
+        const span=cell.colSpan||1;
+        const frozen = span===1 && col<n;
+        cell.classList.toggle('col-frozen', frozen);
+        cell.classList.toggle('col-frozen-last', frozen && col===n-1);
+        if(frozen) cell.style.left=lefts[col]+'px';
+        else if(cell.style.left) cell.style.left='';
+        col+=span;
+      }
+    }
+  };
+  let queued=false;
+  const later=()=>{ if(queued) return; queued=true; (globalThis.requestAnimationFrame||setTimeout)(()=>{ queued=false; apply(); }); };
+  if(table._freeze){ table._freeze.ro && table._freeze.ro.disconnect(); table._freeze.mo && table._freeze.mo.disconnect(); }
+  const RO=globalThis.ResizeObserver, MO=globalThis.MutationObserver;
+  const ro = typeof RO==='function' ? new RO(later) : null;
+  if(ro){ [...head.cells].slice(0,count+1).forEach(th=>ro.observe(th)); if(wrap) ro.observe(wrap); }
+  const mo = typeof MO==='function' ? new MO(later) : null;
+  if(mo) [...table.tBodies].forEach(tb=>mo.observe(tb,{childList:true}));
+  table._freeze={ro,mo,apply};
+  apply();
+}
 // Wires up ◀/▶ buttons (if present in the DOM) to scroll a .table-wrap horizontally.
 export function wireScrollButtons(wrapEl, leftBtnId, rightBtnId){
   const wrap = typeof wrapEl==='string' ? document.querySelector(wrapEl) : wrapEl;
