@@ -6,7 +6,7 @@ import { logAudit, logDrawingsOf, setLogDrawing } from '../../core/audit.js';
 import { parseBoolQuery, wireSearchClear, wireShiftCheck } from '../../core/table.js';
 import { closeModal, debounce, esc, fmtPrice, showModal, toast } from '../../core/ui.js';
 import { saveBOMToPartStock } from '../../data/parts.js';
-import { _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, _parseDrawingFileName, _partLatestDrawing, parseExcelSheetsStructured } from '../../domain/bom.js';
+import { _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, _parseDrawingFileName, _partDrawingNumbers, _partDrawings, _partLatestDrawing, _pnKey, parseExcelSheetsStructured } from '../../domain/bom.js';
 import { _parsePackMl } from '../../domain/pricing.js';
 import { _xlsConfirmMapping, showBOMPreview } from '../bomImport.js';
 import { _sdAutoMatchLabor } from './labor.js';
@@ -68,9 +68,25 @@ export function openPartPickerModal(onAdd){
   const searchInp=document.getElementById('pp-search');
   wireSearchClear('pp-search','pp-search-clear');
 
+  // A part is in every drawing it has been saved from (see _partDrawings), so
+  // the drawing list holds each of those drawings, and a drawing shows ALL its
+  // parts — not only the ones that happen to be in no other drawing.
+  const _dwgValues=(p, field)=>{
+    const list=_partDrawings(p);
+    const vals = field==='drawing_number' ? list.map(d=>d.drawing_number)
+      : [...list.map(d=>d.drawing_name), p.drawing_name];
+    return vals.map(v=>String(v||'').trim()).filter(Boolean);
+  };
+  // The drawing entry of `p` the filter points at (its QTY, unit, revision).
+  const _dwgEntry=(p, field, val)=>{
+    if(!val) return null;
+    const list=_partDrawings(p);
+    return field==='drawing_number' ? (list.find(d=>_pnKey(d.drawing_number)===_pnKey(val))||null)
+      : (list.find(d=>String(d.drawing_name||'').trim()===val)||null);
+  };
   const reloadValueOptions=()=>{
     const field=fieldSel.value;
-    const values=[...new Set(S.allParts.map(p=>p[field]).filter(Boolean).map(v=>String(v).trim()).filter(Boolean))]
+    const values=[...new Set(S.allParts.flatMap(p=>_dwgValues(p, field)))]
       .sort((a,b)=>a.localeCompare(b));
     valueSel.innerHTML=`<option value="">All (${values.length})</option>`+
       values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
@@ -82,7 +98,7 @@ export function openPartPickerModal(onAdd){
     const val=valueSel.value;
     const predicate=parseBoolQuery(searchInp.value);
     visibleParts=S.allParts.filter(p=>{
-      if(val && String(p[field]||'').trim()!==val) return false;
+      if(val && !(field==='drawing_number' ? _dwgValues(p,field).some(v=>_pnKey(v)===_pnKey(val)) : _dwgValues(p,field).includes(val))) return false;
       if(searchInp.value.trim()){
         const haystack=[p.part_number,p.description,p.manufacturer,p.drawing_number,p.drawing_name]
           .map(v=>String(v||'')).join(' | ').toLowerCase();
@@ -92,17 +108,19 @@ export function openPartPickerModal(onAdd){
     });
     const tb=document.getElementById('pp-tbody');
     tb.innerHTML=visibleParts.map(p=>{
-      const fc=parseFloat(p.price)||0, pr=parseFloat(p.priority_price)||0;
-      let fcC='',prC='';
-      if(fc&&pr){fcC=fc<=pr?'price-green':'price-red';prC=pr<=fc?'price-green':'price-red';}
+      const pr=parseFloat(p.priority_price)||0;
+      // Filtered by a drawing: that drawing's number, name, QTY and unit.
+      const dw=_dwgEntry(p, field, val);
+      const qty = dw && dw.qty!=='' && dw.qty!=null ? dw.qty : p.qty;
+      const unit = (dw && dw.unit) || p.unit || p.units;
       return `<tr data-id="${esc(p._id)}">
         <td style="text-align:center"><input type="checkbox" class="pp-check" data-id="${esc(p._id)}"></td>
-        <td>${esc(p.part_number)}</td><td>${esc(p.drawing_number)}</td><td>${esc(p.drawing_name)}</td>
-        <td class="wrap">${esc(p.description)}</td><td>${esc(p.qty)}</td><td>${esc(p.unit||p.units)}</td>
-        <td>${fc?`<span class="${fcC}">${fmtPrice(fc)}</span>`:''}</td>
-        <td>${pr?`<span class="${prC}">${fmtPrice(pr)}</span>`:''}</td>
+        <td>${esc(p.part_number)}</td><td>${esc(dw ? dw.drawing_number : _partDrawingNumbers(_partDrawings(p)) || p.drawing_number)}</td>
+        <td>${esc((dw && dw.drawing_name) || p.drawing_name)}</td>
+        <td class="wrap">${esc(p.description)}</td><td>${esc(qty)}</td><td>${esc(unit)}</td>
+        <td>${pr?fmtPrice(pr):''}</td>
       </tr>`;
-    }).join('')||`<tr class="empty-row"><td colspan="9">No parts match this filter</td></tr>`;
+    }).join('')||`<tr class="empty-row"><td colspan="8">No parts match this filter</td></tr>`;
     document.getElementById('pp-count').textContent=`${visibleParts.length} parts`;
   };
 
@@ -119,7 +137,10 @@ export function openPartPickerModal(onAdd){
     const checked=[...document.querySelectorAll('.pp-check:checked')].map(cb=>cb.dataset.id);
     const qtyOverride=parseFloat(document.getElementById('pp-qty').value)||1;
     const hadSelection=checked.length>0;
-    const selected = hadSelection ? S.allParts.filter(p=>checked.includes(p._id)) : visibleParts;
+    // Each part goes with the drawing it was picked under (its QTY there).
+    const field=fieldSel.value, val=valueSel.value;
+    const selected = (hadSelection ? visibleParts.filter(p=>checked.includes(p._id)) : visibleParts)
+      .map(p=>({...p, _dwg:_dwgEntry(p, field, val)}));
     if(!selected.length){ toast('No parts to add','error'); return; }
     closeModal();
     onAdd(selected, qtyOverride, hadSelection);

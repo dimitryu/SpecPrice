@@ -1036,8 +1036,11 @@ export async function renderSalesDesk(){
       let added=0;
       const newRows=[];
       for(const p of parts){
-        const origQty=String(p.qty||'').trim();
-        const qty = hadSelection ? ((qtyOverride!==1||!origQty) ? qtyOverride : (parseFloat(origQty)||1)) : (parseFloat(p.qty)||1);
+        // The drawing it was picked under, else the one it was saved from last.
+        const dw=p._dwg || _partLatestDrawing(p) || {};
+        const dwQty = p._dwg && p._dwg.qty!=='' && p._dwg.qty!=null ? p._dwg.qty : '';
+        const origQty=String(dwQty!=='' ? dwQty : (p.qty||'')).trim();
+        const qty = hadSelection ? ((qtyOverride!==1||!origQty) ? qtyOverride : (parseFloat(origQty)||1)) : (parseFloat(origQty)||1);
         const item={part_number:p.part_number||'',description:p.description||'',
           // Everything the Database already knows about this part comes across.
           // Re-deriving the manufacturer from a price check when it's sitting
@@ -1047,13 +1050,13 @@ export async function renderSalesDesk(){
           alt_mpns:(p.alt_mpns||[]),
           est_price:parseFloat(p.est_price)||0,
           // A part in several drawings is filed under the one it was saved from last.
-          drawing_number:(_partLatestDrawing(p)||{}).drawing_number||p.drawing_name||'',
-          drawing_name:(_partLatestDrawing(p)||{}).drawing_name||p.drawing_name||'', revision:(_partLatestDrawing(p)||{}).revision||p.revision||'', atlantium_pn:p.atlantium_pn||'',
+          drawing_number:dw.drawing_number||p.drawing_name||'',
+          drawing_name:dw.drawing_name||p.drawing_name||'', revision:dw.revision||p.revision||'', atlantium_pn:p.atlantium_pn||'',
           pin_count:p.pin_count||'',
           // Customer-supplied is decided per quote, never carried over from the Database.
           customer_supplied:false,
           pack_ml:parseFloat(p.pack_ml)>0 ? +p.pack_ml : (_parsePackMl(`${p.description||''} ${p.part_number||''}`)||''),
-          qty, unit:p.unit||p.units||'pcs',priority_price:parseFloat(p.priority_price)||0,
+          qty, unit:(p._dwg&&p._dwg.unit)||p.unit||p.units||'pcs',priority_price:parseFloat(p.priority_price)||0,
           mouser_price:parseFloat(p.mouser_price)||'', digikey_price:parseFloat(p.digikey_price)||'',
           ..._sdTraceFields(p),
           total:0, labor_time:'', labor_total:0};
