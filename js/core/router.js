@@ -20,8 +20,14 @@ import { _supRenderBadges } from '../features/support.js';
 // ── Router ────────────────────────────────────────────────────────────────────
 // There's no persistent sidebar — the Home screen (role-gated button grid) is
 // the hub. Every other screen shows a 🏠 button in the topbar to get back.
-export function route(v){
+// opts.force skips the current screen's leave guard (S._leaveGuard) — the
+// guard itself uses it once the user has answered its question.
+export function route(v, opts={}){
   const target = v||'home';
+  if(!opts.force && typeof S._leaveGuard==='function' && target!==S.currentView){
+    if(S._leaveGuard(target)===false) return;
+  }
+  if(target!==S.currentView) S._leaveGuard=null;
   if(!canView(target)){
     if(target!=='home') logAudit('screen_open',{screen:target},false); // blocked by role — logged as a failed attempt
     route('home'); return;

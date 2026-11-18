@@ -112,6 +112,13 @@ td.col-frozen { position:sticky; z-index:1; background-color:inherit; }
    Separate borders (spacing 0) look the same here — cells only draw their
    bottom and right edges — and each frozen cell carries its own. */
 table.has-frozen { border-collapse:separate; border-spacing:0; }
+/* After a column has been resized (makeTableResizable) the table keeps a fixed
+   layout: each column is exactly as wide as its header says, and its content
+   fits inside it instead of pushing it wider. */
+table.cols-fixed { min-width:100%; }
+table.cols-fixed th, table.cols-fixed td { overflow:hidden; text-overflow:ellipsis; }
+table.cols-fixed td input, table.cols-fixed td select, table.cols-fixed td textarea { min-width:0 !important; max-width:100%; }
+body.col-resizing, body.col-resizing * { cursor:col-resize !important; user-select:none !important; }
 /* a row spanning the whole table (Sales Desk drawing rows) keeps its label in view */
 .row-label-sticky { position:sticky; left:10px; display:inline-block; }
 thead th.col-frozen { position:sticky; z-index:3; }

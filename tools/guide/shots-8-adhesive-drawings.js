@@ -38,8 +38,8 @@ const ROWS=[
   await L.signIn(page); await L.go(page,'sales-desk'); await page.waitForSelector('#btn-sd-file');
   await page.click('#btn-sd-file'); await page.waitForTimeout(300);
   await page.setInputFiles('#sd-file-input',DWG2);
-  await page.waitForSelector('#btn-save-bom',{timeout:90000}); await page.waitForTimeout(500);
-  await page.click('#btn-save-bom'); await page.waitForTimeout(4000);
+  await page.waitForSelector('#sd-import-close',{timeout:90000}); await page.waitForTimeout(300);
+  await page.click('#sd-import-close'); await page.waitForTimeout(1500);
   // Check Price for 20 cables: the bottle size comes from the supplier's description.
   await page.click('#btn-sd-fc'); await page.waitForTimeout(500);
   await page.fill('.su-units','20'); await page.click('#su-go'); await page.waitForTimeout(3500);

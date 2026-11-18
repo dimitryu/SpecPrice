@@ -5,7 +5,7 @@ import { mergePartDoc, updatePartFields } from '../data/parts.js';
 import { lookupBottleOffers, lookupPartPrices } from '../data/pricing.js';
 import { SD_NOMINAL_LABEL_PRICE, _adhesiveFamily, _parsePackMl, _priceTargetQty, _sdBottlesFor, _sdBottlesText, _sdIsLabelRow, _sdLineCost, _sdPickBottles, _sdRecalcTotal } from '../domain/pricing.js';
 import { _wireSymbolsLegend, renderPartStock } from './database.js';
-import { _sdApplyUnits, _sdDwgKey, _sdDwgUnits, _sdSearchUrls, renderSalesDesk, sdItems } from './salesDesk/salesDesk.js';
+import { _sdApplyUnits, _sdDirtyRows, _sdDwgKey, _sdDwgUnits, _sdMarkCleanExcept, _sdSearchUrls, renderSalesDesk, sdItems } from './salesDesk/salesDesk.js';
 
 // mode: 'parts' → save to Firestore allParts; 'sd' → update sdItems in memory
 //
@@ -72,10 +72,18 @@ export function _sdAskUnitsThenCheck(targets){
   });
 }
 
-export async function runFCCheckModal(items, mode){
-  if(!items.length){toast('No parts to check','error');return;}
+// opts.headless — no window of its own: the same lookups and the same writes
+// (Sales Desk rows, and their prices mirrored into the Database), with the
+// progress handed to opts.onProgress(done, total, found, failures). Used right
+// after a drawing is read, where the import window shows every stage.
+// opts.saveToDb === false — leave the Database alone (a read-only role).
+export async function runFCCheckModal(items, mode, opts={}){
+  const headless=!!opts.headless;
+  if(!items.length){ if(!headless) toast('No parts to check','error'); return {done:0,total:0,found:0,failures:0,apiErrors:[]}; }
   let stopped=false;
   const total=items.length;
+  // Sales Desk rows the user had changed before this check (see _sdLeaveGuard).
+  const _dirtyBefore = mode==='sd' ? new Set(_sdDirtyRows()) : null;
   const _fcT0=Date.now();   // how long the whole run took — logged at the end
   setLogDrawing(logDrawingsOf(items));
 
@@ -100,7 +108,7 @@ export async function runFCCheckModal(items, mode){
       mouser_pack_ml:it.mouser_pack_ml, digikey_pack_ml:it.digikey_pack_ml, onlinecomp_pack_ml:it.onlinecomp_pack_ml, farnell_pack_ml:it.farnell_pack_ml, [field]:p}, field);
   };
 
-  showModal(`<div class="modal" style="width:min(96vw,1160px)">
+  if(!headless) showModal(`<div class="modal" style="width:min(96vw,1160px)">
     <div class="modal-head"><h3>🔍 Check Price</h3><button class="close-modal" id="fc-close-x">✕</button></div>
     <div class="modal-body" id="fc-modal-body">
       <div class="ai-status" style="margin-bottom:8px"><div class="ring"></div><span id="fc-status">Starting…</span></div>
@@ -171,8 +179,8 @@ export async function runFCCheckModal(items, mode){
   </div>`);
 
   const _fcRefresh=()=>{ if(mode==='parts'){S.allParts=[];renderPartStock();}else{renderSalesDesk();} };
-  document.getElementById('btn-fc-stop').addEventListener('click',()=>{stopped=true;closeModal();_fcRefresh();});
-  document.getElementById('fc-close-x').addEventListener('click',()=>{stopped=true;closeModal();_fcRefresh();});
+  document.getElementById('btn-fc-stop')?.addEventListener('click',()=>{stopped=true;closeModal();_fcRefresh();});
+  document.getElementById('fc-close-x')?.addEventListener('click',()=>{stopped=true;closeModal();_fcRefresh();});
 
   let done=0, found=0, failures=0, lastError='';
   // Distinct API-side problems (bad credentials, vendor outage), collected so
@@ -210,6 +218,7 @@ export async function runFCCheckModal(items, mode){
     if(stEl) stEl.textContent=`Checked ${done}/${total}…`;
     const sumEl=document.getElementById('fc-summary');
     if(sumEl) sumEl.textContent=`${done}/${total} checked, ${found} prices found${failures?`, ${failures} failed`:''}`;
+    if(opts.onProgress) try{ opts.onProgress(done,total,found,failures); }catch{}
   };
 
   async function checkOne(it, i){
@@ -522,7 +531,7 @@ export async function runFCCheckModal(items, mode){
         // Mirror into the Database so the next quote starts from a known price.
         try{
           const pn=(it.part_number||'').trim();
-          if(pn){
+          if(pn && opts.saveToDb!==false){
             const existing=S.allParts.find(p=>String(p.part_number||'').toLowerCase()===pn.toLowerCase());
             if(existing){
               const sdPatch={
@@ -572,6 +581,8 @@ export async function runFCCheckModal(items, mode){
   };
   await Promise.all(Array.from({length:Math.min(PRICE_CHECK_CONCURRENCY,total)}, worker));
 
+  // The prices just found are in the Database too, so they are not a change to save.
+  if(_dirtyBefore && opts.saveToDb!==false) _sdMarkCleanExcept(_dirtyBefore);
   const prog=document.getElementById('fc-prog'); if(prog) prog.style.width='100%';
   const stEl=document.getElementById('fc-status');
   if(stEl){
@@ -607,4 +618,5 @@ export async function runFCCheckModal(items, mode){
     ...(failures?{error:lastError}:{})
   }, failures!==total || total===0);
   setLogDrawing([]);
+  return {done, total, found, failures, lastError, apiErrors:[...apiErrors]};
 }

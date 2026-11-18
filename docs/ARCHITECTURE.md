@@ -153,10 +153,22 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
 
 ## עמודות קבועות וחלונית ההערות (v1.75)
 
-- `freezeLeftColumns(table, count)` (`core/table.js`): תיבת הסימון + 5 העמודות הראשונות (`SD_FROZEN_COLS`, `PS_FROZEN_COLS`)
-  נשארות במקום בגלילה ימינה (position:sticky). המיקומים נמדדים מכותרות העמודות ומתעדכנים בשינוי רוחב/סדר/Compact
+- `freezeLeftColumns(table, count)` (`core/table.js`): תיבת הסימון + 3 העמודות הראשונות (`SD_FROZEN_COLS`, `PS_FROZEN_COLS`)
+  נשארות במקום בגלילה ימינה (position:sticky). המיקומים הם סכום הרוחבים של הכותרות (לא המיקום שלהן — תא קבוע בטבלה גלולה נמצא איפה שהוא תקוע) ומתעדכנים בשינוי רוחב/סדר/Compact
   ובכל רינדור של ה-tbody. בחלון צר (הבלוק > 75% מהרוחב) נשארות פחות עמודות. טבלה כזו מקבלת `has-frozen`
   (border-collapse:separate), אחרת הגבולות "נשארים מאחור" והטקסט הנגלל מציץ ביניהם.
   שורה שמשתרעת על כל הטבלה (שורת שרטוט) שומרת את התווית שלה בעזרת `.row-label-sticky`.
 - חלונית Notes ב-Sales Desk היא `<details>`: מקופלת לשורה אחת עם מספר ההערות ומספר ההערות שמזכירות מסמך/תקן.
   פתוח/סגור נשמר לכל משתמש (`ui_prefs.sd_notes_open`).
+
+## קריאת שרטוט בלי חלון בדיקה, רוחב עמודות, יציאה מהדסק (v1.76)
+
+- `handleSDFiles` (`features/salesDesk/import.js`): אין יותר `showBOMPreview` בדסק. אחרי הקריאה — `_sdAddImportedRows` →
+  `saveBOMToPartStock` → `runFCCheckModal(items,'sd',{headless:true})` (אותה בדיקת מחיר, בלי חלון משלה, עם `onProgress`;
+  `saveToDb:false` לתפקיד קריאה-בלבד). כל שלב מוצג ב-`stagesPanel` (`core/ui.js`). RFQ עדיין משתמש ב-`showBOMPreview`.
+- רוחב עמודות (`makeTableResizable(table, storageKey)`, `core/table.js`): בגרירה הראשונה הטבלה עוברת ל-`table-layout:fixed`
+  (`lockTableLayout`) — כל עמודה ברוחב שלה, והעמודות שאחריה זזות. הרוחב נשמר ב-localStorage (`colWidths_<key>`) ומוחזר בכל רינדור.
+- יציאה מהדסק: `S._leaveGuard` (נקבע ב-`renderSalesDesk`, נבדק ב-`route()`, `route(v,{force:true})` עוקף). שואל רק על **שינוי של המשתמש** (v1.77):
+  כל שורה זוכרת איך נראתה כשהייתה מתואמת עם ה-Database (`_sdMarkClean`, WeakMap). שלבים אוטומטיים — קריאת שרטוט שנשמרה, Add from Database,
+  Check Price, Save — מסמנים כ"נקי" את מה שלא היה משונה לפניהם (`_sdMarkCleanExcept`). `_sdPendingDbParts` סופר שורות משונות עם מק"ט
+  ש-`_sdDbPatch` מוצא בהן מה לכתוב (או שאין להן רשומה). מחיקת שורה / שינוי Units לא נחשבים. גם `beforeunload`.

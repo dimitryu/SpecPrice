@@ -2,11 +2,13 @@ import { S } from '../../core/state.js';
 import { _aiReady } from '../../ai/client.js';
 import { _NOTE_DOC_STD_RE } from '../../ai/process.js';
 import { logAudit, logDrawingsOf, setLogDrawing } from '../../core/audit.js';
+import { isReadOnlyUser } from '../../core/roles.js';
+import { route } from '../../core/router.js';
 import { getUiPref, setUiPref } from '../../core/session.js';
 import { freezeLeftColumns, loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../../core/table.js';
 import { closeModal, debounce, esc, progressPanel, setActions, setContent, showModal, toast } from '../../core/ui.js';
 import { loadParts, saveSalesDeskToDB } from '../../data/parts.js';
-import { _partDrawings, _partLatestDrawing } from '../../domain/bom.js';
+import { _partDrawings, _partLatestDrawing, _sdDbPatch } from '../../domain/bom.js';
 import { SD_NOMINAL_LABEL_PRICE, _SD_PRICE_SOURCES, _parsePackMl, _sdBottlesFor, _sdChosenPack, _sdLaborQtyMultiplier, _sdLineCost, _sdRecalcTotal } from '../../domain/pricing.js';
 import { _PRICE_LEGEND_HTML, _priceCellHTML, _stockCellHTML, _symbolsLegend, _wireSymbolsLegend } from '../database.js';
 import { _sdAskUnitsThenCheck } from '../priceCheck.js';
@@ -24,7 +26,7 @@ export let sdItems     = [];
 // Canonical column order — identical to the Database's (see the Part Stock
 // column list) so the same data reads the same way on every screen.
 // Columns that stay in place when the table scrolls sideways (after the checkbox).
-export const SD_FROZEN_COLS=5;
+export const SD_FROZEN_COLS=3;
 export const _SD_DEFAULT_COLS=[
   {k:'drawing_number', l:'Drawing #',       w:'100px'},
   {k:'revision',       l:'Revision',        w:'60px'},
@@ -663,6 +665,7 @@ export function _sdComputeSummary(){
 }
 
 export async function renderSalesDesk(){
+  S._leaveGuard=_sdLeaveGuard; _sdWireUnload();
   await loadParts();
   setActions('');
   const SD_ALL_COLS=loadColOrder('salesdesk',_SD_DEFAULT_COLS);
@@ -1108,8 +1111,8 @@ export async function renderSalesDesk(){
     </div>`);
 
   renderSD();
-  makeTableResizable(document.getElementById('sd-table'));
-  // The checkbox + the first five columns (Drawing #, Revision, MNF P/N …) stay
+  makeTableResizable(document.getElementById('sd-table'),'salesdesk');
+  // The checkbox + the first three columns (Drawing #, Revision, MNF P/N) stay
   // put while the price columns scroll sideways.
   freezeLeftColumns(document.getElementById('sd-table'), 1+SD_FROZEN_COLS);
   makeColumnsReorderable(document.getElementById('sd-table'),'salesdesk',SD_ALL_COLS,()=>renderSalesDesk());
@@ -1143,6 +1146,7 @@ export async function renderSalesDesk(){
 
   document.getElementById('btn-sd-addpick').addEventListener('click',()=>{
     openPartPickerModal(async(parts,qtyOverride,hadSelection)=>{
+      const _dirtyBefore=new Set(_sdDirtyRows());
       let added=0;
       const newRows=[];
       for(const p of parts){
@@ -1201,7 +1205,7 @@ export async function renderSalesDesk(){
         const tm=_toolLookupMessage(t);
         if(tm && ((t.notFound||[]).length || t.aiError)) toast(tm,'warn');
         logAudit('sales_desk_tools_for_picker',{added:t.added, db:t.db, known:t.known, web:t.web, ai:t.ai, owned:t.owned},!t.aiError);
-      }finally{ _sdLaborBusy(''); setLogDrawing([]); }
+      }finally{ _sdLaborBusy(''); setLogDrawing([]); _sdMarkCleanExcept(_dirtyBefore); }
       // The labor estimate is an AI call, so it takes a moment. Without this
       // the Labor Time column just sits at 0 for a few seconds and looks broken
       // — which is exactly how the old empty stub looked.
@@ -1255,6 +1259,99 @@ export async function renderSalesDesk(){
   });
 }
 
+// ── Leaving the Sales Desk with unsaved changes ──────────────────────────────
+// The desk lives in memory only. Before another screen replaces it, a desk
+// whose DATA the user changed and did not save asks whether to save it.
+// Each row remembers how it looked when it was last in step with the Database
+// (_sdMarkClean): read from a drawing and saved, taken from the Database, given
+// prices by Check Price (which writes them to the Database too), or saved with
+// 💾 Save to Database. A row is changed when it differs from that — a cell typed
+// into, a row added by hand — and it only counts if saving would really write
+// something (a field _sdDbPatch finds, or a part with no record yet). Deleting
+// rows, changing Units or the labor estimate never asks.
+export let _sdCleanSig=null;
+function _sdSigMap(){ return _sdCleanSig || (_sdCleanSig=new WeakMap()); }
+export function _sdRowSig(r){
+  return JSON.stringify([r.part_number,r.description,r.manufacturer,r.drawing_number,r.drawing_name,r.revision,
+    r.atlantium_pn,r.unit,!!r.customer_supplied,r.pin_count,r.mouser_price,r.digikey_price,r.onlinecomp_price,r.farnell_price,r.priority_price]);
+}
+export function _sdIsDirty(r){ return _sdSigMap().get(r)!==_sdRowSig(r); }
+export function _sdDirtyRows(){ return sdItems.filter(_sdIsDirty); }
+export function _sdMarkClean(rows){ const m=_sdSigMap(); for(const r of rows) m.set(r,_sdRowSig(r)); }
+// After an automatic step: everything that was not already changed by the user.
+export function _sdMarkCleanExcept(dirtyBefore){ _sdMarkClean(sdItems.filter(r=>!dirtyBefore.has(r))); }
+export function _sdMarkSaved(){ _sdMarkClean(sdItems); }
+// How many parts the user changed that would change the Database if saved now.
+export function _sdPendingDbParts(){
+  const dirty=_sdDirtyRows().filter(r=>String(r.part_number||'').trim());
+  if(!dirty.length) return 0;
+  const byPn=new Map((S.allParts||[]).map(p=>[String(p.part_number||'').trim().toLowerCase(), p]));
+  const groups=new Map();
+  for(const r of sdItems){
+    const k=String(r.part_number||'').trim().toLowerCase();
+    if(!k) continue;
+    if(!groups.has(k)) groups.set(k,[]);
+    groups.get(k).push(r);
+  }
+  const keys=new Set(dirty.map(r=>String(r.part_number).trim().toLowerCase()));
+  let n=0;
+  for(const k of keys){
+    const rows=groups.get(k)||[], d=byPn.get(k);
+    if(!d || Object.keys(_sdDbPatch(rows[0], d, rows)).length) n++;
+  }
+  return n;
+}
+// Called by route() before it leaves this screen. true = go ahead.
+export function _sdLeaveGuard(target){
+  if(isReadOnlyUser()) return true;
+  const n=_sdPendingDbParts();
+  if(!n) return true;
+  showModal(`<div class="modal modal-sm" style="width:min(94vw,520px)">
+    <div class="modal-head"><h3>💾 Save the Sales Desk?</h3><button class="close-modal" id="sdl-x">✕</button></div>
+    <div class="modal-body" id="sdl-body">
+      <p style="font-size:13px;margin:0 0 6px"><strong>${n}</strong> part${n===1?'':'s'} on the Sales Desk ${n===1?'has':'have'} changes that are not in the Database yet.</p>
+      <p style="font-size:12px;color:var(--muted);margin:0">Save them before you leave? Only what is different is written; an empty cell never erases a value.</p>
+    </div>
+    <div class="modal-foot" id="sdl-foot">
+      <button class="btn btn-ghost" id="sdl-stay">Stay here</button>
+      <button class="btn btn-ghost" id="sdl-leave" style="color:var(--red)">Leave without saving</button>
+      <button class="btn btn-green" id="sdl-save">💾 Save and leave</button>
+    </div>
+  </div>`);
+  const go=()=>{ closeModal(); route(target, {force:true}); };
+  document.getElementById('sdl-x').addEventListener('click',closeModal);
+  document.getElementById('sdl-stay').addEventListener('click',closeModal);
+  document.getElementById('sdl-leave').addEventListener('click',()=>{ logAudit('sales_desk_leave_unsaved',{parts:n},true); go(); });
+  document.getElementById('sdl-save').addEventListener('click',async()=>{
+    const btns=[...document.querySelectorAll('#sdl-foot button')]; btns.forEach(b=>b.disabled=true);
+    const prog=progressPanel(document.getElementById('sdl-body'),'Saving to Database…');
+    try{
+      setLogDrawing(logDrawingsOf(sdItems));
+      const res=await saveSalesDeskToDB(sdItems,(d,t)=>prog.set(d,t,'Saving to Database…'));
+      logAudit('sales_desk_save_to_db',{updated:res.updated, created:res.created, unchanged:res.unchanged, fields:res.fields, errors:res.errors.length, on:'leave'}, !res.errors.length);
+      setLogDrawing([]);
+      if(res.errors.length){ prog.el.remove(); btns.forEach(b=>b.disabled=false); toast(`${res.errors.length} part(s) could not be saved: ${res.errors.slice(0,3).join(' · ')}`,'error'); return; }
+      _sdMarkSaved();
+      toast(`Database: ${res.updated} updated, ${res.created} created`,'success');
+      go();
+    }catch(e){
+      prog.el.remove(); btns.forEach(b=>b.disabled=false);
+      toast('Save error: '+e.message,'error');
+    }
+  });
+  return false;
+}
+// Closing the tab or reloading loses the desk too — the browser's own question.
+let _sdUnloadWired=false;
+function _sdWireUnload(){
+  if(_sdUnloadWired || typeof window==='undefined' || !window.addEventListener) return;
+  _sdUnloadWired=true;
+  window.addEventListener('beforeunload',e=>{
+    if(S.currentView!=='sales-desk' || isReadOnlyUser() || !_sdPendingDbParts()) return;
+    e.preventDefault(); e.returnValue='';
+  });
+}
+
 // ── 💾 Save to Database ───────────────────────────────────────────────────────
 // Writes every row on the Sales Desk to the Database: a part already there gets
 // only the fields that are different on screen; a new part is created. The
@@ -1296,6 +1393,7 @@ export function _sdSaveToDBModal(after){
       setLogDrawing(logDrawingsOf(sdItems));
       const res=await saveSalesDeskToDB(sdItems,(d,t)=>prog.set(d,t,'Saving to Database…'));
       prog.finish(`Done — ${res.updated} updated, ${res.created} created, ${res.unchanged} unchanged`);
+      if(!res.errors.length) _sdMarkSaved();
       logAudit('sales_desk_save_to_db',{updated:res.updated, created:res.created, unchanged:res.unchanged, fields:res.fields, errors:res.errors.length}, !res.errors.length);
       setLogDrawing([]);
       const FIELD_NAMES={description:'Description',manufacturer:'Manufacturer',drawing_number:'Drawing #',drawings:'Drawings (BOM)',drawing_name:'Drawing name',

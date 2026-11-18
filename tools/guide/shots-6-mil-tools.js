@@ -20,9 +20,9 @@ const PR={'M22520/2-01':{m:812.5,d:845.1},'M22520/2-07':{m:162.3,d:''},'M81969/1
   await L.signIn(page); await L.go(page,'sales-desk'); await page.waitForSelector('#btn-sd-file');
   await page.click('#btn-sd-file'); await page.waitForTimeout(400);
   await page.setInputFiles('#sd-file-input',L.A('DEMO-100-01.pdf'));
-  await page.waitForSelector('#btn-save-bom',{timeout:90000}); await page.waitForTimeout(500);
+  await page.waitForSelector('#sd-import-close',{timeout:90000}); await page.waitForTimeout(300);
   //console.log('preview', await page.evaluate(()=>[...document.querySelectorAll('#preview-tbody tr')].map(tr=>[...tr.querySelectorAll('td')].slice(3,8).map(td=>td.innerText.trim()).join(' | '))));
-  await page.click('#btn-save-bom'); await page.waitForTimeout(4000);
+  await page.click('#sd-import-close'); await page.waitForTimeout(1500);
   const rows=()=>page.evaluate(()=>[...document.querySelectorAll('#sd-tbody tr')].map(tr=>[...tr.querySelectorAll('td')].map(td=>{const i=td.querySelector('input,select');return (i?i.value:td.innerText).trim().replace(/\s+/g,' ');}).filter(Boolean).slice(0,12).join(' | ')));
   await page.click('#btn-sd-fc'); await page.waitForTimeout(500);
   await page.fill('.su-units','10'); await page.click('#su-go'); await page.waitForTimeout(4000);

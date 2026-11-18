@@ -72,7 +72,7 @@ export function openTrashModal(onChange){
 }
 
 // Columns that stay in place when the table scrolls sideways (after the checkbox).
-export const PS_FROZEN_COLS=5;
+export const PS_FROZEN_COLS=3;
 export const _PS_DEFAULT_COLS=[
   // Canonical column order, shared with Sales Desk and the Check Price modal
   // (see _SD_DEFAULT_COLS): identity → description → maker → quantity → prices.
@@ -426,7 +426,7 @@ export async function renderPartStock(filter=''){
     e.preventDefault(); psPage=1; renderPartStock(`"${l.dataset.dwg}"`);
   }));
   wireShiftCheck(document.querySelector('#ps-table'),'.ps-check');
-  makeTableResizable(document.querySelector('#ps-table'));
+  makeTableResizable(document.querySelector('#ps-table'),'partstock');
   freezeLeftColumns(document.querySelector('#ps-table'), 1+PS_FROZEN_COLS);
   makeColumnsReorderable(document.querySelector('#ps-table'),'partstock',COLS,()=>renderPartStock(inp.value));
   wireScrollButtons('#ps-table-wrap','ps-scroll-left','ps-scroll-right');

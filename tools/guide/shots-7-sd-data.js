@@ -1,5 +1,5 @@
-// Guide shots 13c, 14c, 14d, 19b — the drawing's identity from its title block,
-// editing the extracted table, customer-supplied material, Save to Database and
+// Guide shots 14c, 14d, 14e, 14g, 19b — the drawing's identity from its title block,
+// customer-supplied material, the question on leaving the desk, Save to Database and
 // the tools found for parts added from the Database. Demo data only.
 const L=require('./lib.js');
 const ROWS=[
@@ -20,27 +20,23 @@ const ROWS=[
   await L.signIn(page); await L.go(page,'sales-desk'); await page.waitForSelector('#btn-sd-file');
   await page.click('#btn-sd-file'); await page.waitForTimeout(300);
   await page.setInputFiles('#sd-file-input',L.A('DEMO-100-01.pdf'));
-  await page.waitForSelector('#btn-save-bom',{timeout:90000}); await page.waitForTimeout(500);
-  // a row added by hand
-  await page.click('#pv-add-row'); await page.waitForTimeout(200);
-  await page.evaluate(()=>{ const tr=document.querySelector('#preview-tbody tr:last-child');
-    tr.querySelector('[data-k="part_number"]').textContent='CT-100-BK'; tr.querySelector('[data-k="description"]').textContent='CABLE TIE 100MM BLACK';
-    tr.querySelector('[data-k="qty"]').textContent='4'; tr.querySelector('[data-k="unit"]').textContent='pc'; });
-  const rowOf=pn=>page.evaluate(pn=>[...document.querySelectorAll('#preview-tbody tr')].findIndex(t=>t.textContent.includes(pn)),pn);
-  const cab=await rowOf('M27500'), hs=await rowOf('HS-12-BK');
-  await L.mark(page,[{sel:'#preview-tbody tr:first-child [data-k="drawing_number"]',pad:2},{sel:'#preview-tbody tr:first-child [data-k="revision"]',pad:2},
-    {sel:'#preview-tbody tr:first-child [data-k="drawing_name"]',pad:2},{sel:'.pv-tool-note',pad:2},
-    {sel:'.pv-cust',idx:cab,pad:6},{sel:'#pv-add-row',pad:3}]);
-  await L.shot(page,'13c-sd-preview-edit','.modal');
-  await L.unmark(page);
-  await page.click('#btn-save-bom'); await page.waitForTimeout(5000);
+  await page.waitForSelector('#sd-import-close',{timeout:90000}); await page.waitForTimeout(300);
+  await page.click('#sd-import-close'); await page.waitForTimeout(1500);
   // the new columns, the customer-supplied row and its note
+  // Compact hides the supplier columns, so Cust. Supplied fits on the screen next to the rest.
+  await page.click('.sd-view-btn[data-view="compact"]'); await page.waitForTimeout(500);
   await L.mark(page,[{sel:'#sd-table thead th[data-col="revision"]',pad:2},{sel:'#sd-table thead th[data-col="atlantium_pn"]',pad:2},
     {sel:'#sd-table thead th[data-col="customer_supplied"]',pad:2},{sel:'.sd-cust-supplied:checked',pad:6},'#btn-sd-savedb']);
   await L.shot(page,'14c-sd-columns',{x:0,y:0,width:1900,height:640});
   await L.unmark(page);
+  await page.click('.sd-view-btn[data-view="full"]'); await page.waitForTimeout(500);
   // Save to Database: change a description, then save
-  await page.evaluate(()=>{ const i=[...document.querySelectorAll('.sd-part-number')].find(x=>x.value==='CT-100-BK'); const d=i.closest('tr').querySelector('.sd-description'); d.value='CABLE TIE 100MM BLACK, UV'; d.dispatchEvent(new Event('change')); });
+  await page.evaluate(()=>{ const i=[...document.querySelectorAll('.sd-part-number')].find(x=>x.value==='HS-12-BK'); const d=i.closest('tr').querySelector('.sd-description'); d.value='HEAT SHRINK 12MM BLACK, 3:1'; d.dispatchEvent(new Event('change')); });
+  // Leaving the screen with that change: the desk asks first.
+  await page.click('#btn-home'); await page.waitForSelector('#sdl-save');
+  await L.mark(page,['#sdl-stay','#sdl-leave','#sdl-save']);
+  await L.shot(page,'14g-sd-leave','.modal');
+  await L.unmark(page); await page.click('#sdl-stay'); await page.waitForTimeout(300);
   await page.click('#btn-sd-savedb'); await page.waitForSelector('#sdb-go');
   await L.shot(page,'14d-sd-savedb-ask','.modal');
   await page.click('#sdb-go'); await page.waitForSelector('#sdb-close',{timeout:20000});

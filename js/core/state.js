@@ -9,6 +9,11 @@ export const S = {
   // continuation takes as long as the first request, and a progress bar that
   // sits still for four minutes reads as a hang.
   _csOnProgress: null,
+  // owner: core/router.js
+  // A screen that must not be left without a question sets this to
+  // fn(targetView) → true (go) / false (it will call route(target,{force:true})
+  // itself once answered). route() clears it whenever the screen changes.
+  _leaveGuard: null,
   // owner: core/roles.js
   currentView: 'home',
   // owner: core/roles.js

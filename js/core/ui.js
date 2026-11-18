@@ -64,6 +64,42 @@ export function setActions(html){document.getElementById('topbar-actions').inner
 // A progress panel for a long save: a bar plus "12 / 40", so a user saving a
 // big BOM can see the work moving and how much is left. Inserted at the top of
 // `host`; set(done,total,label) updates it, done(text) shows the finish.
+// A list of steps, each with its state and its own progress bar — for a job
+// that runs several stages one after the other (read a drawing → add to Sales
+// Desk → save to the Database → check prices), so the user sees which stage is
+// running, how far it is, and what each finished one did.
+// stages: [{k, label}]. set(k, {state, text, done, total}) — state is
+// 'wait' | 'run' | 'done' | 'warn' | 'skip'. mount() redraws it into host (after
+// something else, e.g. a column-mapping question, used the same space).
+export function stagesPanel(host, stages){
+  const st=stages.map(x=>({state:'wait', text:'', done:0, total:0, pct:null, ...x}));
+  const ICON={wait:'○', run:'', done:'✓', warn:'⚠', skip:'–'};
+  const COLOR={wait:'#94A3B8', run:'var(--blue-mid)', done:'#1B6B3A', warn:'#B45309', skip:'#94A3B8'};
+  let root=null;
+  const rowHTML=x=>{
+    const pct = x.pct!=null ? x.pct : (x.total ? Math.round(100*x.done/x.total) : null);
+    const showBar = x.state==='run' || (x.state==='done' && pct!=null);
+    return `<div class="stage stage-${x.state}" data-stage="${esc(x.k)}" style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--border)">
+      <span class="stage-icon" style="width:18px;flex-shrink:0;text-align:center;font-weight:700;color:${COLOR[x.state]}">${x.state==='run'?'<span class="ring" style="width:14px;height:14px;border-width:2px;display:inline-block"></span>':ICON[x.state]}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:${x.state==='run'?700:600};color:${x.state==='wait'||x.state==='skip'?'var(--muted)':'var(--text)'}">${esc(x.label)}</div>
+        ${x.text||(x.total&&x.state==='run')?`<div class="stage-text" style="font-size:12px;color:var(--muted);margin-top:2px">${esc(x.text||'')}${x.total?` <span style="white-space:nowrap">${x.done} / ${x.total}${pct!=null?` (${pct}%)`:''}</span>`:''}</div>`:''}
+        ${showBar?`<div class="progress-bar" style="height:6px;margin-top:5px"><div class="progress-fill" style="width:${pct==null?0:pct}%;transition:width .15s;${x.state==='done'?'background:#1B6B3A':''}"></div></div>`:''}
+      </div></div>`;
+  };
+  const api={
+    mount(){
+      root=document.createElement('div');
+      root.className='stages-panel'; root.setAttribute('role','status'); root.setAttribute('aria-live','polite');
+      host.innerHTML=''; host.appendChild(root); api.render(); return api;
+    },
+    render(){ if(root && root.isConnected) root.innerHTML=st.map(rowHTML).join(''); },
+    set(k, patch){ const x=st.find(y=>y.k===k); if(!x) return; Object.assign(x, patch); api.render(); },
+    get(k){ return st.find(y=>y.k===k); },
+    el(){ return root; },
+  };
+  return api.mount();
+}
 export function progressPanel(host, label){
   const el=document.createElement('div');
   el.className='db-progress';

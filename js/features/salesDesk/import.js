@@ -3,14 +3,16 @@ import { _bomFromPDF, _findBOMPageIndex, aiExtractBOM, aiReadTitleBlock } from '
 import { _aiReady } from '../../ai/client.js';
 import { aiAnalyzeCableProcess, aiExtractDrawingNotes } from '../../ai/process.js';
 import { logAudit, logDrawingsOf, setLogDrawing } from '../../core/audit.js';
+import { isReadOnlyUser } from '../../core/roles.js';
 import { parseBoolQuery, wireSearchClear, wireShiftCheck } from '../../core/table.js';
-import { closeModal, debounce, esc, fmtPrice, showModal, toast } from '../../core/ui.js';
-import { saveBOMToPartStock } from '../../data/parts.js';
+import { closeModal, debounce, esc, fmtPrice, showModal, stagesPanel, toast } from '../../core/ui.js';
+import { loadParts, saveBOMToPartStock } from '../../data/parts.js';
 import { _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, _parseDrawingFileName, _partDrawingNumbers, _partDrawings, _partLatestDrawing, _pnKey, parseExcelSheetsStructured } from '../../domain/bom.js';
 import { _parsePackMl } from '../../domain/pricing.js';
-import { _xlsConfirmMapping, showBOMPreview } from '../bomImport.js';
+import { _xlsConfirmMapping } from '../bomImport.js';
+import { runFCCheckModal } from '../priceCheck.js';
 import { _sdAutoMatchLabor } from './labor.js';
-import { _sdDrawingNotes, _sdIsToolRow, _sdRecalcRow, _sdTraceFields, renderSalesDesk, sdItems } from './salesDesk.js';
+import { _sdDirtyRows, _sdDrawingNotes, _sdDwgKey, _sdIsToolRow, _sdMarkCleanExcept, _sdRecalcRow, _sdTraceFields, renderSalesDesk, sdItems } from './salesDesk.js';
 import { _addToolsToRows, _toolLookupMessage } from './tools.js';
 import { _isSpreadsheetFile, extractExcelText, readExcelSheets } from '../../io/excel.js';
 import { encodeImage } from '../../io/pdf.js';
@@ -184,6 +186,18 @@ export async function handleSDFiles(files){
   const foot=document.querySelector('#modal-bg .modal-foot');
   const allRows=[];
   const errors=[];
+  // One window from the file to the priced desk: read → add to Sales Desk →
+  // save to the Database → check prices. No review table in between — every
+  // stage shows here as it runs, and the desk is where rows are corrected.
+  const _ro=isReadOnlyUser();
+  const stages=stagesPanel(body, [
+    {k:'read',  label:files.length>1?`Reading ${files.length} drawings`:'Reading the drawing'},
+    {k:'desk',  label:'Adding the rows to Sales Desk'},
+    {k:'db',    label:'Saving the parts to the Database'},
+    {k:'price', label:'Checking prices — Mouser, DigiKey, Online Components, Farnell'},
+  ]);
+  stages.set('read',{state:'run', text:'Starting…', pct:0});
+  if(foot) foot.innerHTML='';
 
   for(let fidx=0; fidx<files.length; fidx++){
     const file=files[fidx];
@@ -195,14 +209,11 @@ export async function handleSDFiles(files){
     const isXls=_isSpreadsheetFile(file);
     if(!isPDF&&!isImg&&!isXls){ errors.push(`"${file.name}" — not a PDF, image or spreadsheet, skipped`); continue; }
 
-    const filePrefix = files.length>1 ? `File ${fidx+1}/${files.length}: ${esc(file.name)} — ` : '';
-    body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="sd-ai-msg">${filePrefix}${isXls?'Reading spreadsheet…':(isPDF?'Extracting PDF text…':'Reading image…')}</span></div>
-      <div class="progress-bar"><div class="progress-fill" id="sd-prog"></div></div>`;
-    foot.innerHTML='';
-    const setM=(m,p)=>{
-      const e=document.getElementById('sd-ai-msg');if(e)e.textContent=filePrefix+m;
-      const b=document.getElementById('sd-prog');if(b)b.style.width=p+'%';
-    };
+    const filePrefix = files.length>1 ? `File ${fidx+1}/${files.length}: ${file.name} — ` : '';
+    // The bar covers all the files: each file is its share of 100%.
+    const setM=(m,p)=>stages.set('read',{state:'run', text:filePrefix+m,
+      pct:Math.round(((fidx + Math.min(100,Math.max(0,+p||0))/100) / files.length)*100)});
+    setM(isXls?'Reading spreadsheet…':(isPDF?'Extracting PDF text…':'Reading image…'),2);
 
     try {
       let extractedRows=[], _bomDiag=[];
@@ -216,10 +227,9 @@ export async function handleSDFiles(files){
         // Same column-mapping confirmation as the RFQ import — see
         // _xlsConfirmMapping. A recognised export goes straight through.
         const _colChoice=await _xlsConfirmMapping(sheets, file.name, body, foot);
+        stages.mount(); foot.innerHTML='';
         if(_colChoice===null){ errors.push(`"${file.name}" — import cancelled`); continue; }
-        body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="sd-ai-msg">${filePrefix}Reading spreadsheet…</span></div>
-      <div class="progress-bar"><div class="progress-fill" id="sd-prog"></div></div>`;
-        foot.innerHTML='';
+        setM('Reading spreadsheet…',30);
         // Structured parse first — exact and repeatable (see
         // _parseStructuredBOMSheet). AI only for unrecognisable layouts.
         extractedRows=parseExcelSheetsStructured(sheets, _colChoice)||[];
@@ -395,121 +405,152 @@ export async function handleSDFiles(files){
   setLogDrawing([]);   // the reading is over; the save (below) sets it again
   if(errors.length) errors.forEach(msg=>toast(msg,'error'));
 
-  const _ringEl=body.querySelector('.ring');
-  if(_ringEl){_ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';
-    _ringEl.textContent='✓';}
-
   if(!allRows.length){
+    stages.set('read',{state:'warn', text:'No BOM rows were found', pct:100});
+    ['desk','db','price'].forEach(k=>stages.set(k,{state:'skip'}));
     // What each file's reading did stays on screen (a toast is gone in seconds).
-    body.innerHTML=`<p style="color:var(--muted);margin-top:10px">No BOM rows were detected in ${files.length>1?`any of the ${files.length} files`:'this file'}.</p>
+    body.insertAdjacentHTML('beforeend',`<p style="color:var(--muted);margin-top:10px">No BOM rows were detected in ${files.length>1?`any of the ${files.length} files`:'this file'}.</p>
       ${errors.length?`<div class="sd-import-why" style="margin-top:8px;font-size:12px;line-height:1.5;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:8px 10px;color:#7F1D1D">
-        <strong>What happened:</strong><ul style="margin:4px 0 0 18px;padding:0">${errors.map(m=>`<li>${esc(m)}</li>`).join('')}</ul></div>`:''}`;
+        <strong>What happened:</strong><ul style="margin:4px 0 0 18px;padding:0">${errors.map(m=>`<li>${esc(m)}</li>`).join('')}</ul></div>`:''}`);
     foot.innerHTML=`<button class="btn btn-ghost" data-close-modal>Close</button>`;
     return;
   }
+  stages.set('read',{state:'done', pct:100,
+    text:`${allRows.length} row${allRows.length===1?'':'s'} found${files.length>1?` in ${files.length} files`:''}${errors.length?` · ${errors.length} file(s) skipped`:''}`});
+  setLogDrawing(logDrawingsOf(allRows));
 
-  // Show editable preview — on Save: save to Part Stock + add to Sales Desk
-  showBOMPreview(allRows, body, foot,
-    `💾 Save to Database + Sales Desk (${allRows.length} rows${files.length>1?` from ${files.length} files`:''})`,
-    async(updatedRows, prog)=>{
-      setLogDrawing(logDrawingsOf(updatedRows));
-      await saveBOMToPartStock(updatedRows, '', prog ? (d,t)=>prog.set(d,t,'Saving to Database…') : null);
-      if(prog) prog.note(`Adding ${updatedRows.length} rows to Sales Desk…`);
-      let added=0;
-      let _sdRowIdx=-1;
-      // A synthesized tool row sits right after the connector it is for (the
-      // extraction prompt asks for exactly that), so the connector is the last
-      // non-tool row before it that has pins.
-      let _lastConnector='';
-      for(const r of updatedRows){
-        _sdRowIdx++;
-        const _isTool=_sdIsToolRow(r);
-        if(!_isTool && String(r.pin_count||'').trim()) _lastConnector=(r.part_number||'').trim();
-        const pn=(r.part_number||'').trim().toLowerCase();
-        const match=pn?S.allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
-        const qty=parseFloat(r.qty)||1;
-        const item={
-          // NOT `|| r.item`: the item column is the row's ORDINAL on the sheet
-          // ("1", "2", "3"), not a part number. Falling back to it filled MNF
-          // P/N with 1..N on any file whose rows carry no manufacturer number,
-          // which reads as a real part, gets sent to Check Price as one, and
-          // matches nothing. An empty cell is the truthful answer.
-          part_number:r.part_number||'', description:r.description||'',
-          drawing_number:r.drawing_number||(_partLatestDrawing(match)||{}).drawing_number||match?.drawing_name||'',
-          drawing_name:r.drawing_name||'', revision:r.revision||'', atlantium_pn:r.atlantium_pn||'',
-          pin_count:r.pin_count||'', customer_supplied:!!r.customer_supplied,
-          tool_source:_isTool ? (r.tool_source||'ai') : '',
-          qty, unit:r.unit||match?.unit||match?.units||'pcs',
-          // A crimp/insertion TOOL row is synthesized fresh by the AI during
-          // drawing extraction (see _BOM_TEXT_PROMPT/_BOM_VISION_PROMPT rule 5)
-          // and carries its own approximate price on r.price — it generally
-          // won't be found in the Database (allParts/match) yet since it was
-          // just created by saveBOMToPartStock a few lines above and the local
-          // allParts cache hasn't been refreshed. Prefer r.price when present
-          // so the tool's estimate shows up immediately instead of appearing as
-          // $0.00 until the next Database refresh.
-          est_price:r.price?(parseFloat(r.price)||0):(match?parseFloat(match.est_price)||0:0),
-          alt_mpns:(r.alt_mpns||[]).length>1?r.alt_mpns:((match&&match.alt_mpns)||[]),
-          priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
-          mouser_price:match?parseFloat(match.mouser_price)||'':'',
-          ..._sdTraceFields(match),
-          // A tool found and priced during the import carries its own prices
-          // and links (see _addToolsToRows) — they win over an empty record.
-          ...(_isTool ? _sdToolRowPrices(r) : {}),
-          tool_for: _isTool ? (r.tool_for||_lastConnector) : '',
-          digikey_price:match?parseFloat(match.digikey_price)||'':'',
-          ...(_isTool && +r.digikey_price>0 ? {digikey_price:+r.digikey_price} : {}),
-          onlinecomp_price:match?parseFloat(match.onlinecomp_price)||'':'',
-          ...(_isTool && +r.onlinecomp_price>0 ? {onlinecomp_price:+r.onlinecomp_price} : {}),
-          farnell_price:match?parseFloat(match.farnell_price)||'':'',
-          ...(_isTool && +r.farnell_price>0 ? {farnell_price:+r.farnell_price} : {}),
-          tool_url:r.tool_url||'', tool_in_db:!!r.tool_in_db,
-          // An adhesive's bottle size: the Database's, else what the drawing says ("LOCTITE 243 50ML").
-          pack_ml: parseFloat(match?.pack_ml)>0 ? +match.pack_ml : (_parsePackMl(`${r.description||''} ${r.part_number||''}`)||''),
-          tool_note:_isTool ? (r.tool_note||'') : '', tool_pages:_isTool && Array.isArray(r.tool_pages) ? r.tool_pages : [],
-          labor_time:'', labor_total:0,
-          // Whether this tool is already owned (in Stock) is no longer decided
-          // here once at import time — see _sdIsToolOwned, which checks the
-          // Database live every time Cost Summary recomputes, so toggling the
-          // Stock checkbox later is picked up immediately.
-        };
-        // Cable-process-analysis time (see handleSDFiles) is the sole source of
-        // an auto-filled Labor Time for drawing-imported rows (Manufacturing
-        // Routings, a keyword-based fallback, was removed). It's already a
-        // FIXED TOTAL (unit_minutes × qty_in_drawing, computed in handleSDFiles
-        // from the AI's own count of drawing repeats) — _laborFixedTotal tells
-        // _sdRecalcLaborTotal to use it as-is instead of multiplying again by
-        // this row's own qty column (see that function for why).
-        // Must match the EXACT same fallback priority used when this key was
-        // stored above (row.part_number||row.description||step.row_idx), and be
-        // built from `r` rather than `item` — the two used to diverge for rows
-        // with no manufacturer part number (item.part_number fell back to the
-        // item ORDINAL, the storage side to the description), which silently
-        // dropped the AI-computed fixed total for exactly those rows: plain
-        // cable/wire and generic hardware. That fallback is gone now, but keep
-        // both sides reading from `r` so they cannot drift apart again.
-        if(r._labor_min!=null && (parseFloat(r._labor_min)||0)>0){
-          item.labor_time = String(+parseFloat(r._labor_min).toFixed(2));
-          item._laborFixedTotal = true;
-        }
-        _sdRecalcRow(item);
-        sdItems.push(item);
-        added++;
-      }
-      S._sdPendingLaborByKey={};
-      toast(`Added ${added} parts to Sales Desk`,'success');
-      logAudit('sales_desk_add_from_drawing',{count:added},true);
-      setLogDrawing([]);
-      closeModal();
-      document.getElementById('sd-tbody')&&renderSalesDesk();
-      await _sdAutoMatchLabor();
-      document.getElementById('sd-tbody')&&renderSalesDesk();
-      // No popup here anymore — whether any TOOL row is excluded because it's
-      // already in Stock is shown inline in each drawing’s Cost Summary block
-      // in _sdUpdateSummaryUI, driven by _sdIsToolOwned), which the renderSalesDesk()
-      // call above already refreshes.
+  // ── 2. Into the Sales Desk ──
+  const _dirtyBefore=new Set(_sdDirtyRows());   // what the user had changed before this drawing
+  stages.set('desk',{state:'run', text:`${allRows.length} rows…`});
+  const added=_sdAddImportedRows(allRows);
+  stages.set('desk',{state:'done', text:`${added.length} row${added.length===1?'':'s'} added`});
+  logAudit('sales_desk_add_from_drawing',{count:added.length},true);
+  document.getElementById('sd-tbody')&&renderSalesDesk();
+
+  // ── 3. Into the Database ── (a read-only role can look, not write)
+  let dbOk=false;
+  if(_ro){
+    stages.set('db',{state:'skip', text:'Your role is read-only — nothing was saved'});
+  } else {
+    stages.set('db',{state:'run', text:'Saving…', done:0, total:allRows.length});
+    try{
+      await saveBOMToPartStock(allRows, '', (d,t)=>stages.set('db',{state:'run', text:'Saving…', done:d, total:t}));
+      dbOk=true;
+      stages.set('db',{state:'done', text:'Saved', done:allRows.length, total:allRows.length});
+      // The Check Price below finds these records and adds their prices.
+      S.allParts=[]; await loadParts();
+    }catch(e){
+      stages.set('db',{state:'warn', text:'Could not save: '+e.message+' — use 💾 Save to Database on the desk to try again'});
     }
-  );
+  }
+
+  // ── 4. Prices ── (for the number of cables each drawing is set to — 1 for a new one)
+  const items=added.filter(r=>String(r.part_number||'').trim()).map(r=>({
+    part_number:r.part_number, qty:parseFloat(r.qty)||1, unit:r.unit||'',
+    pack_ml:r.pack_ml||'', drawing_number:r.drawing_number||'', onlinecomp_uom:r.onlinecomp_uom||'', farnell_uom:r.farnell_uom||'',
+    description:r.description||'', alt_mpns:r.alt_mpns||[], priority_price:r.priority_price||0, _sdIdx:sdItems.indexOf(r)}));
+  let pr=null;
+  if(!items.length){
+    stages.set('price',{state:'skip', text:'No part numbers to look up'});
+  } else {
+    stages.set('price',{state:'run', text:'Looking up…', done:0, total:items.length});
+    try{
+      pr=await runFCCheckModal(items,'sd',{headless:true, saveToDb:!_ro && dbOk,
+        onProgress:(d,t,f,x)=>stages.set('price',{state:'run', text:`${f} price${f===1?'':'s'} found${x?`, ${x} failed`:''} —`, done:d, total:t})});
+      const apiErr=(pr.apiErrors||[]).filter(m=>!/no (api key|credentials) configured/i.test(m));
+      const allFailed=pr.total>0 && pr.failures===pr.total;
+      stages.set('price',{state:allFailed?'warn':'done', done:0, total:0, pct:100,
+        text: allFailed ? `The price check failed — ${pr.lastError||'no answer from the distributors'}`
+            : `${pr.found} of ${pr.total} found${pr.failures?`, ${pr.failures} failed`:''}${!_ro && dbOk?' — prices saved to the Database':''}${apiErr.length?` · ${apiErr.slice(0,2).join(' · ')}`:''}`});
+    }catch(e){
+      stages.set('price',{state:'warn', text:'The price check failed: '+e.message+' — run 🔍 Check Price on the desk'});
+    }
+  }
+  S._sdPendingLaborByKey={};
+  setLogDrawing([]);
+  document.getElementById('sd-tbody')&&renderSalesDesk();
+  await _sdAutoMatchLabor();
+  document.getElementById('sd-tbody')&&renderSalesDesk();
+  // The new rows are what the Database holds now (see _sdLeaveGuard); rows the
+  // user had already changed stay changed.
+  if(dbOk) _sdMarkCleanExcept(_dirtyBefore);
+  const when=new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  body.insertAdjacentHTML('beforeend',`<div class="sd-import-done" style="margin-top:12px;font-size:13px;color:#1B6B3A;font-weight:600">
+    ✓ Done (${when}) — ${added.length} row${added.length===1?'':'s'} on the Sales Desk${pr?` · ${pr.found}/${pr.total} priced`:''}.
+    <div style="font-weight:400;color:var(--muted);font-size:12px;margin-top:3px">Prices are for ${items.length&&new Set(added.map(r=>_sdDwgKey(r))).size>1?'the number of cables each drawing is set to':'one cable'} — for a larger order, set <strong>Units</strong> and run 🔍 Check Price again. Fix any cell on the desk; 💾 Save to Database stores the changes.</div></div>`);
+  foot.innerHTML=`<button class="btn btn-green" id="sd-import-close">Close</button>`;
+  document.getElementById('sd-import-close').addEventListener('click',()=>closeModal());
+  toast(`Added ${added.length} parts to Sales Desk${pr?` — ${pr.found} priced`:''}`,'success');
+  // No popup here anymore — whether any TOOL row is excluded because it's
+  // already in Stock is shown inline in each drawing’s Cost Summary block
+  // in _sdUpdateSummaryUI, driven by _sdIsToolOwned).
+}
+
+// Turns rows read from drawings into Sales Desk rows (pushed onto sdItems) and
+// returns them. What the Database already knows about a part fills the gaps.
+export function _sdAddImportedRows(rows){
+  const out=[];
+  let _sdRowIdx=-1;
+  // A synthesized tool row sits right after the connector it is for (the
+  // extraction prompt asks for exactly that), so the connector is the last
+  // non-tool row before it that has pins.
+  let _lastConnector='';
+  for(const r of rows){
+    _sdRowIdx++;
+    const _isTool=_sdIsToolRow(r);
+    if(!_isTool && String(r.pin_count||'').trim()) _lastConnector=(r.part_number||'').trim();
+    const pn=(r.part_number||'').trim().toLowerCase();
+    const match=pn?S.allParts.find(p=>String(p.part_number||'').toLowerCase()===pn):null;
+    const qty=parseFloat(r.qty)||1;
+    const item={
+      // NOT `|| r.item`: the item column is the row's ORDINAL on the sheet
+      // ("1", "2", "3"), not a part number. Falling back to it filled MNF
+      // P/N with 1..N on any file whose rows carry no manufacturer number,
+      // which reads as a real part, gets sent to Check Price as one, and
+      // matches nothing. An empty cell is the truthful answer.
+      part_number:r.part_number||'', description:r.description||'',
+      drawing_number:r.drawing_number||(_partLatestDrawing(match)||{}).drawing_number||match?.drawing_name||'',
+      drawing_name:r.drawing_name||'', revision:r.revision||'', atlantium_pn:r.atlantium_pn||'',
+      pin_count:r.pin_count||'', customer_supplied:!!r.customer_supplied,
+      tool_source:_isTool ? (r.tool_source||'ai') : '',
+      qty, unit:r.unit||match?.unit||match?.units||'pcs',
+      // A crimp/insertion TOOL row carries its own approximate price on r.price
+      // — prefer it, so the tool's estimate shows up immediately.
+      est_price:r.price?(parseFloat(r.price)||0):(match?parseFloat(match.est_price)||0:0),
+      alt_mpns:(r.alt_mpns||[]).length>1?r.alt_mpns:((match&&match.alt_mpns)||[]),
+      priority_price:match?parseFloat(match.priority_price)||0:0, total:0,
+      mouser_price:match?parseFloat(match.mouser_price)||'':'',
+      ..._sdTraceFields(match),
+      // A tool found and priced during the import carries its own prices
+      // and links (see _addToolsToRows) — they win over an empty record.
+      ...(_isTool ? _sdToolRowPrices(r) : {}),
+      tool_for: _isTool ? (r.tool_for||_lastConnector) : '',
+      digikey_price:match?parseFloat(match.digikey_price)||'':'',
+      ...(_isTool && +r.digikey_price>0 ? {digikey_price:+r.digikey_price} : {}),
+      onlinecomp_price:match?parseFloat(match.onlinecomp_price)||'':'',
+      ...(_isTool && +r.onlinecomp_price>0 ? {onlinecomp_price:+r.onlinecomp_price} : {}),
+      farnell_price:match?parseFloat(match.farnell_price)||'':'',
+      ...(_isTool && +r.farnell_price>0 ? {farnell_price:+r.farnell_price} : {}),
+      tool_url:r.tool_url||'', tool_in_db:!!r.tool_in_db,
+      // An adhesive's bottle size: the Database's, else what the drawing says ("LOCTITE 243 50ML").
+      pack_ml: parseFloat(match?.pack_ml)>0 ? +match.pack_ml : (_parsePackMl(`${r.description||''} ${r.part_number||''}`)||''),
+      tool_note:_isTool ? (r.tool_note||'') : '', tool_pages:_isTool && Array.isArray(r.tool_pages) ? r.tool_pages : [],
+      labor_time:'', labor_total:0,
+    };
+    // Cable-process-analysis time (see handleSDFiles) is the sole source of
+    // an auto-filled Labor Time for drawing-imported rows. It's already a
+    // FIXED TOTAL (unit_minutes × qty_in_drawing) — _laborFixedTotal tells
+    // _sdRecalcLaborTotal to use it as-is instead of multiplying again by
+    // this row's own qty column.
+    if(r._labor_min!=null && (parseFloat(r._labor_min)||0)>0){
+      item.labor_time = String(+parseFloat(r._labor_min).toFixed(2));
+      item._laborFixedTotal = true;
+    }
+    _sdRecalcRow(item);
+    sdItems.push(item);
+    out.push(item);
+  }
+  return out;
 }
 
 // The prices and links a tool row brought from the import (only what is set).

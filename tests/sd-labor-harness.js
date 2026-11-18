@@ -59,15 +59,23 @@ vm.runInContext(`aiProxy=true; companyId='c1'; currentUserEmail='u@x'; currentUs
   _fetchWithRetry=async(u,o)=>__f.handler(JSON.parse(o.body));
   logSystemAudit=async()=>{}; logAudit=async()=>{};
   extractPDFPages=async()=>({pageTexts:['schematic only'], pageImages:['P1'], crop:async()=>['B1'], numPages:1});
-  loadParts=async()=>{}; saveBOMToPartStock=async()=>0;`, ctx);
+  loadParts=async()=>{}; __f.saved=[]; saveBOMToPartStock=async(rows)=>{ __f.saved.push(rows.length); return 0; };
+  __f.fc=[]; runFCCheckModal=async(items,mode,opts)=>{ __f.fc.push({n:items.length,mode,opts});
+    if(opts&&opts.onProgress) opts.onProgress(items.length,items.length,3,0);
+    return {done:items.length,total:items.length,found:3,failures:0,apiErrors:[]}; };`, ctx);
 
 (async()=>{
   await M.handleSDFiles([{name:'EL-004695-AC_B.pdf', type:'application/pdf'}]);
   for(let i=0;i<5;i++) await tick();
-  const btn=g.document.getElementById('btn-save-bom');
-  ok('preview: the rows are shown for review', !!btn);
-  btn.click();
   for(let i=0;i<10;i++) await tick();
+  // No review table any more: straight to the desk, the Database and the prices.
+  no('no preview: there is no review table to confirm', !!g.document.getElementById('btn-save-bom'));
+  const stg=[...g.document.querySelectorAll('#sd-modal-body .stage')].map(e=>e.dataset.stage+':'+e.className.replace(/.*stage-/,''));
+  ok('stages: read → desk → Database → prices, all done ('+stg.join(' ')+')', stg.join(' ')==='read:done desk:done db:done price:done');
+  ok('database: the rows were saved without asking', ctx.__f.saved.length===1 && ctx.__f.saved[0]===8);
+  const fc=ctx.__f.fc[0]||{};
+  ok('prices: checked right away, in the import window (headless)', fc.n===8 && fc.mode==='sd' && fc.opts && fc.opts.headless===true && fc.opts.saveToDb===true);
+  ok('stages: the price stage says how many were found', /3 of 8 found/.test(g.document.getElementById('sd-modal-body').textContent));
   const items=vm.runInContext('sdItems', ctx);
   ok('sales desk: all 8 rows were added', items.length===8);
   const lt=items.map(r=>parseFloat(r.labor_time)||0);
@@ -110,6 +118,38 @@ vm.runInContext(`aiProxy=true; companyId='c1'; currentUserEmail='u@x'; currentUs
   ok('modal: a hand-added row is listed as minutes without a step analysis', /Rows without a step analysis<\/span><span>1\.0/.test(modal()));
   ok(`modal: ...and the breakdown total still equals the summary (${total(modal())} = ${grp2.laborMinutesPerUnit.toFixed(1)})`,
      Math.abs(total(modal())-grp2.laborMinutesPerUnit)<0.06);
+
+  // ── leaving the desk ──
+  M.closeModal();
+  vm.runInContext('sdItems.pop(); _sdMarkSaved();', ctx);
+  ok('leave: right after a save nothing is pending', M._sdPendingDbParts()===0);
+  ok('leave: ...so leaving does not ask', M._sdLeaveGuard('home')===true);
+  vm.runInContext('sdItems[0].description="changed by hand";', ctx);
+  ok('leave: an edited row is pending', M._sdPendingDbParts()>0);
+  ok('leave: ...and leaving asks first (stays on the screen)', M._sdLeaveGuard('home')===false && /Save the Sales Desk\?/.test(modal()) && !!g.document.getElementById('sdl-save'));
+  M.closeModal();
+  vm.runInContext('allParts=[{part_number:"2126/19-2", description:"changed by hand"}];', ctx);
+  vm.runInContext('currentUserRole="viewer"; roleViewsMap={viewer:{views:["sales-desk"], readOnly:true}};', ctx);
+  ok('leave: a read-only role is never asked', M._sdLeaveGuard('home')===true || !M.isReadOnlyUser());
+  vm.runInContext('currentUserRole="admin";', ctx);
+  // only a change the USER made counts
+  vm.runInContext('allParts=[]; _sdMarkSaved();', ctx);
+  ok('change: nothing changed → nothing pending', M._sdPendingDbParts()===0);
+  vm.runInContext('sdItems.splice(0,1);', ctx);
+  ok('change: deleting a row is not a change to save', M._sdPendingDbParts()===0);
+  vm.runInContext('_sdApplyUnits(sdItems[0].drawing_number, 25);', ctx);
+  ok('change: changing Units is not a change to save', M._sdPendingDbParts()===0);
+  vm.runInContext('sdItems.push({part_number:"",description:"",qty:1,unit:""});', ctx);
+  ok('change: an empty new row is not a change', M._sdPendingDbParts()===0);
+  vm.runInContext('sdItems[sdItems.length-1].part_number="NEW-1";', ctx);
+  ok('change: a part typed into a new row is a change', M._sdPendingDbParts()===1);
+  // an automatic step (a price check, Add from Database) keeps the user's change and adds none of its own
+  vm.runInContext('__f.before=new Set(_sdDirtyRows()); sdItems[0].mouser_price=1.23; sdItems.push({part_number:"DB-1",description:"from db",qty:1,unit:"pc"}); _sdMarkCleanExcept(__f.before);', ctx);
+  ok('change: after an automatic step only the user\'s change is pending', M._sdPendingDbParts()===1 && M._sdIsDirty(vm.runInContext('sdItems[sdItems.length-2]',ctx)));
+  vm.runInContext('_sdMarkSaved();', ctx);
+  ok('change: after saving nothing is pending', M._sdPendingDbParts()===0);
+  vm.runInContext('sdItems.length=0;', ctx);
+  ok('leave: an empty desk does not ask', M._sdLeaveGuard('home')===true);
 
   console.log(`\n  ${pass} passed, ${fail} failed\n`);
   fails.forEach(f=>console.log('  ✗ '+f));

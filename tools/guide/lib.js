@@ -224,8 +224,11 @@ async function signIn(page, uid='u1', email='dana.cohen@demo-co.com'){
   await page.waitForTimeout(400);
 }
 async function go(page, view){
-  if(view==='home'){ await page.click('#btn-home'); }
-  else { if(await page.$('#btn-home:visible')) await page.click('#btn-home'); await page.click(`.home-btn[data-view="${view}"]`); }
+  // Leaving a Sales Desk with unsaved changes asks first; a shot that is only
+  // moving on answers "Leave without saving".
+  const leave=async()=>{ await page.waitForTimeout(150); const l=await page.$('#sdl-leave'); if(l){ await l.click(); await page.waitForTimeout(300); } };
+  if(view==='home'){ await page.click('#btn-home'); await leave(); }
+  else { if(await page.$('#btn-home:visible')){ await page.click('#btn-home'); await leave(); } await page.click(`.home-btn[data-view="${view}"]`); }
   await page.waitForTimeout(700);
 }
 // Draws numbered markers. items: [selector | {sel, pad, idx(nth match), label}]

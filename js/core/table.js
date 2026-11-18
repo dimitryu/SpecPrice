@@ -2,34 +2,75 @@
 // PART STOCK
 // ══════════════════════════════════════════════════════════════════════════════
 // ── Resizable columns ──────────────────────────────────────────────────────
-export function makeTableResizable(table){
+// Dragging a header's right edge sets that column's width; the columns after
+// it move with it (the table grows or shrinks), the way a spreadsheet does.
+// To get there the table is switched to a fixed layout on the first drag: every
+// column is pinned at the width it has on screen, so changing one changes only
+// that one. (In the automatic layout a narrower column just handed its space to
+// the others or refused to shrink below its content, and the frozen columns
+// kept their old places — the empty gaps.) With a storageKey the widths of the
+// <th data-col> columns are remembered per browser and put back on every
+// re-render (sort, reorder, Compact/Full, a new drawing).
+export const MIN_COL_W = 40;
+export function loadColWidths(storageKey){
+  if(!storageKey) return {};
+  try{ const o=JSON.parse(localStorage.getItem('colWidths_'+storageKey)||'{}'); return o && typeof o==='object' ? o : {}; }catch{ return {}; }
+}
+export function saveColWidths(storageKey, widths){
+  if(!storageKey) return;
+  try{ localStorage.setItem('colWidths_'+storageKey, JSON.stringify(widths)); }catch{}
+}
+// Pins every column at its current on-screen width (stored widths win) and
+// switches the table to table-layout:fixed. Returns the widths, in column order.
+export function lockTableLayout(table, stored={}){
+  const ths=[...(table.tHead?.rows[0]?.cells||[])];
+  const ws=ths.map(th=>{
+    const k=th.dataset && th.dataset.col;
+    const sw=k && parseFloat(stored[k]);
+    return sw>0 ? Math.max(MIN_COL_W, sw) : th.getBoundingClientRect().width;
+  });
+  ths.forEach((th,i)=>{ th.style.width=ws[i]+'px'; th.style.minWidth=''; th.style.maxWidth=''; });
+  table.classList.add('cols-fixed');
+  table.style.tableLayout='fixed';
+  table.style.width=ws.reduce((a,b)=>a+b,0)+'px';
+  return ws;
+}
+export function makeTableResizable(table, storageKey){
   if(!table) return;
+  const stored=loadColWidths(storageKey);
+  const head=table.tHead && table.tHead.rows[0];
+  let ws=null;
+  // Remembered widths go back on now, if the table already has rows to measure;
+  // otherwise on the first drag.
+  if(head && Object.keys(stored).length && table.tBodies[0] && table.tBodies[0].querySelector('tr:not(.empty-row)')) ws=lockTableLayout(table, stored);
   table.querySelectorAll('thead th').forEach((th,ci)=>{
     if(th.querySelector('.col-resizer')) return;
     const r=document.createElement('div');
     r.className='col-resizer';
     r.draggable=false;
+    r.title='Drag to change the width';
     r.addEventListener('dragstart',e=>e.preventDefault());
     th.appendChild(r);
     r.addEventListener('click',e=>{e.stopPropagation();e.preventDefault();});
     let x0=0,w0=0,dragged=false;
     r.addEventListener('mousedown',e=>{
-      x0=e.clientX; w0=th.getBoundingClientRect().width; dragged=false;
+      if(!table.classList.contains('cols-fixed') || !ws) ws=lockTableLayout(table, loadColWidths(storageKey));
+      x0=e.clientX; w0=ws[ci]; dragged=false;
+      document.body.classList.add('col-resizing');
       const move=ev=>{
         dragged=true;
-        const w=Math.max(40,w0+ev.clientX-x0);
-        th.style.minWidth=w+'px'; th.style.width=w+'px';
+        const w=Math.max(Math.min(MIN_COL_W,w0), Math.round(w0+ev.clientX-x0));
+        ws[ci]=w;
+        th.style.width=w+'px';
+        table.style.width=ws.reduce((a,b)=>a+b,0)+'px';
       };
       const up=()=>{
         document.removeEventListener('mousemove',move);
         document.removeEventListener('mouseup',up);
+        document.body.classList.remove('col-resizing');
         if(dragged){
-          const finalW=th.offsetWidth;
-          table.querySelectorAll(`tbody tr > *:nth-child(${ci+1})`).forEach(td=>{
-            td.style.whiteSpace='normal';
-            td.style.maxWidth=finalW+'px';
-            td.style.lineHeight='1.35';
-          });
+          const k=th.dataset && th.dataset.col;
+          if(k && storageKey){ const all=loadColWidths(storageKey); all[k]=ws[ci]; saveColWidths(storageKey, all); }
           // The mouseup that ends a drag almost never lands back on the thin
           // resizer strip — it lands on the header cell itself, so the browser
           // fires a native "click" on the th right after this handler returns,
@@ -128,13 +169,16 @@ export function freezeLeftColumns(table, count, maxShare=0.75){
     // Fractional positions (getBoundingClientRect), not offsetLeft: offsetLeft is
     // rounded, and half a pixel between two frozen cells lets the scrolled
     // text show through as a thin stripe.
-    const rects=ths.map(th=>th.getBoundingClientRect());
-    const base=rects.length ? rects[0].left : 0;
+    // Positions are the running sum of the WIDTHS. Reading where a header cell
+    // is would be wrong once the table has scrolled: a frozen cell is then
+    // where it is stuck, not where it belongs, and after a resize the next
+    // frozen column kept its old place and left an empty gap.
+    const widths=ths.map(th=>th.getBoundingClientRect().width);
+    const lefts=[]; let acc=0;
+    for(const w of widths){ lefts.push(acc); acc+=w; }
     let n=Math.min(count, ths.length);
-    const leftOf=i=>rects[i].left-base;
-    while(n>1 && avail && (rects[n-1].right-base) > avail*maxShare) n--;
-    if(n===1 && avail && rects[0].width > avail*maxShare) n=0;
-    const lefts=ths.slice(0,n).map((_,i)=>leftOf(i));
+    while(n>1 && avail && (lefts[n-1]+widths[n-1]) > avail*maxShare) n--;
+    if(n===1 && avail && widths[0] > avail*maxShare) n=0;
     for(const tr of table.rows){
       let col=0;
       for(const cell of tr.cells){
