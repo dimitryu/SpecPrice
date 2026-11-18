@@ -43,6 +43,40 @@ service cloud.firestore {
       return isActive() && myCompanyId() == cid;
     }
 
+    // An admin is the admin of THEIR company — not of every company in the
+    // project. (Settings > Roles, the company list and the shared API keys
+    // stay with any admin: this is a single-company deployment.)
+    function isCompanyAdmin(cid) {
+      return isAdmin() && myCompanyId() == cid;
+    }
+
+    // Roles are enforced here, not only by which buttons the screen shows.
+    // 'viewer' is read-only by definition; any other role is read-only when
+    // its roles/{key} document says read_only: true (Settings > Roles). An
+    // admin is never read-only.
+    function myRoleIsReadOnly() {
+      let rp = /databases/$(database)/documents/roles/$(myRole());
+      return myRole() == 'viewer'
+          || (exists(rp) && get(rp).data.get('read_only', false) == true);
+    }
+    function canEdit(cid) {
+      return isCompanyAdmin(cid) || (isSameCompany(cid) && myRole() != 'admin' && !myRoleIsReadOnly());
+    }
+
+    // Recycle bin: a document may be marked deleted only with deletedAtMs
+    // = now (±10 min), and an item already in the bin keeps its time. Without
+    // this anyone could write deletedAtMs: 0 and the next admin to open the
+    // Database would purge the part for good as "past its retention".
+    function trashTimeOk() {
+      let d = request.resource.data;
+      let now = request.time.toMillis();
+      let wasDeleted = resource != null && resource.data.get('deleted', false) == true;
+      return d.get('deleted', false) != true
+          || (wasDeleted && d.get('deletedAtMs', 0) == resource.data.get('deletedAtMs', 0))
+          || ((d.get('deletedAtMs', 0) is int || d.get('deletedAtMs', 0) is float)
+              && d.get('deletedAtMs', 0) > now - 600000 && d.get('deletedAtMs', 0) < now + 600000);
+    }
+
     // ── users/{uid} ──────────────────────────────────────────────────────
     // Read: your own profile (the app checks role / company / disabled at
     // sign-in — a disabled user must still be able to read that they are
@@ -56,77 +90,81 @@ service cloud.firestore {
       allow read: if (isSignedIn() && request.auth.uid == uid) || isAdmin();
       allow update: if isSignedIn() && request.auth.uid == uid && isActive()
                     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ui_prefs', 'updatedAt']);
-      allow create, update, delete: if isAdmin();
+      // Admin writes (in practice the userAdmin function, which applies the
+      // same limits) stay inside the admin's own company.
+      allow create: if isAdmin() && request.resource.data.get('company_id', '') == myCompanyId();
+      allow update: if isAdmin() && resource.data.get('company_id', '') in [myCompanyId(), '']
+                    && request.resource.data.get('company_id', '') == myCompanyId();
+      allow delete: if isAdmin() && resource.data.get('company_id', '') in [myCompanyId(), ''];
     }
 
     // ── companies/{cid} ──────────────────────────────────────────────────
     // Any ACTIVE user (signed in, with an enabled profile) may read company
     // docs — this is required for the first-login "pick your company" screen,
     // which lists all companies by name before the user has a company_id yet.
-    // Only members of that company, or an admin, may write to it.
+    // Only the company's admin may change it.
     //
-    // CAVEAT: company docs currently also store anthropic_key, gemini_key
-    // and labor_rate_min. Because `read` is granted broadly above, those
-    // fields are technically readable by any signed-in user of ANY company,
-    // not just members of that company. If that's not acceptable, move
-    // those three fields into a locked-down subdocument, e.g.
-    // companies/{cid}/private/settings, readable only by isSameCompany(cid)
-    // — this requires an app.html change (initCompany / Settings save) to
-    // read/write that subdocument instead. Not done here since it wasn't
-    // explicitly requested and changes the data model.
+    // CAVEAT: older company docs may still hold anthropic_key / gemini_key
+    // (moved to the server since); any active user can read company docs.
     match /companies/{cid} {
       allow read: if isActive();
-      allow update: if isSameCompany(cid) || isAdmin();
+      // Labor rate, logo, recycle-bin retention: the company's admin only.
+      // Every member could change them before, and a changed labor rate
+      // silently changes every quote.
+      allow update: if isCompanyAdmin(cid);
       allow create, delete: if isAdmin();
     }
 
-    // ── companies/{cid}/parts_cache/{id}  (Part Stock) ────────────────────
+    // ── companies/{cid}/parts_cache/{id}  (Database) ─────────────────────
+    // Everyone in the company reads it; editors (not viewers / read-only
+    // roles) add and change parts, and "Delete Selected" only moves a part
+    // to the recycle bin (an update). Removing a part for good — by hand or
+    // after the retention period — is the company admin's alone.
     match /companies/{cid}/parts_cache/{docId} {
-      // Anyone in the company reads and edits the Database. Removing a part
-      // for good is an admin's call: the app's "Delete Selected" only moves a
-      // part to the recycle bin (an update), and the permanent purge — manual
-      // or after the retention period — runs from an admin session.
-      allow read, create, update: if isSameCompany(cid) || isAdmin();
-      allow delete: if isAdmin();
+      allow read: if isSameCompany(cid);
+      allow create, update: if canEdit(cid) && trashTimeOk();
+      allow delete: if isCompanyAdmin(cid);
     }
 
     // ── companies/{cid}/projects/{id}  (RFQs) + nested drawings (BOMs) ────
+    // Same pattern: editors work and move to the recycle bin; only the
+    // company admin deletes for good (Admin > Recycle Bin).
     match /companies/{cid}/projects/{docId} {
-      allow read, write: if isSameCompany(cid) || isAdmin();
+      allow read: if isSameCompany(cid);
+      allow create, update: if canEdit(cid) && trashTimeOk();
+      allow delete: if isCompanyAdmin(cid);
 
       match /drawings/{drawingId} {
-        allow read, write: if isSameCompany(cid) || isAdmin();
+        allow read: if isSameCompany(cid);
+        allow create, update: if canEdit(cid) && trashTimeOk();
+        allow delete: if isCompanyAdmin(cid);
       }
     }
 
-    // ── companies/{cid}/cut_strip_specs/{id}  (Cut & Strip) ────────────────
+    // ── companies/{cid}/cut_strip_specs/{id}  (Cut & Strip + manufacturing) ─
     // Doc id is the sanitised drawing number, so re-analysing a drawing updates
-    // its sheet instead of creating a near-duplicate.
-    //
-    // Read and write are both company-scoped rather than admin-only on purpose:
-    // the whole point of these sheets is that the person at the bench opens one,
-    // and the 'viewer' role exists for exactly that kind of shop-floor account.
-    // Write stays open to the company because generating a sheet from a drawing
-    // is normal production work, not administration.
+    // its sheet instead of creating a near-duplicate. The bench reads them
+    // (viewer); editors create and change them; deleting goes by the bin.
     match /companies/{cid}/cut_strip_specs/{docId} {
-      allow read, write: if isSameCompany(cid) || isAdmin();
+      allow read: if isSameCompany(cid);
+      allow create, update: if canEdit(cid) && trashTimeOk();
+      allow delete: if isCompanyAdmin(cid);
     }
 
     // ── companies/{cid}/customers/{id} ─────────────────────────────────────
     match /companies/{cid}/customers/{docId} {
-      allow read, write: if isSameCompany(cid) || isAdmin();
+      allow read: if isSameCompany(cid);
+      allow create, update: if canEdit(cid) && trashTimeOk();
+      allow delete: if isCompanyAdmin(cid);
     }
 
     // ── companies/{cid}/support_tickets/{id}  (floating Support button) ────
-    // Any member of the company can create a ticket and read/update tickets
-    // (needed so the Support modal can show the submitting user their own
-    // past tickets + admin replies). Only admins actually use the Admin page
-    // to change status/reply, but write access isn't restricted to admin-only
-    // here since a user re-opening their own resolved ticket, etc. is
-    // reasonable — tighten to admin-only writes on status/reply fields later
-    // if that turns out to matter.
+    // Every member, viewers included, can open a ticket and follow it up —
+    // asking for help is not editing company data. Nobody but the company
+    // admin can delete one (the app never does).
     match /companies/{cid}/support_tickets/{docId} {
-      allow read, write: if isSameCompany(cid) || isAdmin();
+      allow read, create, update: if isSameCompany(cid);
+      allow delete: if isCompanyAdmin(cid);
     }
 
     // ── companies/{cid}/audit_logs/{id}  (Admin > Logs) ─────────────────────
@@ -135,8 +173,8 @@ service cloud.firestore {
     // it's an audit trail, not something regular users should be able to
     // browse. No update/delete for anyone — logs are append-only.
     match /companies/{cid}/audit_logs/{docId} {
-      allow create: if isSameCompany(cid) || isAdmin();
-      allow read: if isAdmin();
+      allow create: if isSameCompany(cid);
+      allow read: if isCompanyAdmin(cid);
     }
 
     // ── roles/{roleKey}  (Settings > Roles: per-role button visibility) ────

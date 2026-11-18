@@ -105,6 +105,14 @@ export function _mergedRoleKeys(){
   const saved=Object.keys(S.roleViewsMap).filter(_isRoleDocId);
   return S._rolesSeeded ? saved : [...new Set([...Object.keys(SEED_ROLE_VIEWS), ...saved])];
 }
+// Read-only accounts see the data but change nothing: 'viewer' always, any
+// other role when Settings > Roles marks it read-only. The Firestore rules
+// enforce the same thing (myRoleIsReadOnly); this only keeps the screen honest
+// by hiding the buttons that would be refused anyway. Never the admin.
+export function isReadOnlyUser(){
+  if(currentUserRole===PROTECTED_ROLE) return false;
+  return currentUserRole==='viewer' || (S.roleViewsMap[currentUserRole]||{}).read_only===true;
+}
 export function roleOptions(){
   return _mergedRoleKeys().map(k =>
     [k, (S.roleViewsMap[k] && S.roleViewsMap[k].name) || (k.charAt(0).toUpperCase()+k.slice(1))]);

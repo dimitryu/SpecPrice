@@ -426,7 +426,7 @@ export async function renderSettingsRolesSection(){
     if(!S._rolesSeeded){
       const missing=Object.keys(SEED_ROLE_VIEWS).filter(k=>!(k in saved));
       await Promise.all(missing.map(k=>{
-        const rec={name:k.charAt(0).toUpperCase()+k.slice(1), views:SEED_ROLE_VIEWS[k]};
+        const rec={name:k.charAt(0).toUpperCase()+k.slice(1), views:SEED_ROLE_VIEWS[k], ...(k==='viewer'?{read_only:true}:{})};
         saved[k]=rec;
         return createRole(k, rec);   // adds createdAt/updatedAt
       }));
@@ -452,18 +452,25 @@ export async function renderSettingsRolesSection(){
     name: saved[k]?.name || (k.charAt(0).toUpperCase()+k.slice(1)),
     views: Array.isArray(saved[k]?.views) ? saved[k].views : (SEED_ROLE_VIEWS[k]||[]),
     disabledViews: Array.isArray(saved[k]?.disabledViews) ? saved[k].disabledViews : [],
+    read_only: k==='viewer' || saved[k]?.read_only===true,
   }));
   const viewKeys=Object.keys(HOME_BUTTONS);
   body.innerHTML=`
     <div class="toolbar"><span class="count-badge">${roles.length} roles</span>
       <button class="btn btn-green btn-sm" id="btn-new-role" style="margin-left:auto">＋ New Role</button></div>
     <div class="table-wrap"><table id="stg-roles-table">
-      <thead><tr><th>Role Name</th><th>Key</th>${viewKeys.map(v=>`<th style="text-align:center">${HOME_BUTTONS[v][0]} ${HOME_BUTTONS[v][1]}</th>`).join('')}<th></th></tr></thead>
+      <thead><tr><th>Role Name</th><th>Key</th><th title="Read only: sees the data, changes nothing (enforced by the server, not only the screen)">Data</th>${viewKeys.map(v=>`<th style="text-align:center">${HOME_BUTTONS[v][0]} ${HOME_BUTTONS[v][1]}</th>`).join('')}<th></th></tr></thead>
       <tbody>${roles.map(r=>{
         const locked = r._id===PROTECTED_ROLE;
         return `<tr data-key="${esc(r._id)}">
         <td><input class="form-input role-name-inp" data-key="${esc(r._id)}" value="${esc(r.name||r._id)}" style="padding:4px 7px;font-size:12px;min-width:100px"></td>
         <td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(r._id)}</td>
+        <td><select class="role-ro-sel" data-key="${esc(r._id)}" ${locked||r._id==='viewer'?'disabled':''}
+            title="${locked?'Administrators always edit.':r._id==='viewer'?'Viewer is always read-only.':'Read only: the role sees the data but cannot add, change or delete anything.'}"
+            style="padding:2px 4px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:#fff">
+          <option value="edit" ${!r.read_only?'selected':''}>Edit</option>
+          <option value="ro" ${r.read_only?'selected':''}>Read only</option>
+        </select></td>
         ${viewKeys.map(v=>{
           const pin = locked && PROTECTED_VIEWS.includes(v);
           // Screens newer than this role document are on for administrators (see
@@ -517,10 +524,12 @@ export async function renderSettingsRolesSection(){
     }
     btn.disabled=true; btn.textContent='Saving…';
     try{
-      await updateRole(key,{name,views,disabledViews});
-      S.roleViewsMap[key]={name,views,disabledViews};
+      const roSel=body.querySelector(`.role-ro-sel[data-key="${key}"]`);
+      const read_only = key!==PROTECTED_ROLE && (key==='viewer' || (roSel && roSel.value==='ro'));
+      await updateRole(key,{name,views,disabledViews,read_only});
+      S.roleViewsMap[key]={...(S.roleViewsMap[key]||{}),name,views,disabledViews,read_only};
       toast(`Role "${name}" saved`,'success');
-      logAudit('role_saved',{role:key,name,views,disabledViews},true);
+      logAudit('role_saved',{role:key,name,views,disabledViews,read_only},true);
       // The current user may have just changed their own permissions.
       if(key===currentUserRole) renderHomeIfActive();
     }catch(e){ toast('Error: '+e.message,'error'); logAudit('role_saved',{role:key,error:e.message},false); }

@@ -1,5 +1,6 @@
 import { S } from '../../core/state.js';
 import { logAudit } from '../../core/audit.js';
+import { isReadOnlyUser } from '../../core/roles.js';
 import { esc } from '../../core/ui.js';
 import { lookupPartPrices } from '../../data/pricing.js';
 import { writeSpecDoc } from '../../data/specs.js';
@@ -74,7 +75,8 @@ export function _csPartDocLink(url, vendor, pn, manufacturer){
 // lookup that already came back empty.
 export let _csDsBusy=false;
 export async function _csBackfillDatasheets(spec){
-  if(!spec || _csDsBusy || spec.datasheets_checked) return;
+  // A read-only account cannot save what it would find — and should not spend lookups on it.
+  if(!spec || _csDsBusy || spec.datasheets_checked || isReadOnlyUser()) return;
   const conns=_csConnectors(spec);
   if(!conns.some(c=>String(c.part_number||'').trim() || String(c.contact_pn||'').trim())) return;
   if(conns.some(c=>_csSafeUrl(c.datasheet_url) || _csSafeUrl(c.contact_datasheet_url))) return;

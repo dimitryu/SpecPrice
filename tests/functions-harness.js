@@ -313,6 +313,20 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
     ok(r.status === 200 && !authUsers[nu] && !(`users/${nu}` in store), 'delete: the sign-in account and the profile');
     r = await call(U, { token: 'tAdmin', body: { action: 'drop_tables', uid: 'u1' } });
     ok(r.status === 400, 'unknown action refused');
+    // H5 — an admin manages only their own company's users
+    store['companies/c2'] = { name: 'Other' };
+    store['users/x2'] = { role: 'sales', company_id: 'c2' }; authUsers.x2 = { email: 'x2@o.com' };
+    r = await call(U, { token: 'tAdmin', body: { action: 'update', uid: 'x2', role: 'viewer' } });
+    ok(r.status === 403 && store['users/x2'].role === 'sales', 'an admin cannot change a user of another company');
+    r = await call(U, { token: 'tAdmin', body: { action: 'delete', uid: 'x2' } });
+    ok(r.status === 403 && 'users/x2' in store && authUsers.x2, 'an admin cannot delete a user of another company');
+    r = await call(U, { token: 'tAdmin', body: { action: 'create', email: 'c2@demo.com', password: 'longpass1', displayName: 'C2', role: 'sales', company_id: 'c2' } });
+    ok(r.status === 403, 'an admin cannot create users in another company');
+    r = await call(U, { token: 'tAdmin', body: { action: 'update', uid: 'u1', company_id: 'c2' } });
+    ok(r.status === 403 && store['users/u1'].company_id === 'c1', 'an admin cannot move a user to another company');
+    store['users/legacy'] = { role: 'sales' }; authUsers.legacy = { email: 'l@x.com' };
+    r = await call(U, { token: 'tAdmin', body: { action: 'update', uid: 'legacy', company_id: 'c1', role: 'sales' } });
+    ok(r.status === 200 && store['users/legacy'].company_id === 'c1', 'a profile with no company is adopted into the admin\'s company');
   }
   // ── a profile is required for the price and proxy functions, not only a sign-in ──
   r = await call(fns.priceLookup, { method: 'GET', token: 'tGhost', query: { pn: 'X' } });

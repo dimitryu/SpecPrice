@@ -184,9 +184,9 @@ export function openCustomerModal(cust={}){
 }
 
 export async function deleteCustomer(id,name){
-  if(!confirm(`Delete customer "${name}"?`)) return;
+  if(!confirm(`Delete customer "${name}"?\n\nIt goes to the Recycle Bin — an admin can restore it.`)) return;
   try{
     await removeCustomerDoc(id);
-    toast(`Deleted "${name}"`,'success'); logAudit('customer_deleted',{name},true); renderCustomers();
+    toast(`"${name}" moved to the Recycle Bin`,'success'); logAudit('customer_deleted',{name},true); renderCustomers();
   }catch(e){ toast('Error: '+e.message,'error'); logAudit('customer_deleted',{error:e.message},false); }
 }

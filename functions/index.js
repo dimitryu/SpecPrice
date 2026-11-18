@@ -1454,10 +1454,11 @@ async function validCompany(cid) {
   if (!/^[A-Za-z0-9_-]{1,120}$/.test(String(cid || ''))) return false;
   return (await admin.firestore().doc(`companies/${cid}`).get()).exists;
 }
-// How many enabled admins there are, not counting `exceptUid`.
-async function otherActiveAdmins(exceptUid) {
+// How many enabled admins the company has, not counting `exceptUid`.
+async function otherActiveAdmins(exceptUid, cid) {
   const snap = await admin.firestore().collection('users').where('role', '==', 'admin').get();
-  return snap.docs.filter(d => d.id !== exceptUid && (d.data() || {}).disabled !== true).length;
+  return snap.docs.filter(d => d.id !== exceptUid && (d.data() || {}).disabled !== true
+                            && (d.data() || {}).company_id === cid).length;
 }
 async function serverAudit(actor, action, details, success) {
   const cid = actor && actor.profile && actor.profile.company_id;
@@ -1473,6 +1474,9 @@ async function serverAudit(actor, action, details, success) {
 async function userAdminAction(actor, body) {
   const action = String(body.action || '');
   const fsUsers = admin.firestore().collection('users');
+  // An admin manages the users of THEIR company only (same rule as Firestore).
+  const myCid = String((actor.profile && actor.profile.company_id) || '');
+  if (!myCid) throw userAdminError(403, 'Your admin profile has no company');
 
   if (action === 'create') {
     const email = String(body.email || '').trim().toLowerCase();
@@ -1485,6 +1489,7 @@ async function userAdminAction(actor, body) {
     if (password.length < MIN_PASSWORD) throw userAdminError(400, `Password must be at least ${MIN_PASSWORD} characters`);
     if (!(await validRole(role))) throw userAdminError(400, `Unknown role: ${role}`);
     if (!(await validCompany(company_id))) throw userAdminError(400, 'Unknown company');
+    if (company_id !== myCid) throw userAdminError(403, 'You can only add users to your own company');
     let rec;
     try { rec = await admin.auth().createUser({ email, password, displayName, disabled: false }); }
     catch (e) {
@@ -1513,6 +1518,8 @@ async function userAdminAction(actor, body) {
   const snap = await ref.get();
   const cur = snap.exists ? (snap.data() || {}) : null;
   const self = uid === actor.uid;
+  // A profile from before companies were assigned (no company_id) is adopted.
+  if (cur && cur.company_id && cur.company_id !== myCid) throw userAdminError(403, 'This user belongs to another company');
 
   if (action === 'update') {
     if (!cur) throw userAdminError(404, 'No such user');
@@ -1525,6 +1532,7 @@ async function userAdminAction(actor, body) {
     if ('company_id' in body) {
       const cid = String(body.company_id || '').trim();
       if (!(await validCompany(cid))) throw userAdminError(400, 'Unknown company');
+      if (cid !== myCid) throw userAdminError(403, 'You can only keep users in your own company');
       patch.company_id = cid;
     }
     if ('displayName' in body) {
@@ -1535,7 +1543,7 @@ async function userAdminAction(actor, body) {
     const losesAdmin = cur.role === 'admin' && cur.disabled !== true &&
       ((patch.role && patch.role !== 'admin') || patch.disabled === true);
     if (self && losesAdmin) throw userAdminError(400, 'You cannot remove your own admin role or disable yourself');
-    if (losesAdmin && (await otherActiveAdmins(uid)) === 0) throw userAdminError(400, 'This is the last active admin — make someone else admin first');
+    if (losesAdmin && (await otherActiveAdmins(uid, myCid)) === 0) throw userAdminError(400, 'This is the last active admin — make someone else admin first');
     if (!Object.keys(patch).length) throw userAdminError(400, 'Nothing to change');
     patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
     await ref.update(patch);
@@ -1556,7 +1564,7 @@ async function userAdminAction(actor, body) {
 
   if (action === 'delete') {
     if (self) throw userAdminError(400, 'You cannot delete your own account');
-    if (cur && cur.role === 'admin' && cur.disabled !== true && (await otherActiveAdmins(uid)) === 0)
+    if (cur && cur.role === 'admin' && cur.disabled !== true && (await otherActiveAdmins(uid, myCid)) === 0)
       throw userAdminError(400, 'This is the last active admin — make someone else admin first');
     try { await admin.auth().deleteUser(uid); }
     catch (e) { if (e.code !== 'auth/user-not-found') throw userAdminError(500, 'Could not delete the sign-in account: ' + e.message); }

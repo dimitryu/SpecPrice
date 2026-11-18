@@ -46,9 +46,16 @@ const INIT=`window.__DB['companies/c1/cut_strip_specs']=(()=>{const o=${specs}; 
   await page.click('#modal-cancel'); await page.waitForTimeout(300);
   { const o=await L.open({w:1500,h:800}); await L.signIn(o.page); await L.go(o.page,'settings'); await o.page.waitForTimeout(1500);
     const Q=await L.panel(o.page,'#stg-roles-body');
-    await L.mark(o.page,['#btn-new-role',{sel:'.role-name-inp',idx:1},{sel:'.role-view-sel',idx:10},{sel:'.role-save',idx:1},{sel:'.role-del',idx:0}]);
+    await L.mark(o.page,['#btn-new-role',{sel:'.role-name-inp',idx:1},{sel:'.role-ro-sel',idx:3},{sel:'.role-view-sel',idx:10},{sel:'.role-save',idx:1},{sel:'.role-del',idx:0}]);
+    await o.page.evaluate(()=>{ const f=document.getElementById('btn-support-fab'); if(f) f.style.visibility='hidden'; });
     await L.shot(o.page,'45-settings-roles',Q); await o.b.close(); }
-  // Admin
+  // Admin. Two items someone deleted (demo data), for the Recycle Bin.
+  await page.evaluate(()=>{ const N=Date.now(), ts=m=>({toMillis:()=>m,toDate:()=>new Date(m),seconds:Math.floor(m/1000)});
+    const c=window.__DB['companies/c1/cut_strip_specs']=window.__DB['companies/c1/cut_strip_specs']||{};
+    c['DEMO-505-02']={drawing_number:'DEMO-505-02',title:'SENSOR CABLE 2M',updatedAt:ts(N-9*86400000),ends:[],wires:[],
+      deleted:true,deletedAtMs:N-2*86400000-3600000*3,deletedBy:'avi.levi@demo-co.com'};
+    c['mfg_DEMO-220-03']={kind:'mfg',name:'Signal Harness 8-Way — assembly',drawing_number:'DEMO-220-03',updatedAt:ts(N-12*86400000),
+      deleted:true,deletedAtMs:N-5*86400000,deletedBy:'noa.mizrahi@demo-co.com'}; });
   await L.go(page,'admin'); await page.waitForTimeout(2000);
   P=await L.panel(page,'#adm-ai-status');
   await L.mark(page,['#adm-ai-status','#adm-anth-key','#btn-adm-save-keys','#btn-adm-test-ai']);
@@ -63,6 +70,9 @@ const INIT=`window.__DB['companies/c1/cut_strip_specs']=(()=>{const o=${specs}; 
   await L.shot(page,'48-admin-tickets',P);
   await page.click('#adm-tickets-body tbody button >> nth=0').catch(()=>{}); await page.waitForTimeout(700);
   await L.shot(page,'48b-admin-ticket-open','.modal'); await page.evaluate(()=>closeModal()); await page.waitForTimeout(400);
+  P=await L.panel(page,'#adm-bin-body');
+  await L.mark(page,[{sel:'#adm-bin-body .bin-chk',idx:0,pad:4},'#bin-restore','#bin-purge']);
+  await L.shot(page,'49c-admin-bin',P);
   P=await L.panel(page,'#adm-logs-body');
   { const r=await page.evaluate(()=>[...document.querySelectorAll('#adm-logs-body tbody tr')].findIndex(t=>/drawing_bom_search/.test(t.textContent)));
     await L.mark(page,[{sel:'#adm-logs-body input',idx:0},{sel:'#adm-logs-body tbody tr',idx:Math.max(0,r),pad:1},{sel:'#adm-logs-body tbody td.adm-log-details',idx:Math.max(0,r),pad:1,at:'right'}]); }

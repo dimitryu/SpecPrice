@@ -1,7 +1,7 @@
 import { S } from './state.js';
 import { logAudit } from './audit.js';
 import { auth, signOut } from './firebase.js';
-import { allowedViews, canView, disabledViews } from './roles.js';
+import { allowedViews, canView, disabledViews, isReadOnlyUser } from './roles.js';
 import { companyName, currentUserRole } from './session.js';
 import { esc, setActions, setContent } from './ui.js';
 import { APP_VER } from './version.js';
@@ -27,6 +27,7 @@ export function route(v){
     route('home'); return;
   }
   S.currentView=target;
+  document.body.classList.toggle('read-only', isReadOnlyUser());
   const btnHome=document.getElementById('btn-home');
   if(btnHome) btnHome.style.display = S.currentView==='home' ? 'none' : 'inline-flex';
   const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','cut-strip':'✂️ Cut & Strip','customers':'👥 Customers','manufacturing':'🛠️ Manufacturing Instructions','statistics':'📊 Statistics','settings':'⚙️ Settings','admin':'🛡️ Admin','guide':'📘 User Guide'};

@@ -6,6 +6,9 @@ import { parseBoolQuery, wireSearchClear } from '../core/table.js';
 import { closeModal, debounce, esc, fmtDateTime, setActions, setContent, showModal, toast } from '../core/ui.js';
 import { listRecentAuditEntries } from '../data/audit.js';
 import { clearCompanyAiKeys } from '../data/company.js';
+import { listDeletedCustomers, purgeCustomer, restoreCustomer } from '../data/customers.js';
+import { listDeletedProjects, purgeProject, restoreProject } from '../data/projects.js';
+import { listDeletedSpecDocs, purgeSpecDoc, restoreSpecDoc } from '../data/specs.js';
 import { listTickets, setTicketStatus } from '../data/support.js';
 import { renderAdminPromptsSection } from './settings.js';
 import { _SUPPORT_ICON_SVG, _SUPPORT_ROW_BG, _SUPPORT_STATUSES, _SUPPORT_STATUS_COLOR, _SUPPORT_STATUS_LABEL, _SUPPORT_STATUS_TEXT, _supBindFileButtons, _supMarkRead, _supPostMessage, _supPrepareFiles, _supRefreshBadges, _supTurn, _supportNeedsAdmin, _supportStatusBadge, _supportThread, _supportUnreadDot } from './support.js';
@@ -87,6 +90,12 @@ export function renderAdminPage(){
     </div>
 
     <div class="settings-panel" style="padding:20px 22px;margin-top:20px;">
+      <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">♻ Recycle Bin</h3>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">RFQs, customers, Cut &amp; Strip specifications and manufacturing instructions that someone deleted. Nothing is gone until you delete it here — restore it, or delete it permanently. (Deleted Database parts have their own bin: Database → ♻ Deleted items.)</p>
+      <div id="adm-bin-body"></div>
+    </div>
+
+    <div class="settings-panel" style="padding:20px 22px;margin-top:20px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">📜 System Logs</h3>
       <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Login/logout, screen opens, and key actions across every user — most recent 500 entries.</p>
       <div id="adm-logs-body"></div>
@@ -101,6 +110,7 @@ export function renderAdminPage(){
   renderAdminAiKeySection();
   renderAdminDistributorApiSection();
   renderAdminTicketsSection();
+  renderAdminBinSection();
   renderAdminLogsSection();
   renderAdminPromptsSection();
 }
@@ -552,4 +562,59 @@ export function _admLogsFilterRows(){
     td.setAttribute('style',_admLogsDetailsStyle(!expanded));
   }));
   if(countEl) countEl.textContent=`${rows.length} of ${_admLogsCache.length} (most recent 500)`;
+}
+
+// ── Recycle Bin ──────────────────────────────────────────────────────────────
+// Everything people delete from RFQ, Customers, Cut & Strip and Manufacturing
+// lands here (see data/trash.js). Only an admin restores or purges — the
+// Firestore rules allow the real delete to the company admin alone.
+const _BIN_KINDS={
+  rfq:      {label:'RFQ',            list:listDeletedProjects,  restore:restoreProject,  purge:purgeProject,  name:d=>d.name||d._id},
+  customer: {label:'Customer',       list:listDeletedCustomers, restore:restoreCustomer, purge:purgeCustomer, name:d=>d.name||d._id},
+  spec:     {label:'Cut & Strip',    list:async()=>(await listDeletedSpecDocs()).filter(d=>d.kind!=='mfg'), restore:restoreSpecDoc, purge:purgeSpecDoc, name:d=>d.drawing_number||d._id},
+  mfg:      {label:'Manufacturing',  list:async()=>(await listDeletedSpecDocs()).filter(d=>d.kind==='mfg'), restore:restoreSpecDoc, purge:purgeSpecDoc, name:d=>d.name||d.drawing_number||d._id},
+};
+export async function renderAdminBinSection(){
+  const body=document.getElementById('adm-bin-body');
+  if(!body) return;
+  body.innerHTML='<div style="font-size:12px;color:var(--muted)">Loading…</div>';
+  let rows=[];
+  try{
+    for(const [k,cfg] of Object.entries(_BIN_KINDS)){
+      const list=await cfg.list();
+      rows.push(...list.map(d=>({k, id:d._id, name:cfg.name(d), by:d.deletedBy||'', at:Number(d.deletedAtMs)||0})));
+    }
+  }catch(e){ body.innerHTML=`<p style="color:var(--red);font-size:12px">${esc(e.message)}</p>`; return; }
+  rows.sort((a,b)=>b.at-a.at);
+  if(!rows.length){ body.innerHTML='<p style="color:var(--muted);font-size:12px;padding:6px 0">The recycle bin is empty.</p>'; return; }
+  body.innerHTML=`
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <button class="btn btn-sm" id="bin-restore">↩ Restore selected</button>
+      <button class="btn btn-red btn-sm" id="bin-purge">✕ Delete permanently</button>
+      <span id="bin-count" style="font-size:11px;color:var(--muted);align-self:center">${rows.length} item${rows.length>1?'s':''}</span>
+    </div>
+    <div class="table-wrap" style="max-height:320px"><table style="font-size:12px">
+      <thead><tr><th style="width:26px"><input type="checkbox" id="bin-all"></th><th>Type</th><th>Name</th><th>Deleted by</th><th>Deleted</th></tr></thead>
+      <tbody>${rows.map((r,i)=>`<tr>
+        <td><input type="checkbox" class="bin-chk" data-i="${i}"></td>
+        <td>${esc(_BIN_KINDS[r.k].label)}</td><td>${esc(r.name)}</td><td>${esc(r.by)}</td>
+        <td>${r.at?esc(fmtDateTime(new Date(r.at))):'—'}</td></tr>`).join('')}</tbody>
+    </table></div>`;
+  const picked=()=>[...body.querySelectorAll('.bin-chk:checked')].map(c=>rows[+c.dataset.i]);
+  body.querySelector('#bin-all').addEventListener('change',e=>body.querySelectorAll('.bin-chk').forEach(c=>c.checked=e.target.checked));
+  const run=async(kind)=>{
+    const sel=picked();
+    if(!sel.length){ toast('Select items first','warn'); return; }
+    if(kind==='purge' && !confirm(`Delete ${sel.length} item${sel.length>1?'s':''} permanently?\n\nThis cannot be undone. An RFQ is deleted with all its drawings.`)) return;
+    let ok=0, failed=0;
+    for(const r of sel){
+      try{ await _BIN_KINDS[r.k][kind](r.id); ok++; }catch(e){ failed++; console.warn('[bin]',e.message); }
+    }
+    logAudit(kind==='purge'?'recycle_bin_purge':'recycle_bin_restore',
+      {count:ok, failed, items:sel.slice(0,100).map(r=>`${_BIN_KINDS[r.k].label}: ${r.name}`)}, !failed);
+    toast(`${ok} ${kind==='purge'?'deleted permanently':'restored'}${failed?`, ${failed} failed`:''}`, failed?'warn':'success');
+    renderAdminBinSection();
+  };
+  body.querySelector('#bin-restore').addEventListener('click',()=>run('restore'));
+  body.querySelector('#bin-purge').addEventListener('click',()=>run('purge'));
 }

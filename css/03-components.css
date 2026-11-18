@@ -177,3 +177,14 @@
 /* Sales Desk: the row a tool link jumped to */
 @keyframes sd-flash { 0%,60% { background:#FDE68A; } 100% { background:transparent; } }
 .sd-row-flash > td { animation:sd-flash 2.4s ease-out; }
+
+/* ── Read-only accounts (viewer, or a role marked read-only in Settings > Roles).
+   The Firestore rules refuse their writes; these controls would only fail. ── */
+body.read-only :is(#btn-ps-delsel,#btn-ps-import,#btn-ps-fc,#btn-ps-trash,
+  #btn-cs-new,#btn-cs-new2,#btn-cs-edit,#btn-cs-save,.cs-del,
+  #btn-mfg-new,#btn-mfg-new2,#btn-mfg-edit,#btn-mfg-save,#btn-mfg-from-cs,#btn-mfg-from-cs2,.mfg-del,
+  #btn-new-rfq,#btn-add-drawing,#btn-bom-del-sel,.del-rfq,.del-row,
+  #btn-new-cust,.edit-cust,.del-cust,
+  #btn-sd-savedb){ display:none !important; }
+body.read-only .ps-stock-toggle{ pointer-events:none; opacity:.55; }
+body.read-only #page-title::after{ content:'  · read-only'; font-size:12px; font-weight:600; color:var(--muted); }

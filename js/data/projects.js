@@ -1,5 +1,6 @@
 import { addDoc, collection, db, deleteDoc, doc, getDoc, getDocs, orderBy, query, serverTimestamp, updateDoc } from '../core/firebase.js';
 import { companyId } from '../core/session.js';
+import { isTrashed, restoreFields, trashFields } from './trash.js';
 
 // ── companies/{cid}/projects  (RFQs) and their drawings ──────────────────────
 const projectsCol=()=>collection(db,'companies',companyId,'projects');
@@ -9,7 +10,12 @@ const drawingRef=(projectId,dwgId)=>doc(db,'companies',companyId,'projects',proj
 // Every RFQ as {_id, …fields}, in whatever order the database returns.
 export async function listProjects(){
   const snap=await getDocs(projectsCol());
-  return snap.docs.map(d=>({_id:d.id,...d.data()}));
+  return snap.docs.map(d=>({_id:d.id,...d.data()})).filter(p=>!isTrashed(p));
+}
+// RFQs in the recycle bin (Admin > Recycle Bin).
+export async function listDeletedProjects(){
+  const snap=await getDocs(projectsCol());
+  return snap.docs.map(d=>({_id:d.id,...d.data()})).filter(isTrashed);
 }
 // Newest first. A database that cannot sort (a project without updatedAt, a
 // missing index) falls back to reading everything and sorting here — the list
@@ -17,7 +23,7 @@ export async function listProjects(){
 export async function listProjectsNewestFirst(){
   try{
     const snap=await getDocs(query(projectsCol(),orderBy('updatedAt','desc')));
-    return snap.docs.map(d=>({_id:d.id,...d.data()}));
+    return snap.docs.map(d=>({_id:d.id,...d.data()})).filter(p=>!isTrashed(p));
   }catch{
     const projects=await listProjects();
     projects.sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));
@@ -25,15 +31,22 @@ export async function listProjectsNewestFirst(){
   }
 }
 export async function countProjects(){
-  return (await getDocs(projectsCol())).size;
+  return (await getDocs(projectsCol())).docs.filter(d=>!isTrashed(d.data())).length;
 }
 // Returns the new RFQ's id.
 export async function createProject(fields){
   const ref=await addDoc(projectsCol(), { ...fields, updatedAt:serverTimestamp(), createdAt:serverTimestamp() });
   return ref.id;
 }
-// An RFQ and every drawing under it.
+// To the recycle bin: the RFQ leaves every list, its drawings stay with it.
 export async function deleteProject(id){
+  await updateDoc(doc(db,'companies',companyId,'projects',id), trashFields());
+}
+export async function restoreProject(id){
+  await updateDoc(doc(db,'companies',companyId,'projects',id), restoreFields());
+}
+// For good (admin only): the RFQ and every drawing under it.
+export async function purgeProject(id){
   const snap=await getDocs(drawingsCol(id));
   await Promise.all(snap.docs.map(d=>deleteDoc(d.ref)));
   await deleteDoc(doc(db,'companies',companyId,'projects',id));
@@ -45,10 +58,11 @@ export async function touchProject(projectId){
 // Drawings of one RFQ as {_id, …fields}.
 export async function listDrawings(projectId){
   const snap=await getDocs(drawingsCol(projectId));
-  return snap.docs.map(d=>({_id:d.id,...d.data()}));
+  return snap.docs.map(d=>({_id:d.id,...d.data()})).filter(d=>!isTrashed(d));
 }
+// A drawing leaves the RFQ by the recycle bin too (kept with the RFQ).
 export async function deleteDrawing(projectId, dwgId){
-  return deleteDoc(drawingRef(projectId,dwgId));
+  return updateDoc(drawingRef(projectId,dwgId), trashFields());
 }
 // Removes rows (by index) from a drawing's items; a drawing left with no rows
 // is deleted rather than kept empty.
@@ -57,7 +71,7 @@ export async function removeDrawingItems(projectId, dwgId, indexes){
   const snap=await getDoc(ref);
   const items=[...(snap.data()?.items||[])];
   [...indexes].sort((a,b)=>b-a).forEach(idx=>{ if(idx>=0 && idx<items.length) items.splice(idx,1); });
-  if(items.length===0) await deleteDoc(ref);
+  if(items.length===0) await updateDoc(ref, {items, ...trashFields()});
   else await updateDoc(ref,{items, updatedAt:serverTimestamp()});
 }
 // Adds BOM rows to the drawing of this name under the RFQ, creating it if
@@ -65,7 +79,7 @@ export async function removeDrawingItems(projectId, dwgId, indexes){
 export async function appendRowsToDrawing(projectId, drawingName, rows){
   const col=drawingsCol(projectId);
   const existSnap=await getDocs(col);
-  const existing=existSnap.docs.find(d=>(d.data().name||'')===(drawingName));
+  const existing=existSnap.docs.find(d=>(d.data().name||'')===(drawingName) && !isTrashed(d.data()));
   if(existing){
     const oldItems=existing.data().items||[];
     await updateDoc(existing.ref,{items:[...oldItems,...rows], updatedAt:serverTimestamp()});

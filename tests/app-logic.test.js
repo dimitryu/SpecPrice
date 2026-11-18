@@ -2635,6 +2635,14 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('default view is Full', G('_sdViewMode')(), 'full');
 }
 
+// ─────────────────────────────────────────── v1.73: read-only roles, recycle bin
+{
+  const tf=G('trashFields').toString();
+  ok('bin: marked deleted, dated now, with who deleted it', /deleted:true/.test(tf) && /deletedAtMs:Date\.now\(\)/.test(tf) && /deletedBy/.test(tf));
+  ok('bin: a trashed item is recognised', G('isTrashed')({deleted:true}) && !G('isTrashed')({deleted:false}) && !G('isTrashed')({}));
+  const src=G('isReadOnlyUser').toString();
+  ok('read-only: viewer always, a role marked read_only, never the admin', /'viewer'/.test(src) && /read_only===true/.test(src) && /PROTECTED_ROLE\)\s*return false/.test(src));
+}
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }

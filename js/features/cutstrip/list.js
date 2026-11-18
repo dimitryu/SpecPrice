@@ -1,4 +1,5 @@
 import { S } from '../../core/state.js';
+import { logAudit } from '../../core/audit.js';
 import { companyId } from '../../core/session.js';
 import { esc, setActions, setContent, toast } from '../../core/ui.js';
 import { deleteSpecDoc, listSpecDocs } from '../../data/specs.js';
@@ -154,10 +155,11 @@ export async function renderCutStrip(){
     }));
     document.querySelectorAll('.cs-del').forEach(b=>b.addEventListener('click',async()=>{
       const s=S.csSpecs.find(x=>x._id===b.dataset.id);
-      if(!s || !confirm(`Delete the cut & strip specification for ${s.drawing_number||s._id}?`)) return;
+      if(!s || !confirm(`Delete the cut & strip specification for ${s.drawing_number||s._id}?\n\nIt goes to the Recycle Bin — an admin can restore it.`)) return;
       try{
         await deleteSpecDoc(s._id);
-        toast('Specification deleted','success');
+        toast('Specification moved to the Recycle Bin','success');
+        logAudit('cut_strip_deleted',{drawing:s.drawing_number||s._id},true);
         renderCutStrip();
       }catch(e){ toast('Error: '+e.message,'error'); }
     }));

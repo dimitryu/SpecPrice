@@ -84,11 +84,11 @@ export async function renderManufacturing(){
   }));
   document.querySelectorAll('.mfg-del').forEach(b=>b.addEventListener('click',async e=>{
     e.stopPropagation();
-    if(!confirm(`Delete manufacturing instruction "${b.dataset.name}"? This cannot be undone.`)) return;
+    if(!confirm(`Delete manufacturing instruction "${b.dataset.name}"?\n\nIt goes to the Recycle Bin — an admin can restore it.`)) return;
     try{
       await deleteSpecDoc(b.dataset.id);
       logAudit('mfg_deleted',{id:b.dataset.id},true);
-      toast('Deleted','success');
+      toast('Moved to the Recycle Bin','success');
       mfgDocs=[]; renderManufacturing();
     }catch(err){ toast('Error: '+err.message,'error'); }
   }));

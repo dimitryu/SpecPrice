@@ -169,10 +169,10 @@ export async function createRFQ(){
 }
 
 export async function deleteRFQ(id, name){
-  if(!confirm(`Delete RFQ "${name}"? This removes all drawings.`)) return;
+  if(!confirm(`Delete RFQ "${name}" with all its drawings?\n\nIt goes to the Recycle Bin — an admin can restore it.`)) return;
   try {
-    await deleteProject(id);   // its drawings first, then the RFQ
-    toast('RFQ deleted','success');
+    await deleteProject(id);   // to the recycle bin, drawings and all
+    toast('RFQ moved to the Recycle Bin','success');
     logAudit('rfq_deleted',{name},true);
     renderRFQList();
   } catch(e){ toast('Error: '+e.message,'error'); logAudit('rfq_deleted',{error:e.message},false); }
