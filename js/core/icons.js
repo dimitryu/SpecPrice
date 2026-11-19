@@ -70,7 +70,7 @@ const EMOJI = {
   '📧':'mail','↩':'undo','🔄':'refresh','↻':'refresh','💬':'message','⚙':'settings','🏠':'home','📘':'book','🛡':'shield',
   '📐':'ruler','🔌':'plug','📜':'fileText','🤖':'sparkles','⏳':'hourglass','💡':'bulb','⚠':'alert','🖼':'image','📕':'book',
   '🌐':'globe','❓':'help','⏱':'clock','⬇':'download','📈':'chart','📉':'chart','🧴':'droplet','⚡':'bolt','🔗':'link',
-  '✏️':'pencil','📑':'fileText','🗂':'database','📝':'pencil','✉':'mail','🧾':'quote',
+  '✏️':'pencil','📑':'fileText','🗂':'database','📝':'pencil','✉':'mail','🧾':'quote','↧':'inbox',
 };
 
 // An icon as an <svg> string.

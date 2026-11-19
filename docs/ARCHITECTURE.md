@@ -195,3 +195,17 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
   `body.dataset.view` לפי המסך. בסרגל: `#tb-brand` (לוגו + שם חברה → בית) ו-`#btn-home` (`Home ›`).
 - ייצוא Excel (`io/excel.js` `_XL`, `salesDesk/export.js`) באותם צבעים: גרפיט בכותרות, נחושת בשורת המחיר לכמות.
 
+## v1.80 — Cut & Strip / הוראות ייצור בעיצוב, ייצוא Excel בלי ספקים
+
+- **מסמכי Cut & Strip והוראות ייצור** (`02-cutstrip.css`, שניהם על `.cs-sheet`): צבעים כמשתנים מקומיים `--cs-*` על `.cs-sheet`
+  (hex קבועים — הדף מודפס ולא תלוי בערכת המסך). קו נחושת מתחת לכותרת, `cs-h2` גרפיט עם פס נחושת, מספרי שלבים בנחושת.
+  התיבות `cs-info` / `cs-info-total` הן מחלקות (לא inline) ונכתבות כ-`.cs-sheet[dir] .cs-box.cs-…` — כלל `.cs-box` לפי `dir`
+  קובע את צבע הפס בצד ואחרת גובר. אדום (TBC, CRITICAL) וכתום (אזהרה) נשארו עם המשמעות שלהם. הציורים (`figures.js`) באותה פלטה.
+- בסרגל העליון: שפה כ-`.tb-seg` (השפה הפעילה `is-on` בנחושת), Print/Save הם הכפתור העיקרי. כותרת ארוכה נחתכת ב-…,
+  ו-`.topbar .btn-ghost:hover` מוגדר במפורש (ה-hover של הדף צבע אותו אפור).
+- **הדפסה:** `html, body { height:auto; overflow:visible }` ב-`@media print` (`03-components.css`) — בלי זה כל הדפסה יצאה עמוד אחד.
+- **ייצוא Excel של Sales Desk** (`salesDesk/export.js`): עמודות Item … Units ו-Part Cost בלבד (A–H). אין מחירי/מלאי ספקים, Priority,
+  זמן עבודה או תעריף, ואין מקור/קישור ברשימת הכלים. Part Cost = המחיר ליחידה של המקור שהאפליקציה בחרה (`r._costSource`) × QTY
+  באותה המרה כמו `_sdLineCost` (mm ÷304.8 או ÷1000, ml בבקבוקים) — אם יוצא שונה מ-`r.total` נופלים ל-`r.total/qty × QTY`.
+  Labor הוא תא צהוב אחד (מחיר לכבל). `tests/xl-export-harness.js` בודק גם sheetPr, merges, ושכל נוסחה מחושבת זהה לאפליקציה.
+

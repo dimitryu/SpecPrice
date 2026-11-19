@@ -140,6 +140,10 @@
 .col-resizer:hover, .col-resizer:active { background:rgba(255,255,255,.45); }
 
 @media print {
+  /* The app shell is a fixed-height window (html/body overflow:hidden), which
+     printed as ONE page — a multi-page cut & strip sheet or manufacturing
+     document lost everything after page 1. Paper has no viewport. */
+  html, body { height:auto !important; overflow:visible !important; }
   .topbar, .toolbar { display:none !important; }
   #content { padding:0 !important; background:#fff !important; overflow:visible !important; }
   #shell { display:block; height:auto; }

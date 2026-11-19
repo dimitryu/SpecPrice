@@ -219,3 +219,22 @@ details.sym-legend summary { color:var(--muted); }
 .tb-chip { background:rgba(255,255,255,.07) !important; color:#E8E6E1 !important; border:1px solid rgba(255,255,255,.12) !important; }
 .tb-chip:hover:not(:disabled) { background:rgba(255,255,255,.14) !important; }
 .tb-chip.mono { font-family:var(--mono); }
+
+/* ── Cut & Strip / Manufacturing documents (v1.80) ──
+   The language switch is a segmented control: the language on the page is
+   copper, the others are quiet. The current one stays disabled (re-clicking
+   it does nothing), but it must read as "selected", not as "unavailable". */
+.topbar .tb-seg { display:inline-flex; gap:2px; padding:2px; margin-inline-end:10px; border-radius:8px;
+  background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12); }
+.topbar .tb-seg .btn { background:transparent; border-color:transparent; height:25px; color:#C9CCD1; }
+.topbar .tb-seg .btn:hover:not(:disabled) { background:rgba(255,255,255,.10); color:#F3F1EC; }
+.topbar .tb-seg .btn.is-on, .topbar .tb-seg .btn.is-on:disabled { background:var(--primary); border-color:var(--primary);
+  color:#fff; opacity:1; cursor:default; }
+.topbar .btn-green, .topbar .btn-primary { background:var(--primary); border-color:var(--primary); color:#fff; }
+.topbar .btn-green:hover:not(:disabled) { background:var(--primary-h); border-color:var(--primary-h); }
+/* A long screen title must not wrap into the action buttons. */
+.topbar h2#page-title { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex-shrink:1; }
+/* Quiet (ghost) buttons on the graphite bar hover like the other bar buttons —
+   the light page hover turned them into a grey block with grey text. */
+.topbar .btn-ghost:hover:not(:disabled) { background:rgba(255,255,255,.14); color:#F3F1EC; border-color:rgba(255,255,255,.12); }
+.tb-brand .tb-name { white-space:nowrap; }

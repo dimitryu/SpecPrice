@@ -175,14 +175,14 @@ export function renderMfgDoc(){
   const T=_csT;
   if(!d){ renderManufacturing(); return; }
   setActions(_mfgEditing ? `
-    <button class="btn btn-sm btn-blue" id="btn-mfg-save">💾 ${esc(T('Save'))}</button>
+    <button class="btn btn-sm btn-green" id="btn-mfg-save">💾 ${esc(T('Save'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-mfg-cancel">${esc(T('Cancel'))}</button>` : `
-    <span style="display:inline-flex;gap:4px;margin-inline-end:10px">
-      ${['en','he','ru'].map(L=>`<button class="btn btn-sm ${_csLang===L?'btn-blue':'btn-ghost'}"
+    <span class="tb-seg" role="group" aria-label="${esc(T('Language'))}">
+      ${['en','he','ru'].map(L=>`<button class="btn btn-sm${_csLang===L?' is-on':''}" aria-pressed="${_csLang===L}"
           data-mfg-lang="${L}" ${_csLang===L?'disabled':''}>${_CS_LANG_NAMES[L]}</button>`).join('')}
     </span>
     <button class="btn btn-sm btn-ghost" id="btn-mfg-edit">✎ ${esc(T('Edit'))}</button>
-    <button class="btn btn-sm btn-ghost" id="btn-mfg-print">🖨 ${esc(T('Print'))}</button>
+    <button class="btn btn-sm btn-green" id="btn-mfg-print">🖨 ${esc(T('Print'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-mfg-back">← ${esc(T('Back'))}</button>`);
 
   setContent(`<div id="cs-sheet" class="cs-sheet" dir="${_csRTL()?'rtl':'ltr'}">

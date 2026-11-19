@@ -22,7 +22,7 @@ export function _csSourceFigure(spec){
   return `
   <figure class="cs-fig" style="margin:0">
     <img src="data:image/jpeg;base64,${esc(spec.source_image)}" alt=""
-         style="display:block;max-width:100%;height:auto;border:1px solid #CBD5E1;border-radius:4px"/>
+         style="display:block;max-width:100%;height:auto;border:1px solid #D9D3C8;border-radius:4px"/>
     ${_csAllowanceDoubles(spec).length ? `
     <div class="cs-box cs-stop" style="margin-bottom:10px">
       <b>${esc(T('A strip dimension looks like it was also counted as an allowance'))}</b>
@@ -39,10 +39,10 @@ export function _csSourceFigure(spec){
         <td class="cs-ctr cs-ltr"><b>${c.n}</b></td>
         <td class="cs-ltr">${esc(c.seg.id||'')} · ${esc(c.label)}</td>
         <td class="cs-ctr cs-ltr cs-nowrap">${esc(_csMM(c.cut.finished))}</td>
-        <td class="cs-ctr cs-ltr cs-nowrap"><b style="color:#7C2D12">${esc(_csMM(c.cut.total))}</b></td>
+        <td class="cs-ctr cs-ltr cs-nowrap"><b style="color:#8A3D1C">${esc(_csMM(c.cut.total))}</b></td>
         <td class="cs-ltr" style="font:12px/1.4 monospace">${esc(_csCutFormula(c.seg, spec))}</td></tr>`).join('')}
       </tbody></table>
-    <figcaption style="font-size:11.5px;color:#64748B;margin-top:6px"${rtl}>${
+    <figcaption style="font-size:11.5px;color:#6B7079;margin-top:6px"${rtl}>${
       esc(T('The drawing as supplied, with the title block masked. Nothing is drawn over the harness; the cut lengths are in the table above.'))}</figcaption>
   </figure>`;
 }
@@ -65,8 +65,8 @@ export function _csConnBox(x, y, ref, pn, side, kind){
   if(kind==='open_wires'){
     let w='';
     for(let i=0;i<5;i++){ const wy=y-16+i*8;
-      w+=`<line x1="${x-46}" y1="${wy}" x2="${x}" y2="${y}" stroke="#94A3B8" stroke-width="2"/>`; }
-    return w+`<text x="${x-52}" y="${y-24}" text-anchor="end" font-size="12.5" font-weight="800" fill="#1E293B">${_csSvgTxt(ref)}</text>`;
+      w+=`<line x1="${x-46}" y1="${wy}" x2="${x}" y2="${y}" stroke="#A39E95" stroke-width="2"/>`; }
+    return w+`<text x="${x-52}" y="${y-24}" text-anchor="end" font-size="12.5" font-weight="800" fill="#1C232D">${_csSvgTxt(ref)}</text>`;
   }
   return _csConnBoxPlain(x,y,ref,pn,side);
 }
@@ -74,12 +74,12 @@ export function _csConnBoxPlain(x, y, ref, pn, side){
   // side: 'left' = cable leaves to the right, 'right' = cable arrives from the left
   const bw=46, bh=34, sh=12;
   const bx = (side==='left') ? x-bw : (side==='right2' ? x-bw : x);
-  const g = `<g stroke="#1E293B" stroke-width="1.6" fill="#E2E8F0">
+  const g = `<g stroke="#1C232D" stroke-width="1.6" fill="#ECE7DF">
       <rect x="${bx}" y="${y-bh/2}" width="${bw}" height="${bh}"/>
-      <rect x="${(side==='left')?bx-sh:(side==='right2'?bx-sh:bx+bw)}" y="${y-bh/2+6}" width="${sh}" height="${bh-12}" fill="#94A3B8"/>
+      <rect x="${(side==='left')?bx-sh:(side==='right2'?bx-sh:bx+bw)}" y="${y-bh/2+6}" width="${sh}" height="${bh-12}" fill="#A39E95"/>
     </g>
-    <text x="${bx+bw/2}" y="${y-bh/2-8}" text-anchor="middle" font-size="14" font-weight="800" fill="#1E293B">${_csSvgTxt(ref)}</text>`;
-  return g + (pn ? `<text x="${bx+bw/2}" y="${y+bh/2+15}" text-anchor="middle" font-size="10" font-family="monospace" fill="#64748B">${_csSvgTxt(pn)}</text>` : '');
+    <text x="${bx+bw/2}" y="${y-bh/2-8}" text-anchor="middle" font-size="14" font-weight="800" fill="#1C232D">${_csSvgTxt(ref)}</text>`;
+  return g + (pn ? `<text x="${bx+bw/2}" y="${y+bh/2+15}" text-anchor="middle" font-size="10" font-family="IBM Plex Mono, monospace" fill="#6B7079">${_csSvgTxt(pn)}</text>` : '');
 }
 
 // Each marker is placed on exactly one run: the one it names, else the first run
@@ -104,7 +104,7 @@ export function _csHarnessSVG(spec){
   const marksBySeg=_csMarkersBySeg(spec);
   const pnOf=ref=>(conns.find(c=>String(c.ref||'').toUpperCase()===String(ref||'').toUpperCase())||{}).part_number||'';
   const kindOf=ref=>(conns.find(c=>String(c.ref||'').toUpperCase()===String(ref||'').toUpperCase())||{}).kind||'connector';
-  if(!segs.length) return `<svg viewBox="0 0 1000 60" xmlns="http://www.w3.org/2000/svg"><text x="500" y="35" text-anchor="middle" font-size="13" fill="#64748B">—</text></svg>`;
+  if(!segs.length) return `<svg viewBox="0 0 1000 60" xmlns="http://www.w3.org/2000/svg"><text x="500" y="35" text-anchor="middle" font-size="13" fill="#6B7079">—</text></svg>`;
 
   // The layout follows the drawing rather than an abstract graph: whatever the
   // branches fan out from sits in the middle, the longest run off it goes right
@@ -176,25 +176,25 @@ export function _csHarnessSVG(spec){
   // they are laced together, the common stretch is ONE bundle. Draw it as one.
   const MERGEX = HUBX-150;
   if(bundled){
-    g+=`<line x1="${MERGEX}" y1="${hubY}" x2="${HUBX-18}" y2="${hubY}" stroke="#334155" stroke-width="15" stroke-linecap="round"/>
-        <line x1="${MERGEX}" y1="${hubY}" x2="${HUBX-18}" y2="${hubY}" stroke="#94A3B8" stroke-width="9" stroke-linecap="round"/>`;
+    g+=`<line x1="${MERGEX}" y1="${hubY}" x2="${HUBX-18}" y2="${hubY}" stroke="#3A4350" stroke-width="15" stroke-linecap="round"/>
+        <line x1="${MERGEX}" y1="${hubY}" x2="${HUBX-18}" y2="${hubY}" stroke="#A39E95" stroke-width="9" stroke-linecap="round"/>`;
     const bn=spec.bundle||{};
     const meth=[_csP(bn.method||''), bn.part_number||''].filter(Boolean).join(' · ');
     // Clear of the connector's own ref, which _csConnBoxPlain sets at y-bh/2-8.
-    g+=`<text x="${(MERGEX+HUBX)/2}" y="${hubY-44}" text-anchor="middle" font-size="11" font-weight="700" fill="#334155"${rtlAttr}>${
+    g+=`<text x="${(MERGEX+HUBX)/2}" y="${hubY-44}" text-anchor="middle" font-size="11" font-weight="700" fill="#3A4350"${rtlAttr}>${
       _csSvgTxt(T('Laced into one bundle'))}${meth?` — ${_csSvgTxt(meth)}`:''}</text>`;
     if(_csNum(bn.length_mm)!=null)
       // Under the caption, not under the cable: the connector's part number is
       // already printed below the bundle line.
-      g+=`<text x="${(MERGEX+HUBX)/2}" y="${hubY-28}" text-anchor="middle" font-size="10.5" font-family="monospace" fill="#64748B">${
+      g+=`<text x="${(MERGEX+HUBX)/2}" y="${hubY-28}" text-anchor="middle" font-size="10.5" font-family="IBM Plex Mono, monospace" fill="#6B7079">${
         _csNum(bn.length_mm)} mm</text>`;
   }
 
   // hub itself
   if(hubIsBreakout){
-    g+=`<ellipse cx="${HUBX}" cy="${hubY}" rx="15" ry="26" fill="#E2E8F0" stroke="#1E293B" stroke-width="1.6"/>
-        <text x="${HUBX}" y="${hubY-34}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#334155"${rtlAttr}>${_csSvgTxt(T('Breakout'))}</text>
-        <text x="${HUBX}" y="${hubY+45}" text-anchor="middle" font-size="10.5" font-family="monospace" fill="#64748B">${_csSvgTxt(hub)}</text>`;
+    g+=`<ellipse cx="${HUBX}" cy="${hubY}" rx="15" ry="26" fill="#ECE7DF" stroke="#1C232D" stroke-width="1.6"/>
+        <text x="${HUBX}" y="${hubY-34}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3A4350"${rtlAttr}>${_csSvgTxt(T('Breakout'))}</text>
+        <text x="${HUBX}" y="${hubY+45}" text-anchor="middle" font-size="10.5" font-family="IBM Plex Mono, monospace" fill="#6B7079">${_csSvgTxt(hub)}</text>`;
   } else {
     g+=_csConnBox(HUBX, hubY, hub, pnOf(hub), 'left', kindOf(hub));
   }
@@ -205,8 +205,8 @@ export function _csHarnessSVG(spec){
     const x0=LEFT;
     const sx = bundled ? MERGEX : HUBX-18;
     const path=`M ${sx} ${hubY} Q ${sx-40} ${hubY} ${sx-60} ${(hubY+y)/2} Q ${sx-80} ${y} ${sx-110} ${y} L ${x0+52} ${y}`;
-    g+=`<path d="${path}" fill="none" stroke="#475569" stroke-width="6" stroke-linecap="round"/>
-        <path d="${path}" fill="none" stroke="#CBD5E1" stroke-width="3.4" stroke-linecap="round"/>`;
+    g+=`<path d="${path}" fill="none" stroke="#4E5763" stroke-width="6" stroke-linecap="round"/>
+        <path d="${path}" fill="none" stroke="#D9D3C8" stroke-width="3.4" stroke-linecap="round"/>`;
     g+=_csConnBox(x0+52, y, r.far, pnOf(r.far), 'right2', kindOf(r.far));
     g+=_csRunAnnot(spec, r, x0+52, sx-110, y, rtlAttr, T, false, segs.length===1, marksBySeg[r.seg.id]);
   });
@@ -214,8 +214,8 @@ export function _csHarnessSVG(spec){
   // trunk runs right
   if(trunk){
     const y=hubY;
-    g+=`<line x1="${HUBX+18}" y1="${y}" x2="${RIGHT}" y2="${y}" stroke="#475569" stroke-width="9" stroke-linecap="round"/>
-        <line x1="${HUBX+18}" y1="${y}" x2="${RIGHT}" y2="${y}" stroke="#CBD5E1" stroke-width="5" stroke-linecap="round"/>`;
+    g+=`<line x1="${HUBX+18}" y1="${y}" x2="${RIGHT}" y2="${y}" stroke="#4E5763" stroke-width="9" stroke-linecap="round"/>
+        <line x1="${HUBX+18}" y1="${y}" x2="${RIGHT}" y2="${y}" stroke="#D9D3C8" stroke-width="5" stroke-linecap="round"/>`;
     g+=_csConnBox(RIGHT, y, trunk.far, pnOf(trunk.far), 'right', kindOf(trunk.far));
     g+=_csRunAnnot(spec, trunk, HUBX+18, RIGHT, y, rtlAttr, T, true, segs.length===1, marksBySeg[trunk.seg.id]);
   }
@@ -226,11 +226,11 @@ export function _csHarnessSVG(spec){
     bundleMarks.forEach((mk,k)=>{
       const x=HUBX-95-k*34;      // clear of the connector body at HUBX
       if(x<=MERGEX+8) return;
-      g+=`<rect x="${(x-8).toFixed(1)}" y="${hubY-14}" width="16" height="28" fill="#fff" stroke="#1E293B" stroke-width="1.2"/>
-          <text x="${x.toFixed(1)}" y="${hubY+5}" text-anchor="middle" font-size="10.5" font-weight="800" fill="#0F172A">${_csSvgTxt(mk.label||'')}</text>`;
+      g+=`<rect x="${(x-8).toFixed(1)}" y="${hubY-14}" width="16" height="28" fill="#fff" stroke="#1C232D" stroke-width="1.2"/>
+          <text x="${x.toFixed(1)}" y="${hubY+5}" text-anchor="middle" font-size="10.5" font-weight="800" fill="#1C232D">${_csSvgTxt(mk.label||'')}</text>`;
       if(mk.position)
-        g+=`<line x1="${x.toFixed(1)}" y1="${hubY+15}" x2="${x.toFixed(1)}" y2="${hubY+34+k*17}" stroke="#B45309" stroke-width="1" stroke-dasharray="2,2"/>
-            <text x="${x.toFixed(1)}" y="${hubY+46+k*17}" text-anchor="middle" font-size="10" font-weight="700" fill="#B45309"${rtlAttr}>${
+        g+=`<line x1="${x.toFixed(1)}" y1="${hubY+15}" x2="${x.toFixed(1)}" y2="${hubY+34+k*17}" stroke="#B4532A" stroke-width="1" stroke-dasharray="2,2"/>
+            <text x="${x.toFixed(1)}" y="${hubY+46+k*17}" text-anchor="middle" font-size="10" font-weight="700" fill="#B4532A"${rtlAttr}>${
               _csSvgTxt(_csP(mk.position))}</text>`;
     });
   }
@@ -239,33 +239,33 @@ export function _csHarnessSVG(spec){
   const ov=_csOverall(spec);
   if(ov.value!=null){
     const oy=H-58;
-    g+=`<line x1="60" y1="${oy}" x2="${W-60}" y2="${oy}" stroke="#0F172A" stroke-width="1.4" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
+    g+=`<line x1="60" y1="${oy}" x2="${W-60}" y2="${oy}" stroke="#1C232D" stroke-width="1.4" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
         <rect x="${W/2-150}" y="${oy-13}" width="300" height="22" fill="#fff"/>
-        <text x="${W/2}" y="${oy-19}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#64748B"${rtlAttr}>${
+        <text x="${W/2}" y="${oy-19}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#6B7079"${rtlAttr}>${
           _csSvgTxt(T('Overall length'))}</text>
-        <text x="${W/2}" y="${oy+5}" text-anchor="middle" font-size="13.5" font-weight="800" fill="#0F172A" font-family="monospace">${ov.value} mm${
+        <text x="${W/2}" y="${oy+5}" text-anchor="middle" font-size="13.5" font-weight="800" fill="#1C232D" font-family="IBM Plex Mono, monospace">${ov.value} mm${
           ov.span?`  (${_csSvgTxt(ov.span)})`:''}</text>`;
   }
   // A label the model could not place on any run still has to reach the operator.
   const segIds=segs.map(x=>x.id);
   const unplaced=(spec.markers||[]).filter(m=>m.segment && !segIds.includes(m.segment));
   if(unplaced.length){
-    g+=`<text x="30" y="${H-28}" font-size="10.5" font-weight="700" fill="#B45309"${rtlAttr}>${
+    g+=`<text x="30" y="${H-28}" font-size="10.5" font-weight="700" fill="#B4532A"${rtlAttr}>${
       _csSvgTxt(T('Labels not placed on the figure'))}: ${_csSvgTxt(unplaced.map(m=>m.label||'?').join(', '))}</text>`;
   }
 
   const anyTBC=(spec.markers||[]).some(m=>m.confirmed===false);
   return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" font-family="Heebo, Public Sans, Arial, sans-serif" direction="ltr">
     <defs>
-      <marker id="csAr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#0F172A"/></marker>
-      <marker id="csArL" markerWidth="9" markerHeight="9" refX="1" refY="4.5" orient="auto"><path d="M9,0 L0,4.5 L9,9 z" fill="#0F172A"/></marker>
+      <marker id="csAr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#1C232D"/></marker>
+      <marker id="csArL" markerWidth="9" markerHeight="9" refX="1" refY="4.5" orient="auto"><path d="M9,0 L0,4.5 L9,9 z" fill="#1C232D"/></marker>
       <pattern id="csHatch" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-        <line x1="0" y1="0" x2="0" y2="6" stroke="#334155" stroke-width="2.4"/></pattern>
+        <line x1="0" y1="0" x2="0" y2="6" stroke="#3A4350" stroke-width="2.4"/></pattern>
     </defs>
     ${g}
-    <text x="30" y="${H-12}" font-size="10.5" fill="#64748B"${rtlAttr}>${_csSvgTxt(T('All dimensions in millimetres. Not to scale.'))}</text>
+    <text x="30" y="${H-12}" font-size="10.5" fill="#6B7079"${rtlAttr}>${_csSvgTxt(T('All dimensions in millimetres. Not to scale.'))}</text>
     ${anyTBC?`<text x="${W/2}" y="${H-12}" text-anchor="middle" font-size="11" font-weight="700" fill="#DC2626"${rtlAttr}>* ${_csSvgTxt(T('TO BE CONFIRMED'))}</text>`:''}
-    <text x="${W-20}" y="${H-12}" text-anchor="end" font-size="10.5" font-weight="700" fill="#64748B">${_csSvgTxt(spec.drawing_number||'')} · FIG. 1</text>
+    <text x="${W-20}" y="${H-12}" text-anchor="end" font-size="10.5" font-weight="700" fill="#6B7079">${_csSvgTxt(spec.drawing_number||'')} · FIG. 1</text>
   </svg>`;
 }
 
@@ -286,7 +286,7 @@ export function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, s
       : xHubEnd - dir*d;         // measured from the shared end, inwards
   };
   const anchorOf=fromEnd=>String(fromEnd||'').toUpperCase()===String(r.far).toUpperCase() ? xFarEnd : xHubEnd;
-  let g=`<text x="${(xa+xb)/2}" y="${y-16}" text-anchor="middle" font-size="11" font-weight="700" fill="#334155">${
+  let g=`<text x="${(xa+xb)/2}" y="${y-16}" text-anchor="middle" font-size="11" font-weight="700" fill="#3A4350">${
     _csSvgTxt(seg.id||'')}${seg.cable_part_number?` · ${_csSvgTxt(seg.cable_part_number)}`:''}</text>`;
 
   (spec.sleeves||[]).filter(sl=>!sl.segment||sl.segment===seg.id).forEach(sl=>{
@@ -296,31 +296,31 @@ export function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, s
     const x0s=at(sl.from_end, sl.distance_mm);
     const inward=(anchorOf(sl.from_end)===xFarEnd) ? dir : -dir;
     const x=inward>0 ? x0s : x0s-w;
-    g+=`<rect x="${x.toFixed(1)}" y="${y-11}" width="${w.toFixed(1)}" height="22" fill="url(#csHatch)" stroke="#1E293B" stroke-width="1"/>`;
+    g+=`<rect x="${x.toFixed(1)}" y="${y-11}" width="${w.toFixed(1)}" height="22" fill="url(#csHatch)" stroke="#1C232D" stroke-width="1"/>`;
   });
 
   const ly=y+46;   // clears the connector part number, which sits at y+30
-  g+=`<line x1="${xa}" y1="${ly}" x2="${xb}" y2="${ly}" stroke="#0F172A" stroke-width="1.2" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
+  g+=`<line x1="${xa}" y1="${ly}" x2="${xb}" y2="${ly}" stroke="#1C232D" stroke-width="1.2" marker-start="url(#csArL)" marker-end="url(#csAr)"/>
       <rect x="${((xa+xb)/2-54)}" y="${ly-12}" width="108" height="19" fill="#fff"/>
-      <text x="${((xa+xb)/2).toFixed(1)}" y="${ly+4}" text-anchor="middle" font-size="13" font-weight="800" fill="#0F172A">${
+      <text x="${((xa+xb)/2).toFixed(1)}" y="${ly+4}" text-anchor="middle" font-size="13" font-weight="800" fill="#1C232D">${
         cut.hasBreakdown&&cut.added!==0 ? cut.finished+' mm' : (_csNum(r.len)!=null?r.len+' mm':'? mm')}</text>`;
   let dimY=ly+24;
   if(cut.hasBreakdown && cut.added!==0){
-    g+=`<rect x="${((xa+xb)/2-92)}" y="${dimY-13}" width="184" height="20" fill="#FEF3C7" stroke="#B45309" stroke-width="1"/>
-        <text x="${((xa+xb)/2).toFixed(1)}" y="${dimY+1}" text-anchor="middle" font-size="11" font-weight="700" fill="#7C2D12"${rtlAttr}>${
+    g+=`<rect x="${((xa+xb)/2-92)}" y="${dimY-13}" width="184" height="20" fill="#F8E8DE" stroke="#B4532A" stroke-width="1"/>
+        <text x="${((xa+xb)/2).toFixed(1)}" y="${dimY+1}" text-anchor="middle" font-size="11" font-weight="700" fill="#8A3D1C"${rtlAttr}>${
           _csSvgTxt(T('CUT'))} ${cut.total} mm</text>`;
     dimY+=24;
     // The full sum is printed on the figure only when there is one run to print
     // it for. On a breakout harness four formulas would bury the drawing, and
     // each run's cut-length table carries its own arithmetic anyway.
     if(showFormula){
-      g+=`<text x="${((xa+xb)/2).toFixed(1)}" y="${dimY}" text-anchor="middle" font-size="11.5" font-family="monospace" fill="#7C2D12">${_csSvgTxt(_csCutFormula(seg, spec))}</text>`;
+      g+=`<text x="${((xa+xb)/2).toFixed(1)}" y="${dimY}" text-anchor="middle" font-size="11.5" font-family="IBM Plex Mono, monospace" fill="#8A3D1C">${_csSvgTxt(_csCutFormula(seg, spec))}</text>`;
       dimY+=22;
     }
   }
   const undim=(marks||[]).filter(m=>_csNum(m.distance_mm)==null);
   (marks||[]).forEach((mk,mi)=>{
-    const anchor=anchorOf(mk.from_end), bad=mk.confirmed===false, col=bad?'#DC2626':'#334155';
+    const anchor=anchorOf(mk.from_end), bad=mk.confirmed===false, col=bad?'#DC2626':'#3A4350';
     let x;
     if(_csNum(mk.distance_mm)==null){
       // No dimension: park it a readable step in from its end, clear of the
@@ -330,14 +330,14 @@ export function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, s
     } else {
       x = at(mk.from_end, mk.distance_mm);
     }
-    g+=`<rect x="${(x-7).toFixed(1)}" y="${y-13}" width="14" height="26" fill="#fff" stroke="#1E293B" stroke-width="1.2"/>
-        <text x="${x.toFixed(1)}" y="${y+4}" text-anchor="middle" font-size="10.5" font-weight="800" fill="#0F172A">${_csSvgTxt(mk.label||'')}</text>`;
+    g+=`<rect x="${(x-7).toFixed(1)}" y="${y-13}" width="14" height="26" fill="#fff" stroke="#1C232D" stroke-width="1.2"/>
+        <text x="${x.toFixed(1)}" y="${y+4}" text-anchor="middle" font-size="10.5" font-weight="800" fill="#1C232D">${_csSvgTxt(mk.label||'')}</text>`;
     if(_csNum(mk.distance_mm)==null){
       // No dimension on the drawing — a tick to the cable plus the placement
       // note in words, so the operator still knows where the label goes.
-      g+=`<line x1="${x.toFixed(1)}" y1="${y+13}" x2="${x.toFixed(1)}" y2="${(dimY-9).toFixed(1)}" stroke="#B45309" stroke-width="1" stroke-dasharray="2,2"/>`;
+      g+=`<line x1="${x.toFixed(1)}" y1="${y+13}" x2="${x.toFixed(1)}" y2="${(dimY-9).toFixed(1)}" stroke="#B4532A" stroke-width="1" stroke-dasharray="2,2"/>`;
       if(mk.position)
-        g+=`<text x="${x.toFixed(1)}" y="${dimY+3}" text-anchor="middle" font-size="10" font-weight="700" fill="#B45309"${rtlAttr}>${
+        g+=`<text x="${x.toFixed(1)}" y="${dimY+3}" text-anchor="middle" font-size="10" font-weight="700" fill="#B4532A"${rtlAttr}>${
           _csSvgTxt(_csP(mk.position))}</text>`;
       dimY+=20; return;
     }
@@ -415,14 +415,14 @@ export function _csStripSVG(seg, end, spec){
     const nm=layer ? _csP(layer.name||'') : '';
     const braid=_isBraid(layer&&layer.name);
     g+=`<rect x="${xL.toFixed(1)}" y="${(CY-h/2).toFixed(1)}" width="${(xR-xL).toFixed(1)}"
-          height="${h.toFixed(1)}" fill="${braid?'#9AA4B2':'#CBD5E1'}" stroke="#475569" stroke-width="1.2"/>`;
+          height="${h.toFixed(1)}" fill="${braid?'#A39E95':'#D9D3C8'}" stroke="#4E5763" stroke-width="1.2"/>`;
     if(braid){
       // a braid reads as a braid, not as a grey box
       for(let x=xL+8;x<xR-4;x+=11)
-        g+=`<path d="M${x.toFixed(1)},${(CY-h/2).toFixed(1)} l8,${h.toFixed(1)}" stroke="#6B7280" stroke-width="1" fill="none"/>`;
+        g+=`<path d="M${x.toFixed(1)},${(CY-h/2).toFixed(1)} l8,${h.toFixed(1)}" stroke="#6B7079" stroke-width="1" fill="none"/>`;
     }
     if(nm) g+=`<text x="${((xL+xR)/2).toFixed(1)}" y="${(CY-h/2-9).toFixed(1)}" text-anchor="middle"
-        font-size="12" font-weight="700" fill="#334155">${_csSvgTxt(nm)}</text>`;
+        font-size="12" font-weight="700" fill="#3A4350">${_csSvgTxt(nm)}</text>`;
   }
   // bare strands, from the cable end to the innermost cut
   const xBare=at(cuts[0].mm);
@@ -435,7 +435,7 @@ export function _csStripSVG(seg, end, spec){
   // the jacket
   g+=`<rect x="${X_JACKET}" y="${CY-JH/2}" width="${X_TIP-X_JACKET}" height="${JH}" rx="${JH/2}" fill="#1A1A22"/>
       <rect x="${X_JACKET}" y="${CY-JH/2}" width="34" height="${JH}" fill="#1A1A22"/>
-      <line x1="${X_JACKET+28}" y1="${CY-10}" x2="${X_TIP-24}" y2="${CY-10}" stroke="#6B7280" stroke-width="2.4"/>`;
+      <line x1="${X_JACKET+28}" y1="${CY-10}" x2="${X_TIP-24}" y2="${CY-10}" stroke="#6B7079" stroke-width="2.4"/>`;
   // every cut face, square to the axis
   cuts.forEach(c=>{ const x=at(c.mm);
     g+=`<line x1="${x.toFixed(1)}" y1="${CY-JH/2-8}" x2="${x.toFixed(1)}" y2="${CY+JH/2+8}" stroke="#DC2626" stroke-width="2.6"/>`; });
@@ -443,16 +443,16 @@ export function _csStripSVG(seg, end, spec){
   // dimensions, largest at the bottom so the lines never cross
   let y=CY+JH/2+46;
   cuts.slice().reverse().forEach(c=>{
-    const x=at(c.mm), col=c.confirmed?'#0F172A':'#DC2626';
+    const x=at(c.mm), col=c.confirmed?'#1C232D':'#DC2626';
     g+=`<line x1="${X_END}" y1="${y}" x2="${x.toFixed(1)}" y2="${y}" stroke="${col}" stroke-width="1.5"
           marker-start="url(#csFigL)" marker-end="url(#csFigR)"/>
         <line x1="${x.toFixed(1)}" y1="${CY+JH/2+8}" x2="${x.toFixed(1)}" y2="${(y+7).toFixed(1)}" stroke="${col}" stroke-width=".9" stroke-dasharray="3 3"/>
         <text x="${X_END}" y="${y-9}" font-size="17" font-weight="800" fill="${col}">${
           _csSvgTxt(c.code?`${c.code} = `:'')}${c.mm==null?'?':c.mm} mm${c.confirmed?'':' *'}</text>
-        <text x="${(x+14).toFixed(1)}" y="${y+5}" font-size="11.5" fill="#64748B">${_csSvgTxt(_csP(c.label||''))}</text>`;
+        <text x="${(x+14).toFixed(1)}" y="${y+5}" font-size="11.5" fill="#6B7079">${_csSvgTxt(_csP(c.label||''))}</text>`;
     y+=42;
   });
-  g+=`<line x1="${X_END}" y1="${CY-JH/2-8}" x2="${X_END}" y2="${(y-30).toFixed(1)}" stroke="#94A3B8" stroke-width=".9" stroke-dasharray="3 3"/>`;
+  g+=`<line x1="${X_END}" y1="${CY-JH/2-8}" x2="${X_END}" y2="${(y-30).toFixed(1)}" stroke="#A39E95" stroke-width=".9" stroke-dasharray="3 3"/>`;
 
   // what this end costs the cut length — the same two numbers the cut table
   // prints, read from the same fields, so they cannot drift apart
@@ -468,10 +468,10 @@ export function _csStripSVG(seg, end, spec){
                       : T('This end adds nothing — the strip comes out of the drawn length');
     const sum  = adds ? `${ec.strip} + ${ec.margin}${ec.conn?` − ${ec.conn}`:''} = ${ec.mm} mm`
                       : `${_csT('strip')} ${ec.strip} mm ⊂ ${_csMM(_csCutLength(seg, spec).total)}`;
-    g+=`<rect x="330" y="${y-4}" width="440" height="44" fill="#FEF3C7" stroke="#B45309" stroke-width="1"/>
-        <text x="550" y="${y+14}" text-anchor="middle" font-size="12" font-weight="700" fill="#7C2D12">${
+    g+=`<rect x="330" y="${y-4}" width="440" height="44" fill="#F8E8DE" stroke="#B4532A" stroke-width="1"/>
+        <text x="550" y="${y+14}" text-anchor="middle" font-size="12" font-weight="700" fill="#8A3D1C">${
           _csSvgTxt(head)}</text>
-        <text x="550" y="${y+33}" text-anchor="middle" font-size="15" font-weight="800" fill="#7C2D12" font-family="monospace">${
+        <text x="550" y="${y+33}" text-anchor="middle" font-size="15" font-weight="800" fill="#8A3D1C" font-family="IBM Plex Mono, monospace">${
           _csSvgTxt(sum)}</text>`;
     y+=54;
   }
@@ -487,18 +487,18 @@ export function _csStripSVG(seg, end, spec){
   const anyTBC=cuts.some(c=>!c.confirmed);
   return `<svg viewBox="0 0 1100 ${H}" xmlns="http://www.w3.org/2000/svg" font-family="Heebo, Public Sans, Arial, sans-serif" direction="ltr">
     <defs>
-      <marker id="csFigR" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#0F172A"/></marker>
-      <marker id="csFigL" markerWidth="9" markerHeight="9" refX="1" refY="4.5" orient="auto"><path d="M9,0 L0,4.5 L9,9 z" fill="#0F172A"/></marker>
+      <marker id="csFigR" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#1C232D"/></marker>
+      <marker id="csFigL" markerWidth="9" markerHeight="9" refX="1" refY="4.5" orient="auto"><path d="M9,0 L0,4.5 L9,9 z" fill="#1C232D"/></marker>
     </defs>
-    <rect x="6" y="6" width="1088" height="${H-12}" fill="#fff" stroke="#0F172A" stroke-width="1.6"/>
-    <text x="24" y="30" font-size="12" fill="#94A3B8">${_csSvgTxt(`${seg?.id||''} · ${end?.ref||''}`)}</text>
-    <text x="550" y="58" text-anchor="middle" font-size="26" font-weight="800" fill="#0F172A" letter-spacing="1">${
+    <rect x="6" y="6" width="1088" height="${H-12}" fill="#fff" stroke="#1C232D" stroke-width="1.6"/>
+    <text x="24" y="30" font-size="12" fill="#A39E95">${_csSvgTxt(`${seg?.id||''} · ${end?.ref||''}`)}</text>
+    <text x="550" y="58" text-anchor="middle" font-size="26" font-weight="800" fill="#1C232D" letter-spacing="1">${
       _csSvgTxt(T('WIRE END PREPARATION'))}</text>
-    ${sub?`<text x="550" y="88" text-anchor="middle" font-size="15" fill="#334155">${_csSvgTxt(sub)}</text>`:''}
+    ${sub?`<text x="550" y="88" text-anchor="middle" font-size="15" fill="#3A4350">${_csSvgTxt(sub)}</text>`:''}
     ${g}
-    <text x="550" y="${H-46}" text-anchor="middle" font-size="15" font-weight="800" fill="#0F172A">${
+    <text x="550" y="${H-46}" text-anchor="middle" font-size="15" font-weight="800" fill="#1C232D">${
       _csSvgTxt(T('STRIP INSULATION ONLY — DO NOT CUT OR NICK CONDUCTOR STRANDS'))}</text>
-    <text x="550" y="${H-25}" text-anchor="middle" font-size="13" fill="#475569">${_csSvgTxt(termLine)}</text>
+    <text x="550" y="${H-25}" text-anchor="middle" font-size="13" fill="#4E5763">${_csSvgTxt(termLine)}</text>
     ${anyTBC?`<text x="550" y="${H-8}" text-anchor="middle" font-size="12" font-weight="700" fill="#DC2626">* ${
       _csSvgTxt(T('TO BE CONFIRMED'))}</text>`:''}
   </svg>`;

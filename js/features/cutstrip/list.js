@@ -108,8 +108,8 @@ export async function renderCutStrip(){
         <td style="text-align:center">${_csSegments(s).length||'—'}</td>
         <td style="text-align:center">${_csConnectors(s).length||'—'}</td>
         <td style="text-align:center">${tbc
-            ? `<span style="background:#DC2626;color:#fff;border-radius:3px;padding:2px 8px;font-size:11px;font-weight:700">${tbc} TBC</span>`
-            : `<span style="color:#15803D;font-weight:700">✓</span>`}</td>
+            ? `<span style="background:var(--bad);color:#fff;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700">${tbc} TBC</span>`
+            : `<span style="color:var(--ok);font-weight:700">✓</span>`}</td>
         <td style="font-size:12px;color:var(--muted)">${s.updatedAt?.toDate ? esc(s.updatedAt.toDate().toLocaleString()) : ''}</td>
         <td style="text-align:right">
           <button class="btn btn-sm btn-blue cs-open" data-id="${esc(s._id)}">Open</button>

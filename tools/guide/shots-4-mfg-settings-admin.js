@@ -22,6 +22,7 @@ const INIT=`window.__DB['companies/c1/cut_strip_specs']=(()=>{const o=${specs}; 
   await L.mark(page,[{sel:'#topbar-actions > span',pad:3},'#btn-mfg-edit','#btn-mfg-print','#btn-mfg-back']);
   await L.shot(page,'38-mfg-doc');
   await page.click('#btn-mfg-back'); await page.waitForTimeout(3500);
+  await page.mouse.move(5,790);   // not left hovering whatever now sits where Back was
   await L.mark(page,['#mfg-search',{sel:'table tbody tr',idx:0,pad:2}]);
   await L.shot(page,'39-mfg-list',{x:0,y:0,width:1100,height:300});
   // Statistics

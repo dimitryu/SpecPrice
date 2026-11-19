@@ -182,7 +182,7 @@ export function _csDim(value, confirmed){
   const v=_csNum(value);
   const txt = v==null ? '—' : v+' mm';
   return confirmed===false
-    ? `<span style="color:#DC2626;font-weight:700">${esc(txt)}</span> ${_csTBC()}`
+    ? `<span class="cs-bad-t">${esc(txt)}</span> ${_csTBC()}`
     : `<span style="font-weight:700">${esc(txt)}</span>`;
 }
 
@@ -296,14 +296,14 @@ export function renderCutStripSheet(){
   // never what someone means to do, and an unsaved export is a document that
   // exists nowhere in the system.
   setActions(S._csEditing ? `
-    <button class="btn btn-sm btn-blue" id="btn-cs-save">💾 ${esc(T('Save'))}</button>
+    <button class="btn btn-sm btn-green" id="btn-cs-save">💾 ${esc(T('Save'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-cancel">${esc(T('Cancel'))}</button>` : `
-    <span style="display:inline-flex;gap:4px;margin-inline-end:10px">
-      ${['en','he','ru'].map(L=>`<button class="btn btn-sm ${_csLang===L?'btn-blue':'btn-ghost'}"
+    <span class="tb-seg" role="group" aria-label="${esc(T('Language'))}">
+      ${['en','he','ru'].map(L=>`<button class="btn btn-sm${_csLang===L?' is-on':''}" aria-pressed="${_csLang===L}"
           data-cs-lang="${L}" ${_csLang===L?'disabled':''}>${_CS_LANG_NAMES[L]}</button>`).join('')}
     </span>
     <button class="btn btn-sm btn-ghost" id="btn-cs-edit">✎ ${esc(T('Edit'))}</button>
-    <button class="btn btn-sm btn-ghost" id="btn-cs-print">🖨 ${esc(T('Print'))}</button>
+    <button class="btn btn-sm btn-green" id="btn-cs-print">🖨 ${esc(T('Print'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-pdf">📄 ${esc(T('Export PDF'))}</button>
     <button class="btn btn-sm btn-ghost" id="btn-cs-back">← ${esc(T('Back'))}</button>`);
 
@@ -366,7 +366,7 @@ export function renderCutStripSheet(){
 
     <h2 class="cs-h2"><span class="cs-n">2</span>${esc(T('Harness layout'))}</h2>
     <div class="cs-pad">
-      <div class="cs-box cs-info" style="border-color:#2563EB;background:#EFF6FF;color:#1E3A8A">
+      <div class="cs-box cs-info">
         <b>${esc(T('This harness has'))} ${_csSegments(spec).length} ${esc(T('cable run(s)'))} ${esc(T('and'))} ${_csConnectors(spec).length} ${esc(T('connector(s)'))}${
           _csBreakouts(spec).length?` + ${_csBreakouts(spec).length} ${esc(T('Breakout'))}`:''}.</b>
         <p>${_csSegments(spec).map(s=>`<span class="cs-ltr">${esc(s.id)}: ${esc(_csSegLabel(s))}</span>`).join(' &nbsp;·&nbsp; ')}</p>
@@ -376,13 +376,13 @@ export function renderCutStripSheet(){
         <b>${esc(T('These names are not printed on the drawing'))}</b>
         <p>${esc(T('The drawing gives no designator for them, so this sheet assigned one. Match them by position, not by looking for the label.'))}</p>
         <ul>${_csAssignedRefs(spec).map(a=>`<li><span class="cs-ltr"><b>${esc(a.ref)}</b></span>${
-          a.desc?` — ${esc(_csP(a.desc))}`:''}${a.seen?` <span style="color:#64748B">(${esc(T('seen on the drawing as'))}: ${esc(a.seen)})</span>`:''}</li>`).join('')}</ul>
+          a.desc?` — ${esc(_csP(a.desc))}`:''}${a.seen?` <span class="cs-mute">(${esc(T('seen on the drawing as'))}: ${esc(a.seen)})</span>`:''}</li>`).join('')}</ul>
       </div>` : ''}
       ${(()=>{ const ov=_csOverall(spec); if(ov.value==null) return '';
-        return `<div class="cs-box cs-info" style="border-color:#0F172A;background:#F8FAFC;color:#0F172A">
+        return `<div class="cs-box cs-info cs-info-total">
           <b>${esc(T('Overall length of the whole harness'))}: <span class="cs-ltr">${esc(_csMM(ov.value))}</span></b>
-          ${ov.span?`<span class="cs-ltr" style="font-size:12px;color:#64748B"> (${esc(ov.span)})</span>`:''}
-          ${ov.mismatch?`<p style="color:#B45309;font-weight:700">${esc(T('The drawing states'))}
+          ${ov.span?`<span class="cs-ltr cs-mute" style="font-size:12px"> (${esc(ov.span)})</span>`:''}
+          ${ov.mismatch?`<p class="cs-warn-t">${esc(T('The drawing states'))}
             <span class="cs-ltr">${ov.mismatch.stated} mm</span>, ${esc(T('but the longest route through this harness is'))}
             <span class="cs-ltr">${ov.mismatch.longest} mm</span> — ${esc(T('confirm before cutting.'))}</p>`:''}
         </div>`; })()}
@@ -413,7 +413,7 @@ export function renderCutStripSheet(){
           <td class="cs-ltr">${esc(r.pn||'')}</td>
           <td><span class="cs-ltr">${esc(r.id)}</span> — ${esc(_csP(r.desc||''))}
             ${r.formula?`<div class="cs-formula cs-ltr">${esc(r.formula)}</div>`:''}</td>
-          <td class="cs-ctr cs-ltr"><b style="font-size:15px;color:#7C2D12">${esc(r.cut==null?'—':String(r.cut))}</b></td>
+          <td class="cs-ctr cs-ltr"><b class="cs-cut-n">${esc(r.cut==null?'—':String(r.cut))}</b></td>
           <td class="cs-ctr cs-ltr"><b>${esc(r.strip||'—')}</b>${r.tbc?` <span class="cs-tag cs-tbc">${esc(T('TBC'))}</span>`:''}</td>
           <td class="cs-ctr cs-ltr">${esc(String(r.qty??1))}</td>
           <td></td><td></td>
@@ -474,8 +474,8 @@ export function renderCutStripSheet(){
               <th style="width:24%">${esc(T('Left over'))}</th></tr></thead>
             <tbody>${build.lines.map(l=>`<tr>
               <td class="cs-ltr">${esc(l.pn||'—')}</td>
-              <td class="cs-ctr cs-ltr">${_csMM(l.totalMm)}${l.qty>1?` <span style="color:#64748B">(${l.qty} × ${_csMM(l.reelMm)})</span>`:''}</td>
-              <td class="cs-ctr cs-ltr" style="white-space:nowrap"><span style="font-size:16px;font-weight:800">${l.pieces}</span> × <span style="font-size:16px;font-weight:800;color:#7C2D12">${_csMM(build.perWireMm)}</span></td>
+              <td class="cs-ctr cs-ltr">${_csMM(l.totalMm)}${l.qty>1?` <span class="cs-mute">(${l.qty} × ${_csMM(l.reelMm)})</span>`:''}</td>
+              <td class="cs-ctr cs-ltr" style="white-space:nowrap"><span style="font-size:16px;font-weight:800">${l.pieces}</span> × <span class="cs-cut-n" style="font-size:16px;font-weight:800">${_csMM(build.perWireMm)}</span></td>
               <td class="cs-ctr cs-ltr">${l.leftoverMm?_csMM(l.leftoverMm):'—'}</td>
             </tr>`).join('')}</tbody></table>
           <p style="font-size:14px"><b>${esc(T('The harness is made of'))}:</b>
@@ -483,7 +483,7 @@ export function renderCutStripSheet(){
             — ${esc(T('each'))} <span class="cs-ltr" style="font-weight:800">${esc(_csMM(build.perWireMm))}</span>
             (${esc(T('total'))} ${build.pieces} ${esc(T('wires'))})
             ${build.conductors?` · ${esc(T('the wiring table lists'))} ${build.conductors} ${esc(T('conductors'))}`:''}</p>
-          ${build.conductorMismatch?`<p style="color:#B91C1C;font-weight:700">${
+          ${build.conductorMismatch?`<p class="cs-bad-t">${
             esc(T('The BOM gives'))} ${build.pieces} ${esc(T('pieces but the wiring table lists'))} ${build.conductorMismatch} —
             ${esc(T('one of the two is wrong. Resolve it before cutting.'))}</p>`:''}
         </div>` : ''}`;}).join('')}
@@ -500,7 +500,7 @@ export function renderCutStripSheet(){
           <td class="cs-ctr cs-ltr"><b>${esc(x.code)}</b></td>
           <td class="cs-ctr cs-ltr"><b>${esc(_csMM(x.mm))}</b>${x.ok?'':` <span class="cs-tag cs-tbc">${esc(T('TBC'))}</span>`}</td>
           <td style="font-size:12px">${esc(_csP(x.label||''))}
-            ${x.proposed?`<div style="font-size:11px;color:#B45309;margin-top:2px">${
+            ${x.proposed?`<div class="cs-warn-t" style="font-size:11px;font-weight:600;margin-top:2px">${
               esc(T('Not on the drawing — proposed from the wire gauge. Confirm against the contact datasheet.'))}</div>`:''}</td></tr>`).join('')}
         </tbody></table>` : ''; })()}
     </div>
@@ -542,7 +542,7 @@ export function renderCutStripSheet(){
         const missing=ends.filter(e=>!_csStripSVG(seg,e,spec)).map(e=>e.ref||'?');
         return (figs||missing.length) ? `<h3 class="cs-h3"><span class="cs-ltr">${esc(seg.id)} — ${esc(_csSegLabel(seg))}</span>
           ${esc(T('cut'))}: <span class="cs-ltr">${esc(_csMM(_csCutLength(seg,spec).total))}</span></h3>${figs}
-          ${missing.length?`<p class="cs-note" style="color:#B45309">${esc(T('No figure could be drawn for'))}
+          ${missing.length?`<p class="cs-note cs-warn-t" style="font-weight:600">${esc(T('No figure could be drawn for'))}
             <span class="cs-ltr">${esc(missing.join(', '))}</span> — ${esc(T('this end has no dimensions at all on the specification.'))}</p>`:''}` : '';
       }).join('')}
     </div>
