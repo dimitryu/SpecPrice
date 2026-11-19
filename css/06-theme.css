@@ -124,7 +124,11 @@ tbody tr:nth-child(even) { background:var(--zebra); }
 tbody tr:hover { background:var(--hover) !important; }
 td { border-bottom:1px solid var(--line-2); border-right:1px solid var(--line-2); }
 .col-frozen-last { box-shadow:inset -1px 0 0 var(--line), 6px 0 8px -6px rgba(28,35,45,.22); }
-td[contenteditable="true"] { outline-color:var(--primary); background:#FFF8F2 !important; }
+/* Editable cells: a quiet frame, the copper one only on the cell being edited
+   (a whole table of copper boxes made every cell look like an error). */
+td[contenteditable="true"] { outline:1px solid #E7D6C8; outline-offset:-1px; background:#FFFBF7 !important; }
+td[contenteditable="true"]:hover { outline-color:#D9B8A2; }
+td[contenteditable="true"]:focus { outline:2px solid var(--primary); outline-offset:-2px; background:#fff !important; }
 .price-green { color:var(--ok); background:var(--ok-soft); }
 .price-red { color:var(--bad); background:var(--bad-soft); }
 .sd-group-head td { background:var(--surface-2) !important; color:var(--ink) !important; }

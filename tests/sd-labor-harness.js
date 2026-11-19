@@ -71,7 +71,10 @@ vm.runInContext(`aiProxy=true; companyId='c1'; currentUserEmail='u@x'; currentUs
   // No review table any more: straight to the desk, the Database and the prices.
   no('no preview: there is no review table to confirm', !!g.document.getElementById('btn-save-bom'));
   const stg=[...g.document.querySelectorAll('#sd-modal-body .stage')].map(e=>e.dataset.stage+':'+e.className.replace(/.*stage-/,''));
-  ok('stages: read → desk → Database → prices, all done ('+stg.join(' ')+')', stg.join(' ')==='read:done desk:done db:done price:done');
+  ok('stages: every step of the analysis is its own stage, all done ('+stg.join(' ')+')',
+     stg.join(' ')==='read:done title:done process:done notes:done tools:done desk:done db:done price:done');
+  ok('stages: the process stage says what it found', /8 operations, 26\.6 min per cable|9 operations/.test(g.document.querySelector('[data-stage="process"]')?.textContent||''));
+  ok('background: the tab title is back to normal once the job is done (tab visible)', g.document.title==='' || !/⏳/.test(g.document.title));
   ok('database: the rows were saved without asking', ctx.__f.saved.length===1 && ctx.__f.saved[0]===8);
   const fc=ctx.__f.fc[0]||{};
   ok('prices: checked right away, in the import window (headless)', fc.n===8 && fc.mode==='sd' && fc.opts && fc.opts.headless===true && fc.opts.saveToDb===true);

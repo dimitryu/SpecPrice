@@ -14,7 +14,7 @@ const L=require('./lib.js');
   await L.shot(page,'12-sd-analysing','.modal');
   // No review table: read → Sales Desk → Database → prices, each with its progress.
   await page.waitForSelector('[data-stage="db"].stage-run',{timeout:90000}); await page.waitForTimeout(1300);
-  await L.mark(page,[{sel:'[data-stage="read"]',pad:3},{sel:'[data-stage="db"]',pad:3}]);
+  await L.mark(page,[{sel:'[data-stage="read"]',pad:3},{sel:'[data-stage="process"] .stage-time',pad:3},{sel:'[data-stage="db"]',pad:3}]);
   await L.shot(page,'13-sd-import','.modal');
   await L.unmark(page);
   await page.waitForSelector('#sd-import-close',{timeout:90000}); await page.evaluate(()=>{ window.__dbDelay=0; });

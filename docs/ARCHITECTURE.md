@@ -209,3 +209,16 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
   באותה המרה כמו `_sdLineCost` (mm ÷304.8 או ÷1000, ml בבקבוקים) — אם יוצא שונה מ-`r.total` נופלים ל-`r.total/qty × QTY`.
   Labor הוא תא צהוב אחד (מחיר לכבל). `tests/xl-export-harness.js` בודק גם sheetPr, merges, ושכל נוסחה מחושבת זהה לאפליקציה.
 
+## v1.81 — כל ניתוח שרטוט: שלב-שלב עם זמנים, וממשיך ברקע
+
+- שלושת החלונות שקוראים שרטוט משתמשים ב-`stagesPanel` (`core/ui.js`): Sales Desk → New Drawing (`salesDesk/import.js`),
+  Cut & Strip → New from Drawing (`cutstrip/import.js`), RFQ → Add Drawing (`bomImport.js`). כל קריאת AI היא שלב משלה
+  (BOM, טבלת כותרת, תהליך ייצור, הערות, כלים; ב-C&S: הכנה, ניתוח, רשימת חלקים, חיווט/תוויות, תמונת ייחוס, datasheets, שמירה, תרגום).
+- שעון השלב צובר: שלב שרץ שוב (השרטוט הבא) מוסיף לזמן שלו (`acc`), ו-`totalMs()` הוא שעון-קיר מההתחלה לסוף. `finish(text, ok)` מסמן
+  שלבים שלא רצו כ-skip ומסיים את ה-job. הזמנים נרשמים ביומן (`stage_ms`): `sales_desk_add_from_drawing`, `cut_strip_generated`, `rfq_drawing_read`.
+- **ברקע:** שום דבר בניתוח לא מחכה ללשונית גלויה. בזמן שהלשונית מוסתרת הפאנל לא מצויר מחדש כל שנייה (פחות CPU — Chrome מקפיא
+  רק לשונית "CPU-intensive" במצב Energy Saver אחרי 5 דקות). `backgroundJob()`: כותרת הלשונית `⏳ <שלב> — SpecPrice`, ובסוף `✓ …` עד
+  שחוזרים; `beforeunload` שואל לפני סגירה רק בזמן ריצה. בדיקה: `tests/stages-harness.js`.
+- C&S: הדף נבנה מאחורי החלון, והחלון נשאר עם Total time וכפתור `#cs-import-close` ("Open the sheet").
+- RFQ: אחרי הקריאה השלבים נשארים מעל טבלת הבדיקה ב-`<details class="stages-done">` מקופל.
+

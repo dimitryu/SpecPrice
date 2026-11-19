@@ -1,10 +1,10 @@
 import { S } from '../../core/state.js';
 import { _csLastRawReply, aiAnalyzeCutStrip } from '../../ai/cutstrip.js';
 import { logAudit } from '../../core/audit.js';
-import { closeModal, esc, showModal, toast } from '../../core/ui.js';
+import { closeModal, esc, fmtDuration, showModal, stagesPanel, toast } from '../../core/ui.js';
 import { writeSpecDoc } from '../../data/specs.js';
 import { _csAttachDatasheets } from './datasheets.js';
-import { _CS_SOURCE_LANG, _csEnsureLang, _csLang, _csT } from './i18n.js';
+import { _CS_SOURCE_LANG, _csEnsureLang, _csLang } from './i18n.js';
 import { _csDocId, _csTBCCount, loadCutStripSpecs } from './list.js';
 import { renderCutStripSheet } from './sheet.js';
 import { encodeImage, extractPDFPages } from '../../io/pdf.js';
@@ -167,16 +167,27 @@ export async function handleCSFile(file){
   const isImg=file.type.startsWith('image/');
   if(!isPDF && !isImg){ toast('Drop a PDF or an image of the drawing','error'); return; }
 
-  body.innerHTML=`<div class="ai-status"><div class="ring"></div><span id="cs-msg">Reading drawing…</span></div>
-    <div class="progress-bar"><div class="progress-fill" id="cs-prog"></div></div>`;
   if(foot) foot.innerHTML='';
-  const setM=(m,p)=>{ const e=document.getElementById('cs-msg'); if(e)e.textContent=m;
-                      const b=document.getElementById('cs-prog'); if(b)b.style.width=p+'%'; };
+  // Every step of the analysis on screen, each with its own time — the same
+  // panel as Sales Desk's New Drawing. It keeps running in a background tab.
+  const stages=stagesPanel(body, [
+    {k:'prep',     label:isPDF?'Preparing the drawing sheets':'Preparing the image'},
+    {k:'analyse',  label:'Reading cut lengths, strip dimensions, sleeves and markers'},
+    {k:'bom',      label:'Reading the part list'},
+    {k:'detail',   label:'Reading the wiring table, the labels and the notes'},
+    {k:'figure',   label:'Preparing the reference picture — customer branding masked'},
+    {k:'sheets',   label:'Looking up connector datasheets'},
+    {k:'save',     label:'Saving the specification'},
+    {k:'translate',label:'Translating'},
+  ]);
+  let _cur='prep';
+  const go=(k,text,pct)=>{ if(_cur!==k && stages.get(_cur).state==='run') stages.set(_cur,{state:'done'}); _cur=k; stages.set(k,{state:'run', text:text||'', pct:pct==null?null:pct}); };
+  const setM=(m,p)=>stages.set(_cur,{state:'run', text:m, pct:p==null?null:p});
 
   try{
     let text='', isImage=false, imgData=null, rawImage=null;
     if(isPDF){
-      setM('Extracting drawing…',20);
+      go('prep','Extracting the drawing…',20);
       const {pageTexts,pageImages}=await extractPDFPages(file);
       text=pageTexts.join('\n');
       // Vision, not the text layer: cut lengths, strip callouts and marker
@@ -202,7 +213,7 @@ export async function handleCSFile(file){
         }
       }
     } else {
-      setM('Reading image…',20);
+      go('prep','Reading the image…',30);
       imgData=await encodeImage(file); isImage=true;
       rawImage=(imgData && imgData.b64) || null;
     }
@@ -214,24 +225,36 @@ export async function handleCSFile(file){
     // one place, and translated through one path instead of two. English and
     // Russian are translations of it, produced on demand by the language
     // buttons, exactly like each other.
-    setM('Analysing cut & strip requirements… a dense drawing can take up to 2 minutes — leave this open',55);
-    S._csOnProgress=(n,phase)=>setM(
-      phase==='detail' ? _csT('Reading the wiring table, the labels and the notes…')
-      : phase==='retry' ? _csT('Reading the drawing again…')
-      : phase==='bom'   ? _csT('Reading the part list…')
-                        : `The drawing is bigger than one reply — continuing (${n})…`,
-      phase==='detail' ? 72 : phase==='retry' ? 62 : phase==='bom' ? 68 : 55+n*3);
+    stages.set('prep',{state:'done', pct:100, text: isImage
+      ? (imgData && imgData.pages ? `${imgData.pages.length} sheet${imgData.pages.length>1?'s':''}` : 'Image ready')
+      : 'Text only — no sheet image could be prepared'});
+    go('analyse','A dense drawing can take up to 2 minutes — you can switch to another tab, it keeps going');
+    S._csOnProgress=(n,phase)=>{
+      if(phase==='detail')     go('detail','Reading…');
+      else if(phase==='bom')   go('bom','Not in the first reading — reading it now…');
+      else if(phase==='retry') go('analyse','Reading the drawing again — the first reply was incomplete…');
+      else                     setM(`The drawing is bigger than one reply — continuing (${n})…`);
+    };
     let spec;
     try{ spec=await aiAnalyzeCutStrip(text, isImage, imgData, _CS_SOURCE_LANG); }
     finally{ S._csOnProgress=null; }
+    if(stages.get(_cur).state==='run') stages.set(_cur,{state:'done'});
+    const _nSeg=(spec.segments||[]).length, _nCon=(spec.connectors||[]).length, _nMat=(spec.materials||[]).length;
+    stages.set('analyse',{state:'done', text:`${_nSeg} cable segment${_nSeg===1?'':'s'}, ${_nCon} connector${_nCon===1?'':'s'}${_csTBCCount(spec)?` · ${_csTBCCount(spec)} to confirm (TBC)`:''}`});
+    if(stages.get('detail').t0!=null) stages.set('detail',{text:`${(spec.markers||[]).length} label${(spec.markers||[]).length===1?'':'s'}, ${(spec.engineering_notes||[]).length} note${(spec.engineering_notes||[]).length===1?'':'s'}`});
+    if(stages.get('bom').t0!=null) stages.set('bom',{text:`${_nMat} part${_nMat===1?'':'s'}`});
+    else stages.set('bom',{state:'skip', text:`Already in the first reading — ${_nMat} part${_nMat===1?'':'s'}`});
+    if(stages.get('detail').t0==null) stages.set('detail',{state:'skip', text:'Not run'});
     // The drawing is only kept once the analysis has said where the customer's
     // branding is. No boxes, no stored copy — the sheet says so rather than
     // quietly publishing someone else's logo to the shop floor.
     if(rawImage){
+      go('figure','Preparing…');
       const img=await _csRefImage(rawImage);
       if(img) spec.source_image=img;
       else spec.source_image_skipped='the drawing could not be prepared for storage — it was too large, or the title block could not be masked';
-    }
+      stages.set('figure',{state:img?'done':'warn', text:img?'Ready':'Not stored — too large, or the title block could not be masked'});
+    } else stages.set('figure',{state:'skip', text:'No picture of the drawing'});
 
     // A drawing number is what the sheet is filed and found under. Falling back
     // to the file name is better than an "UNTITLED" doc, but it is recorded as a
@@ -259,37 +282,52 @@ export async function handleCSFile(file){
     // the analysis, rather than behind a button nobody remembers to press. It
     // is best-effort: anything the distributors do not know about simply has no
     // link, and a failure never costs the analysis.
-    setM('Looking up connector datasheets…',86);
+    go('sheets','Looking…');
     try{
-      const n=await _csAttachDatasheets(spec,(d,t)=>setM(`Looking up connector datasheets… ${d}/${t}`, 86+Math.round(d/t*3)));
+      const n=await _csAttachDatasheets(spec,(d,t)=>stages.set('sheets',{state:'run', text:'Looking…', done:d, total:t}));
       if(n) logAudit('cut_strip_datasheets',{drawing:spec.drawing_number, found:n},true);
-    }catch(e){ console.warn('[CutStrip] datasheets', e.message); }
+      stages.set('sheets',{state:'done', done:0, total:0, text:n?`${n} found`:'None found'});
+    }catch(e){ console.warn('[CutStrip] datasheets', e.message);
+      stages.set('sheets',{state:'warn', done:0, total:0, text:'Failed: '+e.message}); }
 
-    setM('Saving…',90);
+    go('save','Saving…');
     const id=_csDocId(spec.drawing_number);
     await writeSpecDoc(id, {...spec, createdBy:S.currentUserEmail||''});
-    logAudit('cut_strip_generated',{drawing:spec.drawing_number, unverified:_csTBCCount(spec)},true);
 
     S.csSpecs=[]; await loadCutStripSpecs(true);
     S.csCurrent=S.csSpecs.find(s=>s._id===id) || {_id:id, ...spec};
     S._csEditing=false; S._csEditBackup=null;
+    stages.set('save',{state:'done', text:spec.spec_no});
 
     // Only when the operator is reading in something other than the source.
     if(_csLang!==_CS_SOURCE_LANG){
-      setM('Translating…',94);
-      await _csEnsureLang(S.csCurrent, _csLang, (n,t)=>setM(`Translating… ${Math.round(n/t*100)}%`, 94+Math.round(n/t*5)));
-    }
-    closeModal();
+      go('translate','Translating…',0);
+      await _csEnsureLang(S.csCurrent, _csLang, (n,t)=>stages.set('translate',{state:'run', text:'Translating…', pct:Math.round(n/t*100)}));
+      stages.set('translate',{state:'done', pct:100, text:'Done'});
+    } else stages.set('translate',{state:'skip', text:'The sheet is shown in the language it was written in'});
+
+    // How long it all took, per step and in total — on screen and in the log.
+    const totalMs=stages.totalMs();
+    stages.finish(`Cut & strip sheet ready — ${spec.drawing_number}`);
+    logAudit('cut_strip_generated',{drawing:spec.drawing_number, unverified:_csTBCCount(spec), ms:totalMs, stage_ms:stages.times()},true);
     toast(`Specification created for ${spec.drawing_number}`,'success');
-    renderCutStripSheet();
+    renderCutStripSheet();   // behind the window, ready when it closes
+    body.insertAdjacentHTML('beforeend',`<div class="sd-import-done" style="margin-top:12px;font-size:13px;color:#1B6B3A;font-weight:600">
+      <div class="sd-import-total" style="display:flex;justify-content:space-between;gap:10px;padding:6px 10px;margin-bottom:6px;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px">
+        <span>⏱ Total time</span><span style="font-variant-numeric:tabular-nums">${fmtDuration(totalMs)}</span></div>
+      ✓ Done — the cut &amp; strip sheet for ${esc(spec.drawing_number)} is ready${_csTBCCount(spec)?`; ${_csTBCCount(spec)} dimension(s) marked TBC need confirming`:''}.</div>`);
+    if(foot){ foot.innerHTML=`<button class="btn btn-green" id="cs-import-close">Open the sheet</button>`;
+      document.getElementById('cs-import-close').addEventListener('click',()=>closeModal()); }
   }catch(e){
     console.error('[CutStrip]',e);
-    logAudit('cut_strip_generated',{file:file.name, error:e.message},false);
-    body.innerHTML=`<div class="card" style="border-color:var(--danger)">
+    logAudit('cut_strip_generated',{file:file.name, error:e.message, ms:stages.totalMs(), stage_ms:stages.times()},false);
+    if(stages.get(_cur).state==='run') stages.set(_cur,{state:'warn', text:e.message});
+    stages.finish('Analysis failed', false);
+    body.insertAdjacentHTML('beforeend',`<div class="card" style="border-color:var(--danger);margin-top:12px">
       <strong style="color:var(--danger)">Analysis failed</strong>
       <p style="font-size:13px;margin-top:8px">${esc(e.message)}</p>
       <p style="font-size:12px;color:var(--muted);margin-top:10px">
-        Nothing was saved. If the drawing is a scan, a sharper image usually fixes this.</p></div>`;
+        Nothing was saved. If the drawing is a scan, a sharper image usually fixes this.</p></div>`);
     if(foot) foot.innerHTML=(_csLastRawReply
         ? `<button class="btn btn-ghost" id="btn-cs-copy-raw">\u{1F4CB} Copy the AI reply</button>` : '')
       + `<button class="btn btn-ghost" data-close-modal>Close</button>`;

@@ -69,11 +69,14 @@ export function setActions(html){document.getElementById('topbar-actions').inner
 // Desk → save to the Database → check prices), so the user sees which stage is
 // running, how far it is, what each finished one did and how long it took.
 // stages: [{k, label}]. set(k, {state, text, done, total}) — state is
-// 'wait' | 'run' | 'done' | 'warn' | 'skip'. A stage's clock starts the first
-// time it is 'run' and stops when it is 'done' or 'warn'; a running stage's
-// time counts up live. totalMs() = from the first stage's start to the last
-// one's end. mount() redraws it into host (after something else, e.g. a
-// column-mapping question, used the same space).
+// 'wait' | 'run' | 'done' | 'warn' | 'skip'. A stage's clock runs while it is
+// 'run' and stops when it leaves 'run'; a stage that runs again (the same step
+// for the next of several drawings) adds to its time, so ⏱ is the time that
+// step really took. A running stage's time counts up live. totalMs() = from
+// the first stage's start to the last one's end. mount() redraws it into host
+// (after something else, e.g. a column-mapping question, used the same space).
+// finish(text) ends the job: see backgroundJob — the work goes on, and the
+// tab's title says how far it is, while the user is in another tab or window.
 export function fmtDuration(ms){
   if(!(ms>=0)) return '';
   const s=ms/1000;
@@ -83,16 +86,19 @@ export function fmtDuration(ms){
   return r===60 ? `${m+1} min` : `${m} min ${String(r).padStart(2,'0')} s`;
 }
 export function stagesPanel(host, stages){
-  const st=stages.map(x=>({state:'wait', text:'', done:0, total:0, pct:null, t0:null, t1:null, ...x}));
+  const st=stages.map(x=>({state:'wait', text:'', done:0, total:0, pct:null, t0:null, t1:null, acc:0, rs:null, ...x}));
   const ICON={wait:'○', run:'', done:'✓', warn:'⚠', skip:'–'};
   const COLOR={wait:'#94A3B8', run:'var(--blue-mid)', done:'#1B6B3A', warn:'#B45309', skip:'#94A3B8'};
   // A monotonic clock: a duration must not jump when the computer's clock is set.
   const now=()=>{ const pf=globalThis.performance; return pf && typeof pf.now==='function' ? pf.now() : Date.now(); };
   let root=null, ticker=null;
-  const elapsed=x=>x.t0==null ? null : ((x.t1!=null ? x.t1 : now())-x.t0);
+  const job=backgroundJob();
+  const elapsed=x=>x.t0==null ? null : (x.acc + (x.state==='run' && x.rs!=null ? now()-x.rs : 0));
   const rowHTML=x=>{
     const pct = x.pct!=null ? x.pct : (x.total ? Math.round(100*x.done/x.total) : null);
-    const showBar = x.state==='run' || (x.state==='done' && pct!=null);
+    // A bar only where there is something to measure; a step without one shows
+    // its spinner and its clock.
+    const showBar = (x.state==='run' || x.state==='done') && pct!=null;
     const ms=elapsed(x);
     return `<div class="stage stage-${x.state}" data-stage="${esc(x.k)}" style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--border)">
       <span class="stage-icon" style="width:18px;flex-shrink:0;text-align:center;font-weight:700;color:${COLOR[x.state]}">${x.state==='run'?'<span class="ring" style="width:14px;height:14px;border-width:2px;display:inline-block"></span>':ICON[x.state]}</span>
@@ -106,10 +112,16 @@ export function stagesPanel(host, stages){
       </div></div>`;
   };
   // While a stage runs its clock is redrawn every second; it stops by itself.
+  // Not while the tab is hidden: nobody sees it, and a background tab that keeps
+  // working the CPU is the kind Chrome may freeze. The times come from the
+  // clock, not from the ticks, so they are right the moment the tab is back.
+  const hidden=()=>typeof document!=='undefined' && document.hidden;
   const tick=()=>{
-    if(!root || !root.isConnected || !st.some(x=>x.state==='run')){ ticker=null; return; }
+    if(!root || !root.isConnected || !st.some(x=>x.state==='run') || hidden()){ ticker=null; return; }
     api.render(); ticker=setTimeout(tick,1000);
   };
+  const onVis=()=>{ if(!hidden() && root && root.isConnected){ api.render(); if(!ticker && st.some(x=>x.state==='run')) ticker=setTimeout(tick,1000); } };
+  if(typeof document!=='undefined') document.addEventListener('visibilitychange', onVis);
   const api={
     mount(){
       root=document.createElement('div');
@@ -121,10 +133,12 @@ export function stagesPanel(host, stages){
       const x=st.find(y=>y.k===k); if(!x) return;
       const was=x.state;
       Object.assign(x, patch);
-      if(x.state==='run' && x.t0==null) x.t0=now();
-      if((x.state==='done'||x.state==='warn') && was!==x.state){ if(x.t0==null) x.t0=now(); x.t1=now(); }
+      const t=now();
+      if(x.state==='run' && was!=='run'){ x.rs=t; if(x.t0==null) x.t0=t; x.t1=null; }
+      if(was==='run' && x.state!=='run'){ x.acc+=t-x.rs; x.rs=null; x.t1=t; }
+      else if((x.state==='done'||x.state==='warn') && was!==x.state && x.t0==null){ x.t0=t; x.t1=t; }
       api.render();
-      if(x.state==='run' && !ticker) ticker=setTimeout(tick,1000);
+      if(x.state==='run'){ job.progress(x.label); if(!ticker && !hidden()) ticker=setTimeout(tick,1000); }
     },
     get(k){ return st.find(y=>y.k===k); },
     // ms per stage that ran, e.g. {read: 41250, db: 820} — for the log
@@ -133,9 +147,44 @@ export function stagesPanel(host, stages){
       const ran=st.filter(x=>x.t0!=null); if(!ran.length) return 0;
       return Math.max(...ran.map(x=>x.t1!=null?x.t1:now())) - Math.min(...ran.map(x=>x.t0));
     },
+    // Marks the stages that never ran as skipped, and ends the job.
+    finish(text, ok=true){
+      st.forEach(x=>{ if(x.state==='wait') x.state='skip'; if(x.state==='run'){ x.acc+=now()-x.rs; x.rs=null; x.t1=now(); x.state=ok?'done':'warn'; } });
+      api.render(); job.done(text, ok);
+      if(typeof document!=='undefined') document.removeEventListener('visibilitychange', onVis);
+    },
     el(){ return root; },
   };
   return api.mount();
+}
+
+// A long job — reading a drawing — keeps going when the user switches to
+// another tab or window: nothing in it waits for the tab to be visible, and
+// the panel above stops redrawing while hidden. Meanwhile the tab's title says
+// what it is doing ("⏳ Reading the drawing — SpecPrice") and, when it ends
+// while the user is elsewhere, that it is done ("✓ … — SpecPrice") until they
+// come back. Closing the tab while it runs asks first.
+export function backgroundJob(){
+  if(typeof document==='undefined' || typeof window==='undefined') return {progress(){}, done(){}};
+  const base=document.title;
+  let running=false, ended=false;
+  const unload=e=>{ e.preventDefault(); e.returnValue=''; return ''; };
+  const restore=()=>{ if(!document.hidden){ document.title=base; document.removeEventListener('visibilitychange', restore); } };
+  return {
+    progress(text){
+      if(ended) return;
+      if(!running){ running=true; window.addEventListener('beforeunload', unload); }
+      document.title=`⏳ ${text} — ${base}`;
+    },
+    done(text, ok=true){
+      if(ended) return; ended=true;
+      if(running) window.removeEventListener('beforeunload', unload);
+      if(document.hidden){
+        document.title=`${ok?'✓':'⚠'} ${text||'Done'} — ${base}`;
+        document.addEventListener('visibilitychange', restore);
+      } else document.title=base;
+    },
+  };
 }
 export function progressPanel(host, label){
   const el=document.createElement('div');

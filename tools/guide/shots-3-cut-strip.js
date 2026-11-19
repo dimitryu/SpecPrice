@@ -11,6 +11,12 @@ const L=require('./lib.js');
   await page.setInputFiles('#cs-file-input',L.A('DEMO-100-01.pdf'));
   await page.waitForTimeout(1500);
   await L.shot(page,'22-cs-progress','.modal');
+  // Every step with its own time, the total, and the sheet behind the window.
+  await page.waitForSelector('#cs-import-close',{timeout:120000}); await page.waitForTimeout(400);
+  await L.mark(page,[{sel:'[data-stage="analyse"]',pad:3},{sel:'.sd-import-total',pad:3},'#cs-import-close']);
+  await L.shot(page,'22b-cs-done','.modal');
+  await L.unmark(page);
+  await page.click('#cs-import-close');
   await page.waitForSelector('#cs-sheet',{timeout:120000}); await page.waitForTimeout(4500);
   await L.mark(page,[{sel:'#topbar-actions > span',pad:3},'#btn-cs-edit','#btn-cs-print','#btn-cs-pdf','#btn-cs-back']);
   await L.shot(page,'23-cs-sheet-top');

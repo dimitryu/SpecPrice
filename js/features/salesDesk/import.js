@@ -190,8 +190,16 @@ export async function handleSDFiles(files){
   // save to the Database → check prices. No review table in between — every
   // stage shows here as it runs, and the desk is where rows are corrected.
   const _ro=isReadOnlyUser();
+  // Every step the analysis makes is a stage of its own, with its own time —
+  // reading the parts list, the title block, the manufacturing process, the
+  // notes, the crimp tools — so a slow drawing shows WHICH step is slow. With
+  // several drawings each step runs once per drawing and its ⏱ adds up.
   const stages=stagesPanel(body, [
-    {k:'read',  label:files.length>1?`Reading ${files.length} drawings`:'Reading the drawing'},
+    {k:'read',  label:files.length>1?`Reading the parts lists of ${files.length} drawings`:'Reading the parts list (BOM)'},
+    {k:'title', label:'Reading the title block — drawing #, title, revision'},
+    {k:'process', label:'Analysing the manufacturing process — labor time'},
+    {k:'notes', label:'Reading the notes and manufacturing instructions'},
+    {k:'tools', label:'Finding the crimp tools'},
     {k:'desk',  label:'Adding the rows to Sales Desk'},
     {k:'db',    label:'Saving the parts to the Database'},
     {k:'price', label:'Checking prices — Mouser, DigiKey, Online Components, Farnell'},
@@ -268,17 +276,20 @@ export async function handleSDFiles(files){
       }
 
       _normalizeBOMRows(extractedRows, {text: isPDF ? _pdfText : ''});
+      stages.set('read',{state:'done', pct:Math.round(((fidx+1)/files.length)*100),
+        text:filePrefix+`${extractedRows.length} row${extractedRows.length===1?'':'s'}`});
       // Drawing #, name and revision of THIS drawing: from its title block
       // (DWG NO / TITLE / REV, and the latest entry of a revision table), and
       // from the file name for whatever the title block does not show.
       let _tb=null;
       if(extractedRows.length && !isXls && _aiReady()){
-        setM('Reading the title block (drawing #, title, revision)…',92);
+        stages.set('title',{state:'run', text:filePrefix+'Reading…'});
         // Sheet 1 carries the revision record; its picture shows which value
         // sits in which box, and the text layer (if any) the exact characters.
         const _tbText = isPDF && _pdfTextLen>200 ? (_pdfLayout||_pdfText) : '';
         const _tbImg = _pdfImages[0] ? {b64:_pdfImages[0],mimeType:'image/jpeg'} : (_procImgData||null);
-        if(_tbText || _tbImg) _tb=await aiReadTitleBlock(_tbText, !!_tbImg, _tbImg);
+        try{ if(_tbText || _tbImg) _tb=await aiReadTitleBlock(_tbText, !!_tbImg, _tbImg); }
+        finally{ stages.set('title',{state:'done', text:filePrefix+(_tb && _tb.drawing_number ? `${_tb.drawing_number}${_tb.revision?` rev ${_tb.revision}`:''}` : 'Not readable — the file name is used')}); }
       }
       const _dwgId=_drawingIdentity(_tb, file.name, isPDF ? (_pdfLayout||_pdfText) : '');
       const effectiveDwgName=_dwgId.drawing_number;
@@ -302,7 +313,7 @@ export async function handleSDFiles(files){
       // _sdLaborBreakdowns for the Cost Summary breakdown modal.
       if(extractedRows.length && _aiReady()){
         try{
-          setM('Analyzing cable manufacturing process…',95);
+          stages.set('process',{state:'run', text:filePrefix+'Analysing…'});
           const rowsList=extractedRows.map((r,idx)=>`${idx}: ${r.description||r.part_number||''} (qty=${r.qty||''}${r.unit?' '+r.unit:''})`).join('\n');
           const proc = await aiAnalyzeCableProcess(_procIsImage?'':_pdfText, _procIsImage, _procImgData, rowsList);
           if(proc && proc.steps.length){
@@ -364,8 +375,10 @@ export async function handleSDFiles(files){
               singleUnitMinutes: Math.max(parseFloat(proc.single_unit_minutes)||0, rowTiedMinutes+generalMinutes),
               generalMinutes,
             });
-          }
-        }catch(e){ console.warn('[SD] cable-process analysis failed:', e.message); }
+            stages.set('process',{state:'done', text:filePrefix+`${proc.steps.length} operation${proc.steps.length===1?'':'s'}, ${(+(rowTiedMinutes+generalMinutes)).toFixed(1)} min per cable`});
+          } else stages.set('process',{state:'done', text:filePrefix+'No operations found'});
+        }catch(e){ console.warn('[SD] cable-process analysis failed:', e.message);
+          stages.set('process',{state:'warn', text:filePrefix+'Failed: '+e.message+' — use Calculate Labor on the desk'}); }
       }
 
       // Sales-Desk-only: pull out any NOTES / MANUFACTURING INSTRUCTIONS text
@@ -374,22 +387,29 @@ export async function handleSDFiles(files){
       // found, since a drawing can still have notes worth surfacing.
       if(_aiReady()){
         try{
-          setM('Checking for Notes / Manufacturing Instructions…',97);
+          stages.set('notes',{state:'run', text:filePrefix+'Reading…'});
           const notes=await aiExtractDrawingNotes(_procIsImage?'':_pdfText, _procIsImage, _procImgData);
           if(notes.length){
             _sdDrawingNotes.push({drawingName: extractedRows[0]?.drawing_number || effectiveDwgName, notes});
           }
-        }catch(e){ console.warn('[SD] notes extraction failed:', e.message); }
+          stages.set('notes',{state:'done', text:filePrefix+(notes.length?`${notes.length} note${notes.length===1?'':'s'}`:'None on the drawing')});
+        }catch(e){ console.warn('[SD] notes extraction failed:', e.message);
+          stages.set('notes',{state:'warn', text:filePrefix+'Failed: '+e.message}); }
       }
 
       // Crimp tools for the pins / sockets / terminals: the Database, the
       // standard table, then the contact makers' datasheets (web) — priced.
       if(extractedRows.length){
         try{
-          const t=await _addToolsToRows(extractedRows, msg=>setM(msg,98));
+          stages.set('tools',{state:'run', text:filePrefix+'Looking…'});
+          const t=await _addToolsToRows(extractedRows, msg=>stages.set('tools',{state:'run', text:filePrefix+msg}));
           const tm=_toolLookupMessage(t);
           if(tm) toast(tm, (t.notFound||[]).length||t.aiError ? 'warn' : 'success');
-        }catch(e){ console.warn('[SD] tool lookup failed:', e.message); }
+          const nt=extractedRows.filter(r=>_sdIsToolRow(r)).length;
+          stages.set('tools',{state:(t.notFound||[]).length||t.aiError?'warn':'done',
+            text:filePrefix+(tm || (nt?`${nt} tool row${nt===1?'':'s'}`:'No crimp tools needed'))});
+        }catch(e){ console.warn('[SD] tool lookup failed:', e.message);
+          stages.set('tools',{state:'warn', text:filePrefix+'Failed: '+e.message}); }
       }
 
       if(!extractedRows.length){
@@ -399,8 +419,14 @@ export async function handleSDFiles(files){
       }
     } catch(e){
       errors.push(`"${file.name}" — ${e.message}`);
+      if(stages.get('read').state==='run') stages.set('read',{state:'warn', text:filePrefix+e.message});
     }
   }
+
+  // A step that never ran says why.
+  const _why = !_aiReady() ? 'AI is not set up — see Admin' : 'Not needed for this file';
+  for(const k of ['title','process','notes','tools'])
+    if(stages.get(k).t0==null) stages.set(k,{state:'skip', text: k==='title' && files.every(f=>_isSpreadsheetFile(f)) ? 'A spreadsheet has no title block' : _why});
 
   setLogDrawing([]);   // the reading is over; the save (below) sets it again
   if(errors.length) errors.forEach(msg=>toast(msg,'error'));
@@ -408,6 +434,7 @@ export async function handleSDFiles(files){
   if(!allRows.length){
     stages.set('read',{state:'warn', text:'No BOM rows were found', pct:100});
     ['desk','db','price'].forEach(k=>stages.set(k,{state:'skip'}));
+    stages.finish('No BOM rows found', false);
     // What each file's reading did stays on screen (a toast is gone in seconds).
     body.insertAdjacentHTML('beforeend',`<p style="color:var(--muted);margin-top:10px">No BOM rows were detected in ${files.length>1?`any of the ${files.length} files`:'this file'}.</p>
       ${errors.length?`<div class="sd-import-why" style="margin-top:8px;font-size:12px;line-height:1.5;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:8px 10px;color:#7F1D1D">
@@ -476,6 +503,7 @@ export async function handleSDFiles(files){
   if(dbOk) _sdMarkCleanExcept(_dirtyBefore);
   // How long it all took, per step and in total — on screen and in the log.
   const totalMs=stages.totalMs();
+  stages.finish(`${added.length} rows on Sales Desk`);
   logAudit('sales_desk_add_from_drawing',{count:added.length, files:files.length, ms:totalMs, stage_ms:stages.times(), priced:pr?pr.found:0},true);
   body.insertAdjacentHTML('beforeend',`<div class="sd-import-done" style="margin-top:12px;font-size:13px;color:#1B6B3A;font-weight:600">
     <div class="sd-import-total" style="display:flex;justify-content:space-between;gap:10px;padding:6px 10px;margin-bottom:6px;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px">

@@ -1,7 +1,7 @@
 import { _bomFromPDF, aiExtractBOM, aiReadTitleBlock } from '../ai/bom.js';
 import { _aiReady } from '../ai/client.js';
 import { logAudit, logDrawingsOf, setLogDrawing } from '../core/audit.js';
-import { closeModal, esc, progressPanel, showModal, toast } from '../core/ui.js';
+import { closeModal, esc, fmtDuration, progressPanel, showModal, stagesPanel, toast } from '../core/ui.js';
 import { saveBOMToPartStock } from '../data/parts.js';
 import { appendRowsToDrawing } from '../data/projects.js';
 import { _XLS_MAP_FIELDS, _applyDrawingIdentity, _drawingIdentity, _isYes, _normalizeBOMRows, _normalizeExtractedRow, _parseDrawingFileName, _xlsAnalyzeSheet, _xlsMapSignature, parseExcelSheetsStructured } from '../domain/bom.js';
@@ -71,6 +71,13 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
   const foot = document.getElementById('modal-foot');
   const allRows = [];
   const errors = [];
+  // Every step of the reading on screen with its own time, as in Sales Desk.
+  const stages = stagesPanel(body, [
+    {k:'read',  label:files.length>1?`Reading the parts lists of ${files.length} drawings`:'Reading the parts list (BOM)'},
+    {k:'title', label:'Reading the title block — drawing #, title, revision'},
+    {k:'tools', label:'Finding the crimp tools'},
+  ]);
+  foot.innerHTML = '';
 
   for(let fidx=0; fidx<files.length; fidx++){
     const file = files[fidx];
@@ -80,15 +87,10 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
     const isXls = _isSpreadsheetFile(file);
     if(!isPDF && !isImg && !isXls){ errors.push(`"${file.name}" — not a PDF, image or spreadsheet, skipped`); continue; }
 
-    const filePrefix = files.length>1 ? `File ${fidx+1}/${files.length}: ${esc(file.name)} — ` : '';
-    body.innerHTML = `
-      <div class="ai-status"><div class="ring"></div><span id="ai-msg">${filePrefix}${isXls?'Reading spreadsheet…':(isPDF?'Extracting PDF text…':'Reading image…')}</span></div>
-      <div class="progress-bar"><div class="progress-fill" id="prog"></div></div>`;
-    foot.innerHTML = '';
-    const setMsg = (m,pct) => {
-      const el=document.getElementById('ai-msg'); if(el)el.textContent=filePrefix+m;
-      const pb=document.getElementById('prog'); if(pb)pb.style.width=pct+'%';
-    };
+    const filePrefix = files.length>1 ? `File ${fidx+1}/${files.length}: ${file.name} — ` : '';
+    const setMsg = (m,pct) => stages.set('read',{state:'run', text:filePrefix+m,
+      pct:Math.round(((fidx + Math.min(100,Math.max(0,+pct||0))/100) / files.length)*100)});
+    setMsg(isXls?'Reading spreadsheet…':(isPDF?'Extracting PDF text…':'Reading image…'), 2);
 
     try {
       let extractedRows = [], _bomDiag = [];
@@ -100,11 +102,9 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
         // _xlsConfirmMapping. Returns {} for a sheet it is confident about, so
         // a recognised export is never interrupted.
         const _colChoice = await _xlsConfirmMapping(sheets, file.name, body, foot);
+        stages.mount(); foot.innerHTML = '';
         if(_colChoice===null){ errors.push(`"${file.name}" — import cancelled`); continue; }
-        body.innerHTML = `
-      <div class="ai-status"><div class="ring"></div><span id="ai-msg">${filePrefix}Reading spreadsheet…</span></div>
-      <div class="progress-bar"><div class="progress-fill" id="prog"></div></div>`;
-        foot.innerHTML = '';
+        setMsg('Reading spreadsheet…', 30);
         // Structured parse first — exact and repeatable (see
         // _parseStructuredBOMSheet). AI only for unrecognisable layouts.
         extractedRows = parseExcelSheetsStructured(sheets, _colChoice) || [];
@@ -130,14 +130,17 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
       }
 
       _normalizeBOMRows(extractedRows, {text: isPDF ? _pdfText : ''});
+      stages.set('read',{state:'done', pct:Math.round(((fidx+1)/files.length)*100),
+        text:filePrefix+`${extractedRows.length} row${extractedRows.length===1?'':'s'}`});
       // Drawing #, name and revision: title block first, then the file name
       // (see _drawingIdentity). A name typed for this RFQ drawing still wins.
       let _tb=null;
       if(extractedRows.length && !isXls && _aiReady()){
-        setMsg('Reading the title block…', 95);
+        stages.set('title',{state:'run', text:filePrefix+'Reading…'});
         const _tbText = isPDF && _pdfTextLen>200 ? (_pdfLayout||_pdfText) : '';
         const _tbImg = _pdfImages[0] ? {b64:_pdfImages[0], mimeType:'image/jpeg'} : (_imgForTb||null);
-        if(_tbText || _tbImg) _tb=await aiReadTitleBlock(_tbText, !!_tbImg, _tbImg);
+        try{ if(_tbText || _tbImg) _tb=await aiReadTitleBlock(_tbText, !!_tbImg, _tbImg); }
+        finally{ stages.set('title',{state:'done', text:filePrefix+(_tb && _tb.drawing_number ? `${_tb.drawing_number}${_tb.revision?` rev ${_tb.revision}`:''}` : 'Not readable — the file name is used')}); }
       }
       const _dwgId=_drawingIdentity(_tb, file.name, isPDF ? (_pdfLayout||_pdfText) : '');
       if(files.length===1 && drawingNameOverride) _dwgId.drawing_number=drawingNameOverride;
@@ -150,10 +153,15 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
 
       if(extractedRows.length){
         try{
-          const t=await _addToolsToRows(extractedRows, msg=>setMsg(msg,98));
+          stages.set('tools',{state:'run', text:filePrefix+'Looking…'});
+          const t=await _addToolsToRows(extractedRows, msg=>stages.set('tools',{state:'run', text:filePrefix+msg}));
           if((t.notFound||[]).length || t.aiError) toast(_toolLookupMessage(t),'warn');
+          const nt=extractedRows.filter(r=>_sdIsToolRow(r)).length;
+          stages.set('tools',{state:(t.notFound||[]).length||t.aiError?'warn':'done',
+            text:filePrefix+(_toolLookupMessage(t) || (nt?`${nt} tool row${nt===1?'':'s'}`:'No crimp tools needed'))});
         }
-        catch(e){ console.warn('[BOM] tool lookup failed:', e.message); }
+        catch(e){ console.warn('[BOM] tool lookup failed:', e.message);
+          stages.set('tools',{state:'warn', text:filePrefix+'Failed: '+e.message}); }
       }
 
       if(!extractedRows.length){
@@ -166,15 +174,29 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
         ? 'network error — check your internet connection or the Anthropic key'
         : e.message;
       errors.push(`"${file.name}" — ${hint}`);
+      if(stages.get('read').state==='run') stages.set('read',{state:'warn', text:filePrefix+hint});
     }
   }
 
   setLogDrawing([]);
   if(errors.length) errors.forEach(msg=>toast(msg,'error'));
-
-  const _ringEl=document.querySelector('.ai-status .ring');
-  if(_ringEl){_ringEl.style.cssText='width:16px;height:16px;border-radius:50%;background:#1B6B3A;border:none;animation:none;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;line-height:1';
-    _ringEl.textContent='✓';}
+  const _why = !_aiReady() ? 'AI is not set up — see Admin' : 'Not needed for this file';
+  for(const k of ['title','tools'])
+    if(stages.get(k).t0==null) stages.set(k,{state:'skip', text: k==='title' && files.every(f=>_isSpreadsheetFile(f)) ? 'A spreadsheet has no title block' : _why});
+  if(allRows.length) stages.set('read',{state:'done', pct:100,
+    text:`${allRows.length} row${allRows.length===1?'':'s'} found${files.length>1?` in ${files.length} files`:''}${errors.length?` · ${errors.length} file(s) skipped`:''}`});
+  const totalMs=stages.totalMs();
+  stages.finish(allRows.length ? `${allRows.length} rows read — review them` : 'No BOM rows found', !!allRows.length);
+  logAudit('rfq_drawing_read',{rows:allRows.length, files:files.length, ms:totalMs, stage_ms:stages.times()},!!allRows.length);
+  // The steps and their times stay at the top of the window, folded to one
+  // line, above the rows to review.
+  const _keepStages=()=>{
+    const d=document.createElement('details');
+    d.className='stages-done';
+    d.innerHTML=`<summary style="cursor:pointer;font-size:13px;font-weight:600;color:#1B6B3A;padding:4px 0">⏱ Reading took ${esc(fmtDuration(totalMs))} — the steps</summary>`;
+    d.appendChild(stages.el());
+    body.prepend(d);
+  };
 
   if(!allRows.length){
     body.innerHTML = `<p style="color:var(--muted);margin-top:10px">No BOM rows were detected in ${files.length>1?`any of the ${files.length} files`:'this file'}.</p>
@@ -182,6 +204,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
         <strong>What happened:</strong><ul style="margin:4px 0 0 18px;padding:0">${errors.map(m=>`<li>${esc(m)}</li>`).join('')}</ul></div>`:''}`;
     foot.innerHTML = `<button class="btn btn-ghost" id="modal-cancel-err">Close</button>`;
     document.getElementById('modal-cancel-err')?.addEventListener('click',closeModal);
+    _keepStages();
     return;
   }
 
@@ -206,6 +229,7 @@ export async function handleFiles(files, projectId, projectName, drawingNameOver
       renderRFQDetail(projectId, projectName);
     }
   );
+  _keepStages();
 }
 
 // showBOMPreview(rows, body, foot, btnLabel, saveCallback)
