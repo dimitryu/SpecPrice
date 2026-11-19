@@ -53,7 +53,7 @@ export async function renderCutStrip(){
 
   if(!list.length){
     setContent(`<div class="card" style="max-width:640px;margin:30px auto;text-align:center;padding:40px 30px">
-      <div style="font-size:44px;margin-bottom:10px">✂️</div>
+      <div class="empty-ic" style="font-size:44px;margin-bottom:10px">✂️</div>
       <h3 style="margin-bottom:6px">No cut &amp; strip specifications yet</h3>
       <p style="color:var(--muted);font-size:13px;margin-bottom:20px">
         Upload a cable or harness drawing and the analysis produces a bench-ready sheet:

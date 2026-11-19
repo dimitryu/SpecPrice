@@ -2,9 +2,10 @@ import { S } from './core/state.js';
 import { aiProbeProxy } from './ai/client.js';
 import { logAudit } from './core/audit.js';
 import { auth, onAuthStateChanged } from './core/firebase.js';
+import { watchIcons } from './core/icons.js';
 import { loadRoles } from './core/roles.js';
 import { route } from './core/router.js';
-import { currentUserRole, initCompany } from './core/session.js';
+import { companyName, currentUserRole, initCompany } from './core/session.js';
 import { closeModal, esc, splashErr, splashMsg } from './core/ui.js';
 import { APP_VER, autoCheckForUpdate, checkForUpdate } from './core/version.js';
 import { openAccountModal } from './features/account.js';
@@ -37,6 +38,7 @@ onAuthStateChanged(auth, async user => {
     // known answer is already in place from the previous visit.
     aiProbeProxy();
   } catch(e) { splashErr(e.isDisabled ? e.message : ('Company load error: ' + e.message)); return; }
+  const tbCo=document.getElementById('tb-company'); if(tbCo) tbCo.textContent=companyName||'';
   document.getElementById('splash').style.display = 'none';
   document.getElementById('shell').style.display = 'flex';
   const infoEl = document.getElementById('topbar-info');
@@ -45,9 +47,9 @@ onAuthStateChanged(auth, async user => {
   // running?" is the place to answer "is it current?". It was on the Home
   // screen only, in 10px grey, where nobody found it.
   if (infoEl){
-    infoEl.innerHTML = `<button class="btn btn-ghost btn-sm" id="btn-account-top" title="My account — change password" `
-      + `style="color:#64748B;font-weight:400">👤 ${esc(S.currentUserEmail)}</button><span style="color:#CBD5E1">|</span>`
-      + `<button class="btn btn-ghost btn-sm" id="btn-check-version-top" `
+    infoEl.innerHTML = `<button class="btn btn-sm tb-chip" id="btn-account-top" title="My account — change password" `
+      + `style="font-weight:500">👤 ${esc(S.currentUserEmail)}</button>`
+      + `<button class="btn btn-sm tb-chip mono" id="btn-check-version-top" `
       + `title="Check for a newer version">↻ v${APP_VER}</button>`;
     document.getElementById('btn-check-version-top')
       ?.addEventListener('click',e=>checkForUpdate(e.currentTarget));
@@ -70,6 +72,9 @@ document.addEventListener('click', e => {
   if (rm) rm.closest('tr')?.remove();
 });
 document.getElementById('btn-home')?.addEventListener('click',()=>route('home'));
+document.getElementById('tb-brand')?.addEventListener('click',()=>route('home'));
+// Line icons in place of the emoji the screens write (core/icons.js).
+watchIcons(document.body);
 document.getElementById('btn-support-fab')?.addEventListener('click',()=>openSupportModal());
 // Delegated so it works for BOTH drop-zone modals (RFQ + Sales Desk), which
 // are built fresh each time they're opened.

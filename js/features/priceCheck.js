@@ -41,7 +41,7 @@ export function _sdAskUnitsThenCheck(targets){
                  min="1" step="1" value="${_sdDwgUnits(d)}">
         </div>`).join('')}
       <div id="su-err" role="alert" aria-live="polite"
-           style="color:#E53E3E;font-size:12px;margin-top:10px;min-height:16px"></div>
+           style="color:var(--bad);font-size:12px;margin-top:10px;min-height:16px"></div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" id="su-cancel">Cancel</button>
@@ -131,7 +131,7 @@ export async function runFCCheckModal(items, mode, opts={}){
           <tbody id="fc-res-tbody">
             ${items.map((it,i)=>`<tr id="fc-row-${i}">
               <td id="fc-pn-${i}">${esc(it.part_number)}${(it.alt_mpns||[]).length>1
-                ? `<span style="margin-left:5px;padding:1px 5px;border-radius:8px;background:#EDE9FE;color:#5B21B6;font-size:9px;font-weight:700" title="${esc((it.alt_mpns||[]).map(a=>a.mpn).join('\n'))}">${(it.alt_mpns||[]).length} QVL</span>`
+                ? `<span style="margin-left:5px;padding:1px 5px;border-radius:8px;background:var(--chip-bg);color:var(--chip-ink);font-size:9px;font-weight:700" title="${esc((it.alt_mpns||[]).map(a=>a.mpn).join('\n'))}">${(it.alt_mpns||[]).length} QVL</span>`
                 : ''}</td>
               <td id="fc-mf-${i}" style="color:var(--muted)">${esc(it.manufacturer||'')||'—'}</td>
               <td>${it.qty||1}</td>
@@ -367,7 +367,7 @@ export async function runFCCheckModal(items, mode, opts={}){
       const _nominal=_sdIsLabelRow(it) && !(prPrice>0) && !(r.best && r.best.price>0);
       if(!r.best){
         if(_nominal) setStatus(i,`nominal $${SD_NOMINAL_LABEL_PRICE.toFixed(2)}`,'#B45309',`No supplier price for this label/marker — Part Cost uses the nominal label price, $${SD_NOMINAL_LABEL_PRICE.toFixed(2)} per piece. Type a price in Part Cost if you have a real one.`);
-        else setStatus(i,`Not found · <a href="${esc(_sdSearchUrls(it.part_number).farnell)}" target="_blank" rel="noopener noreferrer" style="color:#1d4ed8">Farnell ↗</a>`,'var(--muted)',
+        else setStatus(i,`Not found · <a href="${esc(_sdSearchUrls(it.part_number).farnell)}" target="_blank" rel="noopener noreferrer" style="color:var(--link)">Farnell ↗</a>`,'var(--muted)',
           'None of the distributors lists this part number. The link searches Farnell for it.');
         return;
       }

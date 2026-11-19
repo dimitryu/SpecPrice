@@ -150,7 +150,7 @@ export function _sdCellHTML(k,r,i){
       const hasManual = r.manual_total!=null && r.manual_total!=='';
       const noSourcePrice = !hasAnyPrice && !hasManual;
       const ownedNote = _sdIsToolOwned(r)
-        ? `<div style="font-size:9px;color:#1F8B4C;font-weight:700;white-space:nowrap" title="This tool is marked in Stock in the Database — not charged in the final price">✓ in stock</div>`
+        ? `<div style="font-size:9px;color:var(--ok);font-weight:700;white-space:nowrap" title="This tool is marked in Stock in the Database — not charged in the final price">✓ in stock</div>`
         : '';
       return `<input type="number" class="sd-manual-total" data-i="${i}" value="${r.total?+r.total.toFixed(2):''}"
              min="0" step="any" placeholder="0.00" title="${hasManual?'Manual price override — clear to go back to FC/Priority price':'No FC/Priority price — type one in manually'}"
@@ -236,14 +236,14 @@ export function _sdRenderNotesPanel(){
     <summary style="cursor:pointer;user-select:none;list-style-position:inside;font-size:12px;font-weight:700;color:var(--blue-dark);padding:2px 0" title="Show or hide the notes">
       📋 Notes / Manufacturing Instructions
       <span style="font-weight:400;color:var(--muted);font-size:11px;margin-inline-start:8px">${all.length} note${all.length===1?'':'s'}${active.length>1?` · ${active.length} drawings`:''}</span>
-      ${std?`<span style="margin-inline-start:8px;color:#E53E3E;font-size:11px" title="Notes that name a document or standard">⚠ ${std} with a document / standard</span>`:''}
+      ${std?`<span style="margin-inline-start:8px;color:var(--bad);font-size:11px" title="Notes that name a document or standard">⚠ ${std} with a document / standard</span>`:''}
     </summary>
     <div style="margin-top:6px">
     ${active.map(d=>`
       <div style="margin-bottom:8px">
         ${active.length>1?`<div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:3px">${esc(d.drawingName||'')}</div>`:''}
         <ul style="margin:0;padding-inline-start:18px">
-          ${d.notes.map(n=>`<li style="font-size:12px;line-height:1.5;${_NOTE_DOC_STD_RE.test(n)?'color:#E53E3E;font-weight:600':'color:var(--text)'}">${esc(n)}</li>`).join('')}
+          ${d.notes.map(n=>`<li style="font-size:12px;line-height:1.5;${_NOTE_DOC_STD_RE.test(n)?'color:var(--bad);font-weight:600':'color:var(--text)'}">${esc(n)}</li>`).join('')}
         </ul>
       </div>`).join('')}
     </div>
@@ -364,7 +364,7 @@ export function _SD_COST_LEGEND_HTML(){
     <span>${c('Mouser / DigiKey / Online Comp. / Farnell / Priority','#166534')} the cheapest supplier price</span>
     <span>${c(`nominal`,'#b45309')} a label/marker with no supplier price — a fixed $${SD_NOMINAL_LABEL_PRICE.toFixed(2)} per piece; type a price if you have one</span>
     <span>${c('AI est.','#b45309')} the AI's estimate, not verified</span>
-    <span>${c('cust. supplied','#1E40AF')} the customer supplies it — $0</span>
+    <span>${c('cust. supplied','var(--ink)')} the customer supplies it — $0</span>
     <span>${c('manual','#166534')} a price you typed</span>
     <span>${c('no price','#b45309')} no price yet — run Check Price or type one</span>
     <span>${_TOOL_TAG} added by the system's analysis, not in the BOM, never in the cable price</span>
@@ -411,9 +411,9 @@ export function _sdAdhesiveNoteHTML(rows){
     const src=_sdPriceSource(r);
     const pack=_sdChosenPack(r);
     const head=`<div><a href="#" class="sd-tool-jump" data-i="${i}" title="Go to this row's Part Cost"
-        style="color:#0c4a6e;font-weight:700;text-decoration:underline">${esc(r.part_number||r.description||'adhesive')}</a>
+        style="color:var(--ink);font-weight:700;text-decoration:underline">${esc(r.part_number||r.description||'adhesive')}</a>
         — need <strong>${need} ml</strong></div>`;
-    if(!(pack>0)) return `<div class="sd-adh-item" style="margin-top:6px;padding-top:5px;border-top:1px dashed #bae6fd">${head}
+    if(!(pack>0)) return `<div class="sd-adh-item" style="margin-top:6px;padding-top:5px;border-top:1px dashed var(--info-line)">${head}
       <div style="color:#b45309">Bottle size unknown — <input type="number" class="sd-note-pack" data-i="${i}" min="0" step="any" placeholder="ml"
         style="width:58px;padding:1px 4px;border:1px solid #f59e0b;border-radius:4px;font-size:11px"> ml, or run Check Price to find the sizes.</div></div>`;
     const bottles=_sdBottlesFor(r.qty, pack);
@@ -421,17 +421,17 @@ export function _sdAdhesiveNoteHTML(rows){
     const mpn=v&&r[v+'_mpn']&&r[v+'_mpn']!==r.part_number ? r[v+'_mpn'] : '';
     const buy = r.total>0
       ? `Buy <strong>${bottles} × ${+pack.toFixed(2)} ml</strong> — ${esc(NAME[v]||src.label)}${mpn?` <span title="The part number of this bottle size">${esc(mpn)}</span>`:''}
-         · ${$(src.unit||0)}/bottle = <strong>${$(r.total)}</strong>${src.url&&NAME[v]&&v!=='priority'?` <a href="${esc(src.url)}" target="_blank" rel="noopener noreferrer" style="color:#0c4a6e">↗</a>`:''}`
+         · ${$(src.unit||0)}/bottle = <strong>${$(r.total)}</strong>${src.url&&NAME[v]&&v!=='priority'?` <a href="${esc(src.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--ink)">↗</a>`:''}`
       : `${bottles} × ${+pack.toFixed(2)} ml — no price yet; run Check Price`;
     const left=+(bottles*pack-need).toFixed(2);
     const others=(r.bottle_opts||[]).filter(o=>!(o.v===v && +o.ml===+pack && (!mpn || o.mpn===mpn))).slice(0,3)
       .map(o=>`${o.bottles} × ${+o.ml} ml ${$(o.total)} (${esc(NAME[o.v]||o.v)})`).join(' · ');
-    return `<div class="sd-adh-item" style="margin-top:6px;padding-top:5px;border-top:1px dashed #bae6fd">${head}
+    return `<div class="sd-adh-item" style="margin-top:6px;padding-top:5px;border-top:1px dashed var(--info-line)">${head}
       <div class="sd-adh-buy">${buy}</div>
       ${left>0?`<div style="color:var(--muted);font-size:11px">${left} ml left over</div>`:''}
       ${others?`<div class="sd-adh-others" style="color:var(--muted);font-size:11px">Other sizes checked: ${others}</div>`:''}</div>`;
   };
-  return `<div class="sd-adh-note" style="font-size:12px;color:#0c4a6e;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:7px 10px;margin-top:8px;line-height:1.45">
+  return `<div class="sd-adh-note" style="font-size:12px;color:var(--ink);background:var(--info-bg);border:1px solid var(--info-line);border-radius:6px;padding:7px 10px;margin-top:8px;line-height:1.45">
     <div style="font-weight:700">🧴 Adhesive — what to buy</div>${adh.map(item).join('')}
     <div style="font-size:10.5px;color:var(--muted);margin-top:5px">Check Price compares every bottle size the suppliers list and takes the cheapest that covers the ml needed. Type a price in Part Cost to override.</div>
   </div>`;
@@ -827,10 +827,10 @@ export async function renderSalesDesk(){
             <div style="font-weight:400;font-size:11px;margin-top:6px">Click a tool's part number to jump to its price in the table.</div>
           </div>`:''}
         ${_sdAdhesiveNoteHTML(g.rows)}
-        ${g.customerRows.length?`<div class="sd-cust-note" style="font-size:11px;color:#1E40AF;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:4px;padding:5px 8px;margin-top:6px">
+        ${g.customerRows.length?`<div class="sd-cust-note" style="font-size:11px;color:var(--ink);background:var(--info-bg);border:1px solid var(--info-line);border-radius:4px;padding:5px 8px;margin-top:6px">
             ${g.customerRows.length} customer-supplied item${g.customerRows.length>1?'s':''} — not purchased, priced at $0: <strong>${esc(g.customerRows.map(r=>r.part_number||r.description||'part').join(', '))}</strong>
           </div>`:''}
-        ${owned.length?`<div style="font-size:11px;color:#1F8B4C;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:4px;padding:5px 8px;margin-top:6px">
+        ${owned.length?`<div style="font-size:11px;color:var(--ok);background:#ecfdf5;border:1px solid #a7f3d0;border-radius:4px;padding:5px 8px;margin-top:6px">
             ✓ ${owned.length} tool${owned.length>1?'s':''} excluded — from your existing tools (In Stock), no price: <strong>${esc(owned.map(r=>r.part_number||r.description||'tool').join(', '))}</strong>
           </div>`:''}
         `:''}
@@ -948,7 +948,7 @@ export async function renderSalesDesk(){
           <td colspan="${SD_COLS.length+2}" style="padding:6px 10px;font-weight:700;color:var(--blue-dark)">
             <span class="row-label-sticky"><span style="display:inline-block;width:12px">${hidden?'▸':'▾'}</span>
             ${esc(dwg)}
-            ${_sdDwgUnits(dwg)>1?`<span style="margin-inline-start:6px;padding:1px 6px;border-radius:8px;background:#EDE9FE;color:#5B21B6;font-size:10px;font-weight:700" title="QTY on every row below is multiplied by this">× ${_sdDwgUnits(dwg)} cables</span>`:''}
+            ${_sdDwgUnits(dwg)>1?`<span style="margin-inline-start:6px;padding:1px 6px;border-radius:8px;background:var(--chip-bg);color:var(--chip-ink);font-size:10px;font-weight:700" title="QTY on every row below is multiplied by this">× ${_sdDwgUnits(dwg)} cables</span>`:''}
             <span style="font-weight:400;color:var(--muted);font-size:11px;margin-inline-start:8px">${g?g.rows.length:0} rows</span></span>
             ${g?`<span style="float:inline-end;color:var(--green)">$${g.final.toFixed(2)}</span>`:''}
           </td></tr>`;
@@ -1048,8 +1048,8 @@ export async function renderSalesDesk(){
       <div class="sd-panel">
         <div class="sd-panel-title">BOM Items</div>
         <div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;gap:7px;flex-wrap:wrap">
-          <button class="btn btn-blue" id="btn-sd-addpick">📦 Add from Database</button>
           <button class="btn btn-blue" id="btn-sd-file">📎 New Drawing</button>
+          <button class="btn btn-blue" id="btn-sd-addpick">📦 Add from Database</button>
           <button class="btn btn-blue" id="btn-sd-newrow">➕ New Row</button>
           <button class="btn btn-green" id="btn-sd-fc" style="white-space:nowrap">🔍 Check Price</button>
           <button class="btn btn-blue" id="btn-sd-savedb" style="white-space:nowrap" title="Save everything on this screen to the Database — existing parts get only the fields that changed">💾 Save to Database</button>
@@ -1095,7 +1095,7 @@ export async function renderSalesDesk(){
              just sits there and the button looks dead — the user has no way to
              know work is happening, let alone that it's nearly done. -->
         <div id="sd-labor-progress" style="display:none;padding:10px 12px;border-top:1px solid var(--border);
-             background:#EFF6FF;color:#1E40AF;font-size:12px;align-items:center;gap:9px">
+             background:var(--info-bg);color:var(--ink);font-size:12px;align-items:center;gap:9px">
           <div class="ring" style="width:15px;height:15px;border-width:2px;flex-shrink:0"></div>
           <span id="sd-labor-progress-txt">Estimating labor time…</span>
         </div>

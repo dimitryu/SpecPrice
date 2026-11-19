@@ -18,7 +18,7 @@ export function _buildPager(page,totalPages,idPrefix){
 // Show error on splash
 export function splashErr(msg) {
   const el = document.getElementById('splash-msg');
-  if (el) { el.textContent = msg; el.style.color = '#E53E3E'; }
+  if (el) { el.textContent = msg; el.style.color = 'var(--bad)'; }
   const ring = document.getElementById('splash-ring');
   if (ring) ring.style.display = 'none';
 }

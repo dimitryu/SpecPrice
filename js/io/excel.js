@@ -74,17 +74,17 @@ export function loadExcelJS(){
 // Palette. Deliberately the same meanings the app uses on screen, so the
 // exported file reads the same way as what the user was just looking at.
 export const _XL = {
-  brand:      'FF1E3A5F',   // header band
-  brandLight: 'FFEFF4FA',   // meta block
-  bomHead:    'FF2E5E8E',   // BOM column headers
-  bomBand:    'FFF7F9FC',   // zebra striping on BOM rows
+  brand:      'FF1C232D',   // header band — graphite, as the app's top bar
+  brandLight: 'FFF4F1EB',   // meta block — the app's warm paper
+  bomHead:    'FF2A313B',   // BOM column headers
+  bomBand:    'FFFAF8F4',   // zebra striping on BOM rows
   tool:       'FFFFFBEB',   // TOOL rows — matches the amber used in Sales Desk
   toolEdge:   'FFF59E0B',
-  calc:       'FFF1F5F9',   // cost build-up
-  final:      'FF166534',   // FINAL PRICE
+  calc:       'FFF5F3EF',   // cost build-up
+  final:      'FF1C232D',   // FINAL PRICE (unit price) — graphite, as in the app
   warn:       'FFFEF3C7',
   warnEdge:   'FFF59E0B',
-  border:     'FFCBD5E1',
+  border:     'FFD6D0C6',
 };
 export const _xlThin={style:'thin',color:{argb:_XL.border}};
 export const _xlBoxed={top:_xlThin,left:_xlThin,bottom:_xlThin,right:_xlThin};

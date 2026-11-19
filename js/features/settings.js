@@ -5,6 +5,7 @@ import { _cableProcessPrompt, _notesPrompt } from '../ai/process.js';
 import { _crimpToolPrompt } from '../ai/tooling.js';
 import { logAudit } from '../core/audit.js';
 import { auth, sendPasswordResetEmail } from '../core/firebase.js';
+import { icon } from '../core/icons.js';
 import { ADMIN_AUTO_VIEWS, PROTECTED_ROLE, PROTECTED_VIEWS, ROLES_META_DOC, SEED_ROLE_VIEWS, _isRoleDocId, _mergedRoleKeys, roleOptions } from '../core/roles.js';
 import { HOME_BUTTONS, renderHomeIfActive, route } from '../core/router.js';
 import { companyId, currentUserRole } from '../core/session.js';
@@ -450,7 +451,7 @@ export async function renderSettingsRolesSection(){
     <div class="toolbar"><span class="count-badge">${roles.length} roles</span>
       <button class="btn btn-green btn-sm" id="btn-new-role" style="margin-left:auto">＋ New Role</button></div>
     <div class="table-wrap"><table id="stg-roles-table">
-      <thead><tr><th>Role Name</th><th>Key</th><th title="Read only: sees the data, changes nothing (enforced by the server, not only the screen)">Data</th>${viewKeys.map(v=>`<th style="text-align:center">${HOME_BUTTONS[v][0]} ${HOME_BUTTONS[v][1]}</th>`).join('')}<th></th></tr></thead>
+      <thead><tr><th>Role Name</th><th>Key</th><th title="Read only: sees the data, changes nothing (enforced by the server, not only the screen)">Data</th>${viewKeys.map(v=>`<th style="text-align:center">${icon(HOME_BUTTONS[v][0],13,1.8)} ${HOME_BUTTONS[v][1]}</th>`).join('')}<th></th></tr></thead>
       <tbody>${roles.map(r=>{
         const locked = r._id===PROTECTED_ROLE;
         return `<tr data-key="${esc(r._id)}">
@@ -575,7 +576,7 @@ export function openNewRoleModal(){
       <div class="form-field" style="margin-top:12px">
         <label>Visible Buttons</label>
         ${viewKeys.map(v=>`<label style="display:flex;align-items:center;gap:7px;margin-top:8px;cursor:pointer;font-weight:400;font-size:13px">
-          <input type="checkbox" class="nr-view-chk" value="${v}" style="width:auto"><span>${HOME_BUTTONS[v][0]} ${HOME_BUTTONS[v][1]}</span>
+          <input type="checkbox" class="nr-view-chk" value="${v}" style="width:auto"><span style="display:inline-flex;align-items:center;gap:5px">${icon(HOME_BUTTONS[v][0],14,1.8)} ${HOME_BUTTONS[v][1]}</span>
         </label>`).join('')}
       </div>
     </div>

@@ -191,7 +191,7 @@ export function _matchMarkerHTML(row, field){
     // Purple when the description decided it; amber when price broke the tie —
     // the amber ones are the rows worth a human glance.
     const byPrice = by==='price';
-    return `<span title="${esc(tip)}" style="margin-inline-start:4px;color:${byPrice?'#B45309':'#7C3AED'};font-weight:700;cursor:help">${byPrice?'≈$':'✓'}${alts}</span>`;
+    return `<span title="${esc(tip)}" style="margin-inline-start:4px;color:${byPrice?'#B45309':'var(--chip-ink)'};font-weight:700;cursor:help">${byPrice?'≈$':'✓'}${alts}</span>`;
   }
   if(code==='exact'){
     return `<span title="${esc(`Exact match — ${cfg.name} lists this part number${mfr?` (${mfr})`:''}`)}" style="margin-inline-start:4px;color:var(--green);font-weight:700">✓</span>`;
@@ -279,7 +279,7 @@ export function _psCellHTML(k,p){
       if(list.length<=1) return esc((list[0]&&list[0].drawing_name) || p.drawing_name || '');
       return list.map(d=>`<div class="ps-dwg" style="white-space:nowrap" title="${esc(d.drawing_number)}">${esc(d.drawing_name||'—')}</div>`).join('');
     }
-    case 'customer_supplied': return p.customer_supplied?'<span style="color:#1E40AF;font-weight:700" title="Marked customer-supplied in the latest quote/import that saved this part">✓</span>':'';
+    case 'customer_supplied': return p.customer_supplied?'<span style="color:var(--ink);font-weight:700" title="Marked customer-supplied in the latest quote/import that saved this part">✓</span>':'';
     case 'updatedAt': return fmtDate(p.updatedAt);
     // A part with QVL alternatives shows how many were (or will be) compared;
     // otherwise the fact that the shown part number is a CHOICE is invisible.
@@ -288,7 +288,7 @@ export function _psCellHTML(k,p){
       if(alts.length<2) return esc(p.part_number);
       const tip='Customer-approved alternatives (QVL) — Check Price quotes the cheapest:\n\n'
                 +alts.map(a=>'• '+a.mpn+(a.manufacturer?`  [${a.manufacturer}]`:'')).join('\n');
-      return `${esc(p.part_number)} <span style="padding:1px 5px;border-radius:8px;background:#EDE9FE;color:#5B21B6;font-size:9px;font-weight:700;cursor:help" title="${esc(tip)}">${alts.length} QVL</span>`;
+      return `${esc(p.part_number)} <span style="padding:1px 5px;border-radius:8px;background:var(--chip-bg);color:var(--chip-ink);font-size:9px;font-weight:700;cursor:help" title="${esc(tip)}">${alts.length} QVL</span>`;
     }
     case '_fc': return p.part_number?`<a href="${fcUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="text-decoration:none;font-size:11px" title="Open this part on findchips.com">🔍 View</a>`:'';
     // Whether WE physically stock/own this part (distinct from `stock`, which
@@ -315,7 +315,7 @@ export function _symbolsLegend(id, ...bodies){
     <summary style="cursor:pointer;user-select:none;list-style-position:inside;padding:2px 0" title="What the marks next to prices mean">
       <strong style="color:var(--text)">ℹ What the marks mean</strong>
       <span style="margin-inline-start:10px"><strong style="color:var(--green)">✓</strong> <strong style="color:#B45309">✓≈</strong>
-      <strong style="color:#B45309">◑</strong> <strong style="color:#7C3AED">✓n</strong> <strong style="color:#B45309">≈$n</strong>
+      <strong style="color:#B45309">◑</strong> <strong style="color:var(--chip-ink)">✓n</strong> <strong style="color:#B45309">≈$n</strong>
       <strong style="color:#B45309">0</strong> —${bodies.length>1?` · <strong style="color:#b45309">nominal</strong> · AI est. · TOOL`:''}</span>
     </summary>
     ${bodies.join('')}
@@ -334,7 +334,7 @@ export const _PRICE_LEGEND_HTML = `
     <span><strong style="color:var(--green)">✓</strong> exact part number</span>
     <span><strong style="color:#B45309">✓ ≈</strong> matched under a differently formatted part number — hover to see which</span>
     <span><strong style="color:#B45309">◑</strong> listed, but no published price</span>
-    <span><strong style="color:#7C3AED">✓n</strong> n manufacturers share this part number — chosen by description match</span>
+    <span><strong style="color:var(--chip-ink)">✓n</strong> n manufacturers share this part number — chosen by description match</span>
     <span><strong style="color:#B45309">≈$n</strong> descriptions didn't separate them — cheapest taken; hover to see all n</span>
     <span><strong style="color:#B45309">Stock 0</strong> listed, none on hand · <strong>—</strong> not listed by that vendor</span>
   </div>`;
@@ -406,7 +406,7 @@ export async function renderPartStock(filter=''){
     </div>
     ${_dwgBom.length?(()=>{
       const d0=_partDrawings(_dwgBom[0]).find(d=>_pnKey(d.drawing_number)===_dwgKey)||{};
-      return `<div class="ps-dwg-bom" style="margin:0 0 8px;padding:8px 12px;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:6px;font-size:13px;color:#1E3A8A">
+      return `<div class="ps-dwg-bom" style="margin:0 0 8px;padding:8px 12px;background:var(--info-bg);border:1px solid var(--info-line);border-radius:6px;font-size:13px;color:var(--ink)">
         📐 <strong>BOM of drawing ${esc(d0.drawing_number||_dwgQ)}</strong>${d0.drawing_name?` — ${esc(d0.drawing_name)}`:''}${d0.revision?` · Rev ${esc(d0.revision)}`:''}
         · <strong>${_dwgBom.length}</strong> part(s) in the Database. The Drawing # column shows each part's QTY in this drawing.</div>`; })():''}
     <div class="table-wrap" id="ps-table-wrap"><table id="ps-table">

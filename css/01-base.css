@@ -1,20 +1,25 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
+  /* Copper & Graphite (v1.79). The old names stay — over a hundred inline
+     styles use them — and now point at the new palette. New code uses the
+     names in css/06-theme.css (--ink, --primary, --ok, …). */
   --sidebar-w: 220px;
-  --topbar-h: 52px;
-  --blue-dark:  #1F3A5F;
-  --blue-mid:   #2E75B6;
-  --blue-light: #EBF3FB;
-  --text:       #1A202C;
-  --muted:      #718096;
-  --border:     #CBD5E0;
-  --green:      #1B6B3A;
-  --green-bg:   #D4EDDA;
-  --red:        #9B1C1C;
-  --red-bg:     #FDE8E8;
-  --row-alt:    #F0F6FB;
+  --topbar-h: 54px;
+  --blue-dark:  #1C232D;   /* = --ink: headings, strong text */
+  --blue-mid:   #B4532A;   /* = --primary: copper accent, focus, progress */
+  --blue-light: #F1EDE6;   /* warm light panel / hover */
+  --blue:       #B4532A;
+  --text:       #1C232D;
+  --muted:      #6B6F76;
+  --border:     #DDD8CF;
+  --green:      #2E7D4F;
+  --green-bg:   #E3F1E8;
+  --red:        #B42318;
+  --red-bg:     #FBE9E7;
+  --danger:     #B42318;
+  --row-alt:    #FAF8F4;
 }
-html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px; }
+html, body { height: 100%; overflow: hidden; font-family: 'IBM Plex Sans', 'IBM Plex Sans Hebrew', 'Segoe UI', system-ui, sans-serif; font-size: 13px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
 

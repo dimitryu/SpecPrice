@@ -1239,7 +1239,7 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   const buttons=G('HOME_BUTTONS'), seed=G('SEED_ROLE_VIEWS'), auto=G('ADMIN_AUTO_VIEWS'),
         protectedViews=G('PROTECTED_VIEWS');
   ok('new screen: Statistics has a Home button', !!buttons['statistics']);
-  t('new screen: with an icon and a label', buttons['statistics'].length, 2);
+  t('new screen: with an icon, a label, a line on what it is for and its Home group', buttons['statistics'].length, 4);
   ok('new screen: a fresh installation gives it to the admin role',
      seed.admin.includes('statistics'));
   ok('new screen: an existing admin role gets it without editing anything',
@@ -1296,7 +1296,7 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('support: the two sides are independent',
     [needsUser({adminUnread:true}), needsAdmin({userUnread:true})], [false,false]);
 
-  ok('support: an unread dot is drawn when there is news', /background:#E53E3E/.test(dot(true,'x')));
+  ok('support: an unread dot is drawn when there is news', /background:var\(--bad\)/.test(dot(true,'x')));
   t('support: ...and nothing at all when there is not', dot(false,'x'), '');
 
   t('support: bytes', [bytes(500),bytes(2048),bytes(3*1048576)], ['500 B','2 KB','3.0 MB']);
@@ -1330,7 +1330,7 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   ok('support: an expanded card offers a reply box', /class="sup-reply-inp"/.test(c));
   ok('support: ...and a way to attach a file', /class="sup-reply-files"/.test(c));
   ok('support: ...and shows both turns', /Hello/.test(c) && /Fixed/.test(c));
-  ok('support: an unread card is marked', /background:#E53E3E/.test(c));
+  ok('support: an unread card is marked', /background:var\(--bad\)/.test(c));
   const collapsed=card({_id:'t1', user:'a@x', message:'Hello', status:'open'}, false);
   t('support: a collapsed card has no reply box', /sup-reply-inp/.test(collapsed), false);
   ok('support: ...but still states the status', /Open<\/span>/.test(collapsed));

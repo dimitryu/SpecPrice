@@ -53,7 +53,7 @@ export function openAccountModal(){
       <button class="btn btn-green" id="acc-save">🔒 Change password</button>
     </div>
   </div>`);
-  const msg=(t,ok)=>{ const m=document.getElementById('acc-msg'); if(m){ m.textContent=t; m.style.color=ok?'#1B6B3A':'#E53E3E'; } };
+  const msg=(t,ok)=>{ const m=document.getElementById('acc-msg'); if(m){ m.textContent=t; m.style.color=ok?'#1B6B3A':'var(--bad)'; } };
   document.getElementById('acc-cur')?.focus();
   ['acc-cur','acc-new','acc-new2'].forEach(id=>document.getElementById(id)?.addEventListener('keydown',e=>{
     if(e.key==='Enter') document.getElementById('acc-save')?.click(); }));

@@ -84,8 +84,9 @@ const INIT=`window.__DB['companies/c1/cut_strip_specs']=(()=>{const o=${specs}; 
   // Support as a regular (sales) user
   ({b,page,errs}=await L.open({w:1440,h:860}));
   await L.signIn(page,'u2','avi.levi@demo-co.com');
-  await L.mark(page,['.home-btn-grid']);
-  await L.shot(page,'50-home-sales',{x:320,y:60,width:800,height:620});
+  await L.mark(page,[{sel:'.home-btn-grid',idx:0,pad:4}]);
+  { const r=await page.evaluate(()=>{ const w=document.querySelector('.home-wrap').getBoundingClientRect(); return {x:Math.max(0,w.left-10),y:0,width:Math.min(1440,w.width+20),height:Math.min(860,w.bottom+10)}; });
+    await L.shot(page,'50-home-sales',r); }
   await page.click('#btn-support-fab'); await page.waitForTimeout(1500);
   await page.fill('#support-new-msg','The labor time for DEMO-220-03 looks too high — can you check?');
   await L.mark(page,[{sel:'#support-modal-body',pad:2},'#support-new-msg','#support-new-files','#btn-support-send']);

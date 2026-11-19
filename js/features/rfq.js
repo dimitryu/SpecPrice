@@ -23,7 +23,7 @@ export async function renderRFQList(){
 
   if(!projects.length){
     setContent(`<div style="text-align:center;padding:80px;color:var(--muted)">
-      <div style="font-size:48px;margin-bottom:12px">📋</div>
+      <div class="empty-ic" style="font-size:44px;margin-bottom:10px">📋</div>
       <div>No RFQs yet. Click <strong>＋ New RFQ</strong> to create one.</div></div>`);
     return;
   }

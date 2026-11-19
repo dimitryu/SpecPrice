@@ -407,7 +407,7 @@ export function _xlsRenderMappingDialog(sheetsData, activeName, analysisByName, 
                 <b>The same component will be counted more than once.</b></span>
         </label>
       </div>`:''}
-    <div id="bm-err" role="alert" aria-live="polite" style="color:#E53E3E;font-size:12px;margin-top:10px;min-height:16px"></div>
+    <div id="bm-err" role="alert" aria-live="polite" style="color:var(--bad);font-size:12px;margin-top:10px;min-height:16px"></div>
     <div style="margin-top:6px">
       <div style="font-size:11px;color:var(--muted);margin-bottom:4px">First rows of the sheet:</div>
       <div class="table-wrap"><table style="font-size:11px">

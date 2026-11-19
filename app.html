@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- csp:begin -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://www.gstatic.com 'sha256-VHjN9z/4F/e4cZrGRVMbHpLnntl6/L6IGU9HMo1N+ts=' 'sha256-DPk7pyFdXB9MX74PEoL3Ljix5d/jvQ85IvAnUaiIOts='; worker-src 'self' blob: https://cdnjs.cloudflare.com; connect-src 'self' data: blob: https://*.googleapis.com https://us-central1-specprice-236a2.cloudfunctions.net; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src https://specprice-236a2.firebaseapp.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://www.gstatic.com 'sha256-pOs/sd+Eg7IS8+ZeEax4KziE7wOgvjsHCY1O8WXvSKc=' 'sha256-OwNcOgNxEhIy/K1CFjy8fXeeWun6UXmJ/nw1K6b3OZk='; worker-src 'self' blob: https://cdnjs.cloudflare.com; connect-src 'self' data: blob: https://*.googleapis.com https://us-central1-specprice-236a2.cloudfunctions.net; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src https://specprice-236a2.firebaseapp.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <!-- csp:end -->
   <title>SpecPrice</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" async
@@ -18,101 +18,104 @@
        node tools/stamp-release.js <version>, which also re-stamps the ?v= on
        every module and stylesheet below. -->
   <script>
-    const APP_VER = '1.78.0';
+    const APP_VER = '1.79.0';
     window.APP_VER = APP_VER;
   </script>
   <!-- importmap:begin -->
   <script type="importmap">
   {
     "imports": {
-      "./js/ai/bom.js": "./js/ai/bom.js?v=1.78.0",
-      "./js/ai/client.js": "./js/ai/client.js?v=1.78.0",
-      "./js/ai/cutstrip.js": "./js/ai/cutstrip.js?v=1.78.0",
-      "./js/ai/manufacturing.js": "./js/ai/manufacturing.js?v=1.78.0",
-      "./js/ai/process.js": "./js/ai/process.js?v=1.78.0",
-      "./js/ai/tooling.js": "./js/ai/tooling.js?v=1.78.0",
-      "./js/ai/translate.js": "./js/ai/translate.js?v=1.78.0",
-      "./js/core/audit.js": "./js/core/audit.js?v=1.78.0",
-      "./js/core/firebase.js": "./js/core/firebase.js?v=1.78.0",
-      "./js/core/roles.js": "./js/core/roles.js?v=1.78.0",
-      "./js/core/router.js": "./js/core/router.js?v=1.78.0",
-      "./js/core/session.js": "./js/core/session.js?v=1.78.0",
-      "./js/core/state.js": "./js/core/state.js?v=1.78.0",
-      "./js/core/table.js": "./js/core/table.js?v=1.78.0",
-      "./js/core/ui.js": "./js/core/ui.js?v=1.78.0",
-      "./js/core/version.js": "./js/core/version.js?v=1.78.0",
-      "./js/data/audit.js": "./js/data/audit.js?v=1.78.0",
-      "./js/data/company.js": "./js/data/company.js?v=1.78.0",
-      "./js/data/customers.js": "./js/data/customers.js?v=1.78.0",
-      "./js/data/parts.js": "./js/data/parts.js?v=1.78.0",
-      "./js/data/pricing.js": "./js/data/pricing.js?v=1.78.0",
-      "./js/data/projects.js": "./js/data/projects.js?v=1.78.0",
-      "./js/data/roles.js": "./js/data/roles.js?v=1.78.0",
-      "./js/data/specs.js": "./js/data/specs.js?v=1.78.0",
-      "./js/data/support.js": "./js/data/support.js?v=1.78.0",
-      "./js/data/trash.js": "./js/data/trash.js?v=1.78.0",
-      "./js/data/users.js": "./js/data/users.js?v=1.78.0",
-      "./js/domain/bom.js": "./js/domain/bom.js?v=1.78.0",
-      "./js/domain/cutstrip.js": "./js/domain/cutstrip.js?v=1.78.0",
-      "./js/domain/manufacturing.js": "./js/domain/manufacturing.js?v=1.78.0",
-      "./js/domain/pricing.js": "./js/domain/pricing.js?v=1.78.0",
-      "./js/features/account.js": "./js/features/account.js?v=1.78.0",
-      "./js/features/admin.js": "./js/features/admin.js?v=1.78.0",
-      "./js/features/bomImport.js": "./js/features/bomImport.js?v=1.78.0",
-      "./js/features/customers.js": "./js/features/customers.js?v=1.78.0",
-      "./js/features/cutstrip/datasheets.js": "./js/features/cutstrip/datasheets.js?v=1.78.0",
-      "./js/features/cutstrip/figures.js": "./js/features/cutstrip/figures.js?v=1.78.0",
-      "./js/features/cutstrip/i18n.js": "./js/features/cutstrip/i18n.js?v=1.78.0",
-      "./js/features/cutstrip/import.js": "./js/features/cutstrip/import.js?v=1.78.0",
-      "./js/features/cutstrip/list.js": "./js/features/cutstrip/list.js?v=1.78.0",
-      "./js/features/cutstrip/sheet.js": "./js/features/cutstrip/sheet.js?v=1.78.0",
-      "./js/features/database.js": "./js/features/database.js?v=1.78.0",
-      "./js/features/guide.js": "./js/features/guide.js?v=1.78.0",
-      "./js/features/importData.js": "./js/features/importData.js?v=1.78.0",
-      "./js/features/manufacturing.js": "./js/features/manufacturing.js?v=1.78.0",
-      "./js/features/priceCheck.js": "./js/features/priceCheck.js?v=1.78.0",
-      "./js/features/rfq.js": "./js/features/rfq.js?v=1.78.0",
-      "./js/features/salesDesk/export.js": "./js/features/salesDesk/export.js?v=1.78.0",
-      "./js/features/salesDesk/import.js": "./js/features/salesDesk/import.js?v=1.78.0",
-      "./js/features/salesDesk/labor.js": "./js/features/salesDesk/labor.js?v=1.78.0",
-      "./js/features/salesDesk/salesDesk.js": "./js/features/salesDesk/salesDesk.js?v=1.78.0",
-      "./js/features/salesDesk/tools.js": "./js/features/salesDesk/tools.js?v=1.78.0",
-      "./js/features/settings.js": "./js/features/settings.js?v=1.78.0",
-      "./js/features/statistics.js": "./js/features/statistics.js?v=1.78.0",
-      "./js/features/support.js": "./js/features/support.js?v=1.78.0",
-      "./js/io/excel.js": "./js/io/excel.js?v=1.78.0",
-      "./js/io/pdf.js": "./js/io/pdf.js?v=1.78.0",
-      "./js/io/pdfExport.js": "./js/io/pdfExport.js?v=1.78.0",
-      "./js/main.js": "./js/main.js?v=1.78.0"
+      "./js/ai/bom.js": "./js/ai/bom.js?v=1.79.0",
+      "./js/ai/client.js": "./js/ai/client.js?v=1.79.0",
+      "./js/ai/cutstrip.js": "./js/ai/cutstrip.js?v=1.79.0",
+      "./js/ai/manufacturing.js": "./js/ai/manufacturing.js?v=1.79.0",
+      "./js/ai/process.js": "./js/ai/process.js?v=1.79.0",
+      "./js/ai/tooling.js": "./js/ai/tooling.js?v=1.79.0",
+      "./js/ai/translate.js": "./js/ai/translate.js?v=1.79.0",
+      "./js/core/audit.js": "./js/core/audit.js?v=1.79.0",
+      "./js/core/firebase.js": "./js/core/firebase.js?v=1.79.0",
+      "./js/core/icons.js": "./js/core/icons.js?v=1.79.0",
+      "./js/core/roles.js": "./js/core/roles.js?v=1.79.0",
+      "./js/core/router.js": "./js/core/router.js?v=1.79.0",
+      "./js/core/session.js": "./js/core/session.js?v=1.79.0",
+      "./js/core/state.js": "./js/core/state.js?v=1.79.0",
+      "./js/core/table.js": "./js/core/table.js?v=1.79.0",
+      "./js/core/ui.js": "./js/core/ui.js?v=1.79.0",
+      "./js/core/version.js": "./js/core/version.js?v=1.79.0",
+      "./js/data/audit.js": "./js/data/audit.js?v=1.79.0",
+      "./js/data/company.js": "./js/data/company.js?v=1.79.0",
+      "./js/data/customers.js": "./js/data/customers.js?v=1.79.0",
+      "./js/data/parts.js": "./js/data/parts.js?v=1.79.0",
+      "./js/data/pricing.js": "./js/data/pricing.js?v=1.79.0",
+      "./js/data/projects.js": "./js/data/projects.js?v=1.79.0",
+      "./js/data/roles.js": "./js/data/roles.js?v=1.79.0",
+      "./js/data/specs.js": "./js/data/specs.js?v=1.79.0",
+      "./js/data/support.js": "./js/data/support.js?v=1.79.0",
+      "./js/data/trash.js": "./js/data/trash.js?v=1.79.0",
+      "./js/data/users.js": "./js/data/users.js?v=1.79.0",
+      "./js/domain/bom.js": "./js/domain/bom.js?v=1.79.0",
+      "./js/domain/cutstrip.js": "./js/domain/cutstrip.js?v=1.79.0",
+      "./js/domain/manufacturing.js": "./js/domain/manufacturing.js?v=1.79.0",
+      "./js/domain/pricing.js": "./js/domain/pricing.js?v=1.79.0",
+      "./js/features/account.js": "./js/features/account.js?v=1.79.0",
+      "./js/features/admin.js": "./js/features/admin.js?v=1.79.0",
+      "./js/features/bomImport.js": "./js/features/bomImport.js?v=1.79.0",
+      "./js/features/customers.js": "./js/features/customers.js?v=1.79.0",
+      "./js/features/cutstrip/datasheets.js": "./js/features/cutstrip/datasheets.js?v=1.79.0",
+      "./js/features/cutstrip/figures.js": "./js/features/cutstrip/figures.js?v=1.79.0",
+      "./js/features/cutstrip/i18n.js": "./js/features/cutstrip/i18n.js?v=1.79.0",
+      "./js/features/cutstrip/import.js": "./js/features/cutstrip/import.js?v=1.79.0",
+      "./js/features/cutstrip/list.js": "./js/features/cutstrip/list.js?v=1.79.0",
+      "./js/features/cutstrip/sheet.js": "./js/features/cutstrip/sheet.js?v=1.79.0",
+      "./js/features/database.js": "./js/features/database.js?v=1.79.0",
+      "./js/features/guide.js": "./js/features/guide.js?v=1.79.0",
+      "./js/features/importData.js": "./js/features/importData.js?v=1.79.0",
+      "./js/features/manufacturing.js": "./js/features/manufacturing.js?v=1.79.0",
+      "./js/features/priceCheck.js": "./js/features/priceCheck.js?v=1.79.0",
+      "./js/features/rfq.js": "./js/features/rfq.js?v=1.79.0",
+      "./js/features/salesDesk/export.js": "./js/features/salesDesk/export.js?v=1.79.0",
+      "./js/features/salesDesk/import.js": "./js/features/salesDesk/import.js?v=1.79.0",
+      "./js/features/salesDesk/labor.js": "./js/features/salesDesk/labor.js?v=1.79.0",
+      "./js/features/salesDesk/salesDesk.js": "./js/features/salesDesk/salesDesk.js?v=1.79.0",
+      "./js/features/salesDesk/tools.js": "./js/features/salesDesk/tools.js?v=1.79.0",
+      "./js/features/settings.js": "./js/features/settings.js?v=1.79.0",
+      "./js/features/statistics.js": "./js/features/statistics.js?v=1.79.0",
+      "./js/features/support.js": "./js/features/support.js?v=1.79.0",
+      "./js/io/excel.js": "./js/io/excel.js?v=1.79.0",
+      "./js/io/pdf.js": "./js/io/pdf.js?v=1.79.0",
+      "./js/io/pdfExport.js": "./js/io/pdfExport.js?v=1.79.0",
+      "./js/main.js": "./js/main.js?v=1.79.0"
     }
   }
   </script>
   <!-- importmap:end -->
   <!-- styles:begin -->
-  <link rel="stylesheet" href="./css/01-base.css?v=1.78.0">
-  <link rel="stylesheet" href="./css/02-cutstrip.css?v=1.78.0">
-  <link rel="stylesheet" href="./css/03-components.css?v=1.78.0">
-  <link rel="stylesheet" href="./css/04-responsive.css?v=1.78.0">
-  <link rel="stylesheet" href="./css/05-guide.css?v=1.78.0">
+  <link rel="stylesheet" href="./css/01-base.css?v=1.79.0">
+  <link rel="stylesheet" href="./css/02-cutstrip.css?v=1.79.0">
+  <link rel="stylesheet" href="./css/03-components.css?v=1.79.0">
+  <link rel="stylesheet" href="./css/04-responsive.css?v=1.79.0">
+  <link rel="stylesheet" href="./css/05-guide.css?v=1.79.0">
+  <link rel="stylesheet" href="./css/06-theme.css?v=1.79.0">
   <!-- styles:end -->
 </head>
 <body>
 
-<div id="splash"><h1>⚡ SpecPrice</h1><div class="ring" id="splash-ring"></div><p id="splash-msg" style="color:#90A4AE;font-size:12px;margin-top:12px;text-align:center;max-width:320px;line-height:1.5">Connecting…</p></div>
+<div id="splash"><h1><svg width="34" height="34" viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect x="1" y="1" width="34" height="34" rx="7" fill="#B4532A"/><path d="M6 21c4 0 5-10 10-10s6 10 10 10" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><circle cx="6" cy="21" r="2.4" fill="#fff"/><rect x="23.5" y="18.5" width="5" height="5" rx="1.2" fill="#fff"/></svg>SpecPrice</h1><div class="ring" id="splash-ring"></div><p id="splash-msg" style="color:#A7ACB4;font-size:12px;margin-top:12px;text-align:center;max-width:320px;line-height:1.5">Connecting…</p></div>
 
 <div id="shell" style="display:none">
   <div class="main">
     <div class="topbar">
-      <button id="btn-home" title="Home" style="display:none">🏠</button>
-      <h2 id="page-title">Home</h2>
+      <button type="button" class="tb-brand" id="tb-brand" title="SpecPrice — Home"><svg width="30" height="30" viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect x="1" y="1" width="30" height="30" rx="7" fill="#B4532A"/><path d="M6 21c4 0 5-10 10-10s6 10 10 10" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><circle cx="6" cy="21" r="2.4" fill="#fff"/><rect x="23.5" y="18.5" width="5" height="5" rx="1.2" fill="#fff"/></svg><span class="tb-name">SpecPrice<span class="tb-co" id="tb-company"></span></span></button>
+      <button id="btn-home" title="Home" style="display:none"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg><span class="lbl">Home</span><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
+      <h2 id="page-title"></h2>
       <div id="topbar-actions" style="display:flex;gap:8px"></div>
-      <div id="topbar-info" style="display:flex;align-items:center;gap:8px;margin-right:10px;font-size:11px;color:#94A3B8;white-space:nowrap"></div>
+      <div id="topbar-info" style="display:flex;align-items:center;gap:8px;margin-right:10px;font-size:11px;white-space:nowrap"></div>
     </div>
     <div id="content"></div>
   </div>
   <button id="btn-support-fab" title="Support — send a request or report a problem"
     style="position:fixed;bottom:20px;right:20px;width:48px;height:48px;border-radius:50%;
-           background:#2E75B6;color:#fff;border:none;box-shadow:0 4px 14px rgba(0,0,0,.25);
+           background:#B4532A;color:#fff;border:none;box-shadow:0 4px 14px rgba(0,0,0,.25);
            cursor:pointer;z-index:500;display:flex;align-items:center;justify-content:center;padding:0">
     <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path d="M4 13.5V12a8 8 0 0 1 16 0v1.5" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>
@@ -128,7 +131,7 @@
 <div id="toast-el" class="toast toast-info" style="display:none"></div>
 
 <!-- main:begin -->
-  <script type="module" src="./js/main.js?v=1.78.0"></script>
+  <script type="module" src="./js/main.js?v=1.79.0"></script>
   <!-- main:end -->
 </body>
 </html>

@@ -28,7 +28,7 @@ export function renderAdminPage(){
         <label>Anthropic API Key</label>
         <input class="form-input" id="adm-anth-key" type="password" placeholder="sk-ant-… (leave blank to keep current)" autocomplete="off">
       </div>
-      <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:6px;padding:9px 11px;margin-top:12px;font-size:11px;color:#0C4A6E;line-height:1.5">
+      <div style="background:var(--info-bg);border:1px solid var(--info-line);border-radius:6px;padding:9px 11px;margin-top:12px;font-size:11px;color:var(--ink);line-height:1.5">
         🔒 Stored on the server, like the distributor keys below — it cannot be read back, only replaced, and no browser ever holds it. Every user of the app uses it through the server.
       </div>
       <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
@@ -72,7 +72,7 @@ export function renderAdminPage(){
         <input class="form-input" id="adm-fa-store" type="text" placeholder="il.farnell.com (leave blank to keep current)" autocomplete="off">
       </div>
 
-      <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:6px;padding:9px 11px;margin-top:12px;font-size:11px;color:#0C4A6E;line-height:1.5">
+      <div style="background:var(--info-bg);border:1px solid var(--info-line);border-radius:6px;padding:9px 11px;margin-top:12px;font-size:11px;color:var(--ink);line-height:1.5">
         🔒 These are stored on the server, not in your browser, and cannot be read back — only replaced. Leave a field blank to keep its current value.
       </div>
 
@@ -541,7 +541,7 @@ export function _admLogsFilterRows(){
         <td class="adm-log-details" data-expanded="${_admLogsWrapDetails?'1':'0'}"
             style="${_admLogsDetailsStyle(_admLogsWrapDetails)}"
             title="Click to expand / collapse">${esc(detailsStr)}</td>
-        <td style="text-align:center">${l.success?'<span style="color:#1F8B4C">✓</span>':'<span style="color:#E53E3E">✗</span>'}</td>
+        <td style="text-align:center">${l.success?'<span style="color:var(--ok)">✓</span>':'<span style="color:var(--bad)">✗</span>'}</td>
       </tr>`;
   }).join('');
   // Per-row expand: lets the user open one long payload without switching the

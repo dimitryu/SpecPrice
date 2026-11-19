@@ -133,7 +133,7 @@ export async function exportSalesDeskExcel(){
     sub.value = !dwgs.length ? 'Cable assembly'
       : dwgs.length<=4 ? `Drawing ${dwgs.join(' · ')}`
       : `${dwgs.length} drawings · ${dwgs[0]} … ${dwgs[dwgs.length-1]}`;
-    sub.font={name:'Calibri',size:11,color:{argb:'FFBFD4EA'}};
+    sub.font={name:'Calibri',size:11,color:{argb:'FFD9CFC2'}};
     sub.alignment={vertical:'middle',horizontal:'center'};
 
     // The same logo shown on the Home screen (companies/{id}.logo_b64).
@@ -481,7 +481,7 @@ export async function exportSalesDeskExcel(){
       if(U>1){
         b.order=A(row,LAST-1);
         money(`Price per ${U} units`, F(`${b.unit}*${U}`, g.final),
-              {bold:true,size:12,bg:'FF1F8B4C',fg:'FFFFFFFF',height:22});
+              {bold:true,size:12,bg:'FFB4532A',fg:'FFFFFFFF',height:22});
       }
       b.orderExpr = U>1 ? b.order : b.unit;
 
@@ -490,9 +490,9 @@ export async function exportSalesDeskExcel(){
         const w=ws.getCell(row,1);
         w.value=`ℹ  ${g.dwg}: ${g.customerRows.length} customer-supplied item(s) — not purchased, priced at $0: `
                + g.customerRows.map(x=>x.part_number||x.description||'part').join(', ');
-        w.font={bold:true,size:10,color:{argb:'FF1E40AF'}};
+        w.font={bold:true,size:10,color:{argb:'FF1C232D'}};
         w.alignment={vertical:'middle',indent:1,wrapText:true};
-        for(let c=1;c<=LAST;c++) fill(ws.getCell(row,c),'FFEFF6FF');
+        for(let c=1;c<=LAST;c++) fill(ws.getCell(row,c),'FFF4F1EB');
         ws.getRow(row).height=20; row++;
       }
 
@@ -539,7 +539,7 @@ export async function exportSalesDeskExcel(){
             fill(cell,_XL.tool); cell.border=_xlBoxed; cell.font={size:10,color:{argb:'FF92400E'}};
           }
           ws.getCell(row,9).font={size:10,bold:true,color:{argb:src.verified?'FF166534':'FFB45309'}};
-          if(href) ws.getCell(row,11).font={size:10,underline:true,color:{argb:'FF1D4ED8'}};
+          if(href) ws.getCell(row,11).font={size:10,underline:true,color:{argb:'FF9A4520'}};
           ws.getCell(row,3).alignment={wrapText:true,vertical:'middle'};
           row++;
         });

@@ -1,6 +1,7 @@
 import { S } from './state.js';
 import { logAudit } from './audit.js';
 import { auth, signOut } from './firebase.js';
+import { icon } from './icons.js';
 import { allowedViews, canView, disabledViews, isReadOnlyUser } from './roles.js';
 import { companyName, currentUserRole } from './session.js';
 import { esc, setActions, setContent } from './ui.js';
@@ -36,7 +37,8 @@ export function route(v, opts={}){
   document.body.classList.toggle('read-only', isReadOnlyUser());
   const btnHome=document.getElementById('btn-home');
   if(btnHome) btnHome.style.display = S.currentView==='home' ? 'none' : 'inline-flex';
-  const TITLES={'home':'🏠 Home','part-stock':'📦 Database','rfq':'📋 RFQ','sales-desk':'💰 Sales Desk','cut-strip':'✂️ Cut & Strip','customers':'👥 Customers','manufacturing':'🛠️ Manufacturing Instructions','statistics':'📊 Statistics','settings':'⚙️ Settings','admin':'🛡️ Admin','guide':'📘 User Guide'};
+  document.body.dataset.view=S.currentView;
+  const TITLES={'home':'','part-stock':'Database','rfq':'RFQ','sales-desk':'Sales Desk','cut-strip':'Cut & Strip','customers':'Customers','manufacturing':'Manufacturing Instructions','statistics':'Statistics','settings':'Settings','admin':'Admin','guide':'User Guide'};
   document.getElementById('page-title').textContent=TITLES[S.currentView]||'';
   setActions('');
   if(S.currentView!=='home') logAudit('screen_open',{screen:S.currentView},true);
@@ -74,51 +76,66 @@ export function route(v, opts={}){
 
 // ── Home screen ───────────────────────────────────────────────────────────────
 export const HOME_BUTTONS = {
-  'rfq':         ['📋',"RFQ's"],
-  'sales-desk':  ['💰','Sales Desk'],
-  'part-stock':  ['📦','Database'],
-  'cut-strip':   ['✂️','Cut &amp; Strip'],
-  'customers':   ['👥','Customers'],
-  'manufacturing':['🛠️','Manufacturing'],
-  'statistics':  ['📊','Statistics'],
-  'settings':    ['⚙️','Settings'],
-  'admin':       ['🛡️','Admin'],
+  // view: [icon (core/icons.js), label, one line on what it is for, group]
+  'rfq':         ['clipboard',"RFQ's",'Requests for quotation','work'],
+  'sales-desk':  ['quote','Sales Desk','Drawing → priced quote','work'],
+  'part-stock':  ['database','Database','Parts, prices, drawings','work'],
+  'cut-strip':   ['scissors','Cut &amp; Strip','Cutting &amp; stripping sheets','work'],
+  'customers':   ['users','Customers','Customer list','work'],
+  'manufacturing':['wrench','Manufacturing','Work instructions','work'],
+  'statistics':  ['chart','Statistics','Quotes, prices, activity','manage'],
+  'settings':    ['settings','Settings','Users, roles, rates, logo','manage'],
+  'admin':       ['shield','Admin','Keys, logs, support, recycle bin','manage'],
 };
+// The order on the Home screen: the everyday screens first.
+const _HOME_ORDER=['sales-desk','part-stock','cut-strip','manufacturing','rfq','customers','statistics','settings','admin'];
+// The Home band's line drawing: a harness — connector, three conductors, a
+// splice, two plugs — in the copper colour, very faint.
+const _HOME_HARNESS = `<svg class="harness" viewBox="300 0 900 170" preserveAspectRatio="xMidYMid slice" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+<path d="M156 75 C 300 75 330 40 470 40 S 650 70 760 70"/><path d="M156 85 C 300 85 340 85 480 85 S 650 85 760 85"/><path d="M156 95 C 300 95 330 130 470 130 S 650 100 760 100"/>
+<rect x="470" y="30" width="26" height="20" rx="3" stroke-width="1.6"/><path d="M560 60v50M574 60v50" stroke-width="1.4" stroke-dasharray="3 4"/>
+<path d="M760 64h36v42h-36z"/><path d="M796 85 C 880 85 900 60 990 60"/><path d="M796 92 C 880 92 900 120 990 120"/>
+<rect x="990" y="44" width="70" height="32" rx="6"/><rect x="990" y="104" width="70" height="32" rx="6"/>
+<path d="M1060 52h20M1060 60h20M1060 68h20M1060 112h20M1060 120h20M1060 128h20" stroke-width="1.4"/></svg>`;
 export function _logoHTML(){
   return S.companyLogoB64
-    ? `<img src="${S.companyLogoB64}" style="max-width:100%;max-height:100%;object-fit:contain">`
-    : `<span style="font-size:26px;color:#607D8B">🏢</span>`;
+    ? `<img src="${S.companyLogoB64}" alt="" style="max-width:100%;max-height:100%;object-fit:contain">`
+    : `<span style="color:var(--primary)">${icon('building',34,1.5)}</span>`;
 }
 export function renderHome(){
   setActions('');
   const views = allowedViews();
+  // Disabled buttons are pushed to the end so the working ones stay together at
+  // the front — a greyed tile in the middle of the grid breaks the scan for the
+  // button someone actually came to press.
+  const off=new Set(disabledViews());
+  const tile=(v, first)=>{
+    const [ic,label,desc]=HOME_BUTTONS[v]||['help',v,''];
+    const dis=off.has(v);
+    return `<button class="home-btn${dis?' home-btn-off':''}${first&&!dis?' home-btn-hero':''}" data-view="${v}"${dis?' disabled aria-disabled="true" title="This screen is turned off for your role"':''}>`
+      + `<span class="home-btn-icon">${icon(ic,24,1.6)}</span><span class="home-btn-text"><b>${label}</b><small>${dis?'Turned off for your role':desc}</small></span>`
+      + `<span class="home-btn-go">${icon('chevron',16,2)}</span></button>`;
+  };
+  const group=g=>{
+    const vs=views.filter(v=>(HOME_BUTTONS[v]||[])[3]===g).sort((x,y)=>_HOME_ORDER.indexOf(x)-_HOME_ORDER.indexOf(y));
+    return [...vs.filter(v=>!off.has(v)), ...vs.filter(v=>off.has(v))];
+  };
+  const work=group('work'), manage=group('manage');
   setContent(`
-    <div style="max-width:640px;margin:20px auto;text-align:center">
-      <div style="width:120px;height:80px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center">${_logoHTML()}</div>
-      <h1 style="font-size:19px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">${esc(companyName)}</h1>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">${esc(S.currentUserEmail)}</div>
-      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:28px">${esc(currentUserRole||'—')}</div>
-      <div class="home-btn-grid">
-        ${(()=>{
-          // Disabled buttons are pushed to the end so the working ones stay
-          // together at the front — a greyed tile in the middle of the grid
-          // breaks the scan for the button someone actually came to press.
-          const off=new Set(disabledViews());
-          const ordered=[...views.filter(v=>!off.has(v)), ...views.filter(v=>off.has(v))];
-          return ordered.map(v=>{
-            const [icon,label]=HOME_BUTTONS[v]||['❓',v];
-            const dis=off.has(v);
-            return `<button class="home-btn${dis?' home-btn-off':''}" data-view="${v}"${dis?' disabled aria-disabled="true" title="This screen is turned off for your role"':''}>`
-                 + `<span class="home-btn-icon">${icon}</span><span>${label}</span></button>`;
-          }).join('')
-            // The user guide is for everyone, whatever the role, so it is not
-            // one of the role-controlled buttons and always comes last.
-            + `<button class="home-btn home-btn-guide" data-view="guide">`
-            + `<span class="home-btn-icon">📘</span><span>User Guide</span></button>`;
-        })()}
+    <div class="home-wrap">
+      <div class="home-band">${_HOME_HARNESS}
+        <div class="home-logo">${_logoHTML()}</div>
+        <div><h1>${esc(companyName)}</h1><p>${esc(S.currentUserEmail)}</p><span class="home-role">${esc(currentUserRole||'—')}</span></div>
       </div>
-      <button class="btn btn-ghost" id="btn-home-signout" style="margin-top:36px">Sign Out</button>
-      <div style="margin-top:10px;font-size:10px;color:#94A3B8">v${APP_VER}</div>
+      ${work.length?`<div class="home-sec">Work</div><div class="home-btn-grid">${work.map((v,i)=>tile(v,i===0)).join('')}</div>`:''}
+      <div class="home-sec">Manage</div>
+      <div class="home-btn-grid">${manage.map(v=>tile(v,false)).join('')}`
+        // The user guide is for everyone, whatever the role, so it is not one of
+        // the role-controlled buttons and always comes last.
+        + `<button class="home-btn home-btn-guide" data-view="guide"><span class="home-btn-icon">${icon('book',24,1.6)}</span>`
+        + `<span class="home-btn-text"><b>User Guide</b><small>How to use SpecPrice</small></span><span class="home-btn-go">${icon('chevron',16,2)}</span></button>
+      </div>
+      <div class="home-foot"><button class="btn btn-ghost" id="btn-home-signout">Sign Out</button><span class="mono">v${APP_VER}</span></div>
     </div>`);
   document.querySelectorAll('.home-btn:not(.home-btn-off)')
     .forEach(b=>b.addEventListener('click',()=>route(b.dataset.view)));

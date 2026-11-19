@@ -18,7 +18,7 @@ export async function renderCustomers(){
 
   if(!customers.length){
     setContent(`<div style="text-align:center;padding:80px;color:var(--muted)">
-      <div style="font-size:48px;margin-bottom:12px">👥</div>
+      <div class="empty-ic" style="font-size:44px;margin-bottom:10px">👥</div>
       <div>No customers yet. Click <strong>＋ New Customer</strong> to add one.</div></div>`);
     return;
   }

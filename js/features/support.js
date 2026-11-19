@@ -18,7 +18,7 @@ export const _SUPPORT_ICON_SVG=`<svg width="16" height="16" viewBox="0 0 24 24" 
 </svg>`;
 export const _SUPPORT_STATUSES=['open','in_progress','done','rejected'];
 export const _SUPPORT_STATUS_LABEL={open:'Open',in_progress:'In Progress',done:'Done',rejected:'Rejected'};
-export const _SUPPORT_STATUS_COLOR={open:'#2E75B6',in_progress:'#EAB308',done:'#1F8B4C',rejected:'#E53E3E'};
+export const _SUPPORT_STATUS_COLOR={open:'var(--primary)',in_progress:'#EAB308',done:'var(--ok)',rejected:'var(--bad)'};
 export const _SUPPORT_STATUS_TEXT={open:'#fff',in_progress:'#1A202C',done:'#fff',rejected:'#fff'};
 export const _SUPPORT_ROW_BG={open:'#F7FAFC',in_progress:'#FEFCE8',done:'#F0FDF4',rejected:'#FEF2F2'};
 export function _supportStatusBadge(status){
@@ -62,7 +62,7 @@ export function _supportThread(t){
 export function _supportNeedsUser(t){ return t && t.userUnread===true; }
 export function _supportNeedsAdmin(t){ return t && t.adminUnread===true; }
 export function _supportUnreadDot(on,title){
-  return on ? `<span title="${esc(title||'Unread')}" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#E53E3E;flex-shrink:0"></span>` : '';
+  return on ? `<span title="${esc(title||'Unread')}" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--bad);flex-shrink:0"></span>` : '';
 }
 
 // ── Attachments ─────────────────────────────────────────────────────────────
@@ -354,7 +354,7 @@ export function _supTurn(m, opts){
   const admin=m.role==='admin';
   const who=admin ? 'Admin' : ((opts && opts.userLabel) || 'You');
   return `<div style="margin-top:8px;padding:8px 10px;border-radius:7px;
-      background:${admin?'#F0F7FF':'#F7FAFC'};border-left:3px solid ${admin?'#2E75B6':'#CBD5E1'}">
+      background:${admin?'#F0F7FF':'#F7FAFC'};border-left:3px solid ${admin?'var(--primary)':'#CBD5E1'}">
     <div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;color:var(--muted);margin-bottom:3px">
       <span style="font-weight:700;color:${admin?'var(--blue-dark)':'#475569'}">${esc(who)}${m.by&&m.by!==who?` · ${esc(m.by)}`:''}</span>
       <span>${esc(fmtDateTime(m.at))}</span>
@@ -368,9 +368,9 @@ export function _supTicketCard(t, expanded){
   const last=turns[turns.length-1];
   const unread=_supportNeedsUser(t);
   return `<div class="sup-card" data-id="${esc(t._id)}"
-      style="border:1px solid ${unread?'#93C5FD':'var(--border)'};border-radius:8px;margin-bottom:8px;overflow:hidden">
+      style="border:1px solid ${unread?'var(--info-line)':'var(--border)'};border-radius:8px;margin-bottom:8px;overflow:hidden">
     <div class="sup-card-head" data-id="${esc(t._id)}"
-      style="display:flex;align-items:center;gap:8px;padding:9px 11px;cursor:pointer;background:${unread?'#EFF6FF':'#fff'}">
+      style="display:flex;align-items:center;gap:8px;padding:9px 11px;cursor:pointer;background:${unread?'var(--info-bg)':'#fff'}">
       ${_supportUnreadDot(unread,'New activity on this request')}
       <span style="font-size:10px;color:var(--muted);white-space:nowrap">${esc(fmtDateTime(t.createdAt))}</span>
       <span style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((last&&last.text)||t.message||'')}</span>

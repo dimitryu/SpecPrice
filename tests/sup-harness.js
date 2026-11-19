@@ -101,7 +101,7 @@ const eq=(n,a,b)=>ok(n+`  (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`
   await new Promise(r=>setTimeout(r,20));
   const tbody=g.document.getElementById('adm-tickets-tbody');
   ok('the admin table lists the ticket', tbody && tbody.querySelectorAll('tr[data-id]').length===1);
-  ok('it is marked as new', /background:#E53E3E/.test(tbody.innerHTML));
+  ok('it is marked as new', /background:var\(--bad\)/.test(tbody.innerHTML));
   eq('opening the screen clears the admin flag', tickets()[0].adminUnread, false);
 
   M.openAdminReplyModal(t1._id);

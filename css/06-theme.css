@@ -1,0 +1,221 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   Copper & Graphite — the SpecPrice look (v1.79)
+   Graphite for structure, copper (the colour of a conductor) for the one
+   action that matters on a screen, warm drafting-paper background with a
+   faint grid. Loaded last: it restyles the components defined in 01–05.
+   Fonts are served from this site (vendor/fonts) — the CSP allows no
+   third-party font host.
+   ══════════════════════════════════════════════════════════════════════════ */
+@font-face { font-family:'IBM Plex Sans'; font-weight:400; font-display:swap; src:url('../vendor/fonts/ibm-plex-sans-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family:'IBM Plex Sans'; font-weight:500; font-display:swap; src:url('../vendor/fonts/ibm-plex-sans-latin-500-normal.woff2') format('woff2'); }
+@font-face { font-family:'IBM Plex Sans'; font-weight:600; font-display:swap; src:url('../vendor/fonts/ibm-plex-sans-latin-600-normal.woff2') format('woff2'); }
+@font-face { font-family:'IBM Plex Sans'; font-weight:700 900; font-display:swap; src:url('../vendor/fonts/ibm-plex-sans-latin-700-normal.woff2') format('woff2'); }
+@font-face { font-family:'IBM Plex Sans Hebrew'; font-weight:400 500; font-display:swap; src:url('../vendor/fonts/ibm-plex-sans-hebrew-hebrew-400-normal.woff2') format('woff2'); unicode-range:U+0590-05FF, U+FB1D-FB4F; }
+@font-face { font-family:'IBM Plex Sans Hebrew'; font-weight:600; font-display:swap; src:url('../vendor/fonts/ibm-plex-sans-hebrew-hebrew-600-normal.woff2') format('woff2'); unicode-range:U+0590-05FF, U+FB1D-FB4F; }
+@font-face { font-family:'IBM Plex Sans Hebrew'; font-weight:700 900; font-display:swap; src:url('../vendor/fonts/ibm-plex-sans-hebrew-hebrew-700-normal.woff2') format('woff2'); unicode-range:U+0590-05FF, U+FB1D-FB4F; }
+@font-face { font-family:'IBM Plex Mono'; font-weight:400; font-display:swap; src:url('../vendor/fonts/ibm-plex-mono-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family:'IBM Plex Mono'; font-weight:500; font-display:swap; src:url('../vendor/fonts/ibm-plex-mono-latin-500-normal.woff2') format('woff2'); }
+@font-face { font-family:'IBM Plex Mono'; font-weight:600 900; font-display:swap; src:url('../vendor/fonts/ibm-plex-mono-latin-600-normal.woff2') format('woff2'); }
+
+:root {
+  --ink:#1C232D; --ink-2:#2A313B; --ink-soft:#A7ACB4;
+  --bg:#F3F1EC; --grid:rgba(31,38,48,.045);
+  --surface:#FFFFFF; --surface-2:#F8F6F2; --line:#DDD8CF; --line-2:#E9E5DD;
+  --primary:#B4532A; --primary-h:#963F1C; --on-primary:#FFFFFF; --primary-soft:#F6E7DE;
+  --ok:#2E7D4F; --ok-soft:#E3F1E8; --bad:#B42318; --bad-soft:#FBE9E7;
+  --warn:#A15C07; --warn-soft:#FCF0DC;
+  --info-bg:#F4F1EB; --info-line:#E3DDD3; --link:#9A4520;
+  --chip-bg:#ECE6DC; --chip-ink:#5A4632;
+  --th:#ECE8E1; --zebra:#FAF8F4; --hover:#F4ECE6;
+  --mono:'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+  --radius:8px;
+}
+::selection { background:#F2D6C6; }
+:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
+
+/* ── Page ── */
+#content { background-color:var(--bg);
+  background-image:linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size:24px 24px; }
+.mono, .pn, .sd-part-number, .sd-drawing-number, .sd-revision, .sd-cust-pn,
+.sd-qty, .sd-manual-total, .sd-labor-time, .price-green, .price-red { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+.ic { display:inline-block; flex-shrink:0; vertical-align:-0.18em; }
+
+/* ── Splash ── */
+#splash { background:var(--ink); }
+#splash h1 { display:flex; align-items:center; gap:10px; letter-spacing:.2px; }
+
+/* ── Top bar: graphite, copper rule ── */
+.topbar { background:var(--ink); border-bottom:2px solid var(--primary); color:#F3F1EC; gap:12px; padding:0 18px 0 14px; }
+.topbar h2 { color:#F3F1EC; font-weight:600; font-size:14px; display:flex; align-items:center; gap:8px; }
+.topbar #topbar-info { color:var(--ink-soft) !important; }
+.tb-brand { display:flex; align-items:center; gap:9px; background:none; border:0; cursor:pointer; color:#F3F1EC;
+  font:700 15px 'IBM Plex Sans', sans-serif; padding:0; letter-spacing:.2px; }
+.tb-brand .tb-co { display:block; font-weight:500; font-size:10.5px; color:var(--ink-soft); letter-spacing:.5px; text-transform:uppercase; text-align:left; }
+.tb-sep { color:#5B626C; display:flex; align-items:center; }
+#btn-home { background:transparent !important; border:0 !important; color:var(--ink-soft) !important; width:auto !important; height:32px !important;
+  padding:0 4px; gap:6px; font:500 13px 'IBM Plex Sans', sans-serif !important; }
+#btn-home:hover { color:#F3F1EC !important; }
+#btn-home .lbl { font-size:13px; }
+.topbar .btn { background:rgba(255,255,255,.07); color:#F3F1EC; border:1px solid rgba(255,255,255,.12); }
+.topbar .btn:hover:not(:disabled) { background:rgba(255,255,255,.14); opacity:1; }
+#topbar-info .btn-sup, #topbar-info button { font-family:'IBM Plex Sans', sans-serif; }
+
+/* ── Buttons: one copper action per screen, the rest quiet ── */
+.btn { height:32px; padding:0 12px; border-radius:7px; font:600 12.5px 'IBM Plex Sans', 'IBM Plex Sans Hebrew', sans-serif;
+  border:1px solid var(--line); background:var(--surface); color:var(--ink); gap:7px; white-space:nowrap;
+  transition:background .15s, border-color .15s, color .15s, box-shadow .15s; }
+.btn:hover:not(:disabled) { opacity:1; border-color:#C9C2B6; background:var(--surface-2); }
+.btn:active:not(:disabled) { transform:translateY(1px); }
+.btn-sm { height:27px; padding:0 9px; font-size:11.5px; }
+.btn-blue, .btn-purple { background:var(--surface); color:var(--ink); border-color:var(--line); }
+/* green was "go / save / confirm" — that is the copper primary */
+.btn-green, .btn-primary { background:var(--primary); border-color:var(--primary); color:var(--on-primary); }
+.btn-green:hover:not(:disabled), .btn-primary:hover:not(:disabled) { background:var(--primary-h); border-color:var(--primary-h); }
+.btn-red { background:transparent; border-color:transparent; color:var(--bad); }
+.btn-red:hover:not(:disabled) { background:var(--bad-soft); border-color:transparent; }
+.btn-ghost { background:transparent; border-color:transparent; color:var(--muted); }
+.btn-ghost:hover:not(:disabled) { background:var(--blue-light); color:var(--ink); border-color:transparent; }
+/* a confirm-delete in a dialog is a real button */
+.modal-foot .btn-red { background:var(--bad); color:#fff; }
+.modal-foot .btn-red:hover:not(:disabled) { background:#911B12; }
+.modal-foot .btn-blue { background:var(--primary); border-color:var(--primary); color:var(--on-primary); }
+.modal-foot .btn-blue:hover:not(:disabled) { background:var(--primary-h); }
+/* The primary of each screen; the rest of its toolbar is secondary. */
+#btn-sd-file, #btn-ps-fc, #btn-cs-new, #btn-cs-new2, #btn-mfg-new, #btn-mfg-new2, #btn-support-send, #btn-add-drawing
+  { background:var(--primary); border-color:var(--primary); color:var(--on-primary); }
+#btn-sd-file:hover:not(:disabled), #btn-ps-fc:hover:not(:disabled), #btn-cs-new:hover:not(:disabled), #btn-cs-new2:hover:not(:disabled),
+#btn-mfg-new:hover:not(:disabled), #btn-mfg-new2:hover:not(:disabled), #btn-support-send:hover:not(:disabled), #btn-add-drawing:hover:not(:disabled)
+  { background:var(--primary-h); border-color:var(--primary-h); }
+#btn-sd-fc, #btn-ps-export, #btn-bom-export, #stat-export-all, #btn-invite-user, #btn-new-role, #trash-restore
+  { background:var(--surface); border-color:var(--line); color:var(--ink); }
+#btn-sd-fc:hover:not(:disabled), #btn-ps-export:hover:not(:disabled), #btn-bom-export:hover:not(:disabled), #stat-export-all:hover:not(:disabled),
+#btn-invite-user:hover:not(:disabled), #btn-new-role:hover:not(:disabled), #trash-restore:hover:not(:disabled)
+  { background:var(--surface-2); border-color:#C9C2B6; }
+#btn-sd-clear { background:transparent; border-color:transparent; color:var(--bad); margin-inline-start:auto; }
+#btn-sd-clear:hover:not(:disabled) { background:var(--bad-soft); }
+.tbl-scroll-btn { background:var(--surface); color:var(--ink); border:1px solid var(--line); border-radius:7px; height:32px; width:32px; }
+.tbl-scroll-btn:hover { background:var(--ink); color:#fff; border-color:var(--ink); }
+
+/* Compact / Full and other two-way switches */
+.sd-view-btn { font-family:'IBM Plex Sans', sans-serif; }
+.sd-view-btn[aria-pressed="true"] { background:var(--ink) !important; color:#fff !important; border-color:var(--ink) !important; }
+
+/* ── Inputs ── */
+.search-box, .form-input, input[type="text"], input[type="number"], input[type="email"], input[type="password"], select, textarea {
+  font-family:'IBM Plex Sans', 'IBM Plex Sans Hebrew', sans-serif; }
+.search-box, .form-input { border:1px solid var(--line); border-radius:7px; background:var(--surface); }
+.search-box { height:34px; background:var(--surface-2); }
+.search-box:focus, .form-input:focus { border-color:var(--primary); box-shadow:0 0 0 3px rgba(180,83,42,.14); background:var(--surface); }
+.form-field label { color:var(--muted); font-weight:600; letter-spacing:.6px; }
+
+/* ── Tables ── */
+.table-wrap { background:var(--surface); border-color:var(--line); border-radius:var(--radius); }
+.table-wrap::-webkit-scrollbar-track { background:var(--surface-2); }
+.table-wrap::-webkit-scrollbar-thumb { background:#C9C2B6; border:2px solid var(--surface-2); }
+.table-wrap::-webkit-scrollbar-thumb:hover { background:var(--primary); }
+thead th { background:var(--th); color:var(--ink-2); font-weight:600; font-size:12px; border-right:1px solid var(--line-2);
+  border-bottom:1px solid var(--line); letter-spacing:.1px; }
+thead th:hover { background:#E4DFD6; }
+thead th.col-drop-target { box-shadow:inset 0 0 0 2px var(--primary); }
+.col-resizer:hover, .col-resizer:active { background:rgba(180,83,42,.45); }
+tbody tr:nth-child(odd) { background:var(--surface); }
+tbody tr:nth-child(even) { background:var(--zebra); }
+tbody tr:hover { background:var(--hover) !important; }
+td { border-bottom:1px solid var(--line-2); border-right:1px solid var(--line-2); }
+.col-frozen-last { box-shadow:inset -1px 0 0 var(--line), 6px 0 8px -6px rgba(28,35,45,.22); }
+td[contenteditable="true"] { outline-color:var(--primary); background:#FFF8F2 !important; }
+.price-green { color:var(--ok); background:var(--ok-soft); }
+.price-red { color:var(--bad); background:var(--bad-soft); }
+.sd-group-head td { background:var(--surface-2) !important; color:var(--ink) !important; }
+
+/* ── Cards / panels ── */
+.sd-panel, .settings-panel, .rfq-card { border-color:var(--line); border-radius:10px; box-shadow:0 1px 2px rgba(28,35,45,.05); }
+.rfq-card:hover { border-color:var(--primary); box-shadow:0 4px 14px rgba(28,35,45,.08); }
+.sd-panel-title { background:var(--surface-2); color:var(--ink); border-bottom-color:var(--line-2); font-size:12.5px; }
+.summary-row { border-bottom-color:var(--line-2); }
+.summary-total { background:var(--ink); }
+.summary-order { background:var(--surface); color:var(--primary); border:1px solid var(--primary-soft); }
+.summary-order .lbl { opacity:1; }
+
+/* ── Dialogs ── */
+.modal-bg { background:rgba(20,25,32,.55); }
+.modal { border-radius:12px; box-shadow:0 24px 64px rgba(20,25,32,.35); }
+.modal-head { border-bottom-color:var(--line-2); }
+.modal-head h3 { color:var(--ink); display:flex; align-items:center; gap:8px; }
+.modal-foot { border-top-color:var(--line-2); background:var(--surface-2); }
+
+/* ── Feedback ── */
+.toast-info { background:var(--ink); }
+.toast-success { background:var(--ok); }
+.toast-error { background:var(--bad); }
+.toast-warn { background:var(--warn); }
+#update-bar { background:var(--ink); }
+.progress-bar { background:var(--line-2); }
+.progress-fill { background:var(--primary); }
+.ai-status { background:var(--info-bg); border:1px solid var(--info-line); }
+.drop-zone { border-color:#CFC8BC; background:var(--surface-2); }
+.drop-zone:hover, .drop-zone.dragover { border-color:var(--primary); background:var(--primary-soft); }
+.drop-zone .icon-big { color:var(--primary); }
+.breadcrumb a { color:var(--link); }
+.stage-run .stage-icon .ring { border-color:var(--line-2); border-top-color:var(--primary); }
+.sup-badge, .adm-alert { background:var(--bad); }
+.adm-alert:hover { background:#911B12; }
+.sup-file:hover { background:var(--blue-light); }
+.suggest-item:hover { background:var(--hover); }
+.stat-tile { background:var(--surface); border-color:var(--line); }
+.stat-bar-t { background:var(--line-2); }
+.stat-bar-f { background:var(--primary); }
+details.sym-legend summary { color:var(--muted); }
+
+/* Support button */
+#btn-support-fab { background:var(--primary) !important; box-shadow:0 6px 18px rgba(150,63,28,.35) !important; }
+#btn-support-fab:hover { background:var(--primary-h) !important; }
+
+/* ── Home ── */
+.home-wrap { max-width:1080px; margin:6px auto 30px; }
+.home-band { position:relative; overflow:hidden; display:flex; align-items:center; gap:18px; padding:22px 26px; margin-bottom:22px;
+  background:var(--surface); border:1px solid var(--line); border-radius:12px; box-shadow:0 1px 2px rgba(28,35,45,.05); }
+.home-band .harness { position:absolute; right:-30px; top:6px; width:600px; height:150px; opacity:.16; color:var(--primary); pointer-events:none; }
+.home-logo { position:relative; width:84px; height:56px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.home-band h1 { position:relative; font-size:22px; font-weight:700; color:var(--ink); letter-spacing:-.2px; }
+.home-band p { position:relative; font-size:13px; color:var(--muted); margin-top:3px; }
+.home-band .home-role { display:inline-block; margin-top:8px; padding:2px 9px; border-radius:20px; background:var(--primary-soft);
+  color:var(--primary-h); font-size:11px; font-weight:600; letter-spacing:.5px; text-transform:uppercase; }
+.home-sec { display:flex; align-items:center; gap:10px; margin:6px 0 10px; font-size:11.5px; font-weight:600; letter-spacing:.8px;
+  color:var(--muted); text-transform:uppercase; }
+.home-sec:after { content:''; flex:1; height:1px; background:var(--line); }
+.home-btn-grid { grid-template-columns:repeat(auto-fill,minmax(235px,1fr)); gap:12px; margin-bottom:18px; }
+.home-btn { flex-direction:row; justify-content:flex-start; text-align:left; gap:13px; padding:15px 14px; border-radius:10px;
+  border-color:var(--line); color:var(--ink); font-family:'IBM Plex Sans', sans-serif; }
+.home-btn:hover { box-shadow:0 6px 18px rgba(28,35,45,.08); border-color:#C9C2B6; transform:translateY(-1px); }
+.home-btn-icon { width:42px; height:42px; border-radius:9px; display:grid; place-items:center; background:var(--surface-2);
+  color:var(--primary); border:1px solid var(--line-2); font-size:22px; flex-shrink:0; }
+.home-btn-text { flex:1; display:flex; flex-direction:column; gap:3px; min-width:0; }
+.home-btn-text b { font-size:14px; font-weight:600; }
+.home-btn-text small { font-size:12px; color:var(--muted); font-weight:400; line-height:1.35; }
+.home-btn-go { color:var(--muted); display:flex; }
+.home-btn.home-btn-hero { border-color:var(--primary); box-shadow:inset 3px 0 0 var(--primary); }
+.home-btn.home-btn-hero .home-btn-icon { background:var(--primary); color:#fff; border-color:var(--primary); }
+.home-btn-guide { background:var(--surface) !important; border-color:var(--line) !important; }
+.home-btn-off { background:var(--surface-2) !important; color:#9A9FA6 !important; border-color:var(--line-2) !important; }
+.home-btn-off .home-btn-icon { color:#B4B8BE; }
+.home-foot { display:flex; align-items:center; justify-content:center; gap:14px; margin-top:12px; font-size:11px; color:var(--muted); }
+
+/* ── Login ── (index.html has its own copy of these colours) */
+@media (max-width:720px) {
+  .home-band .harness { display:none; }
+  .home-btn-grid { grid-template-columns:1fr; }
+  .tb-brand .tb-name { display:none; }
+}
+
+/* Big empty-state / drop-zone pictures */
+.empty-ic, .drop-zone .icon-big { color:var(--primary); display:flex; justify-content:center; }
+.empty-ic .ic, .drop-zone .icon-big .ic { stroke-width:1.4; }
+/* Per-row Save in the Roles table: secondary, there is one on every row */
+.role-save { background:var(--surface) !important; border-color:var(--line) !important; color:var(--ink) !important; }
+.role-save:hover:not(:disabled) { background:var(--surface-2) !important; }
+/* Top-bar chips (account, version) */
+.tb-chip { background:rgba(255,255,255,.07) !important; color:#E8E6E1 !important; border:1px solid rgba(255,255,255,.12) !important; }
+.tb-chip:hover:not(:disabled) { background:rgba(255,255,255,.14) !important; }
+.tb-chip.mono { font-family:var(--mono); }

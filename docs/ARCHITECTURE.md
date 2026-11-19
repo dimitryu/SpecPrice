@@ -172,3 +172,26 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
   כל שורה זוכרת איך נראתה כשהייתה מתואמת עם ה-Database (`_sdMarkClean`, WeakMap). שלבים אוטומטיים — קריאת שרטוט שנשמרה, Add from Database,
   Check Price, Save — מסמנים כ"נקי" את מה שלא היה משונה לפניהם (`_sdMarkCleanExcept`). `_sdPendingDbParts` סופר שורות משונות עם מק"ט
   ש-`_sdDbPatch` מוצא בהן מה לכתוב (או שאין להן רשומה). מחיקת שורה / שינוי Units לא נחשבים. גם `beforeunload`.
+
+## זמני שלבים בקריאת שרטוט (v1.78)
+
+- `stagesPanel` (`core/ui.js`) מודד כל שלב ב-`performance.now()` (לא `Date.now` — הוא מוקפא בכלי הצילומים) ומציג ⏱ לכל שלב ושורת "Total time".
+  הזמנים נרשמים בלוג `sales_desk_add_from_drawing` (`ms`, `stage_ms`). `fmtDuration(ms)` לתצוגה.
+
+## עיצוב Copper & Graphite (v1.79)
+
+- `css/06-theme.css` נטען אחרון ודורס את הקודמים: גופני IBM Plex (Sans, Mono, Sans Hebrew) מקומיים ב-`web/vendor/fonts`
+  (רישיון `OFL-IBM-Plex.txt`, בלי CDN — לא צריך לשנות CSP), סרגל עליון גרפיט עם קו נחושת, רקע נייר עם רשת שרטוט.
+- הצבעים הם טוקנים ב-`:root` של `01-base.css` (השמות הישנים `--blue-*` נשארו, הערכים גרפיט/נחושת) ו-`06-theme.css`
+  (`--primary`, `--ink`, `--link`, `--info-bg`, `--ok`, `--bad`, `--chip-*`). ב-JS לא כותבים hex — רק `var(--…)`.
+  ירוק/אדום/כתום של מחיר ואזהרה נשארו עם המשמעות שלהם. Cut & Strip ומסמך הייצור (הדפסה) לא שונו.
+- משמעות מחלקות הכפתורים: `btn-green` = כפתור עיקרי (נחושת, אחד בכל מסך); `btn-blue`/`btn-purple` = משני (לבן עם מסגרת);
+  `btn-red` = טקסט אדום, ובתחתית חלון (`.modal-footer`) מלא אדום לאישור מחיקה. דריסות לפי id ב-`06-theme.css`
+  (`#btn-sd-file`, `#btn-ps-fc`, `#btn-cs-new` עיקריים).
+- `core/icons.js`: אייקוני SVG בקו (`icon(name,size)`), `EMOJI` ממפה אמוג'י לאייקון, ו-`watchIcons(document.body)` (MutationObserver ב-`main.js`)
+  מחליף אמוג'י בתחילת טקסט של כפתורים, כותרות, `th`, `label`, `.empty-ic` וכו'. אפשר להמשיך לכתוב אמוג'י בקוד/במדריך — הוא יוחלף בתצוגה.
+  המסמך ב-Word שומר את האמוג'י.
+- `router.js`: `HOME_BUTTONS` = `[icon, label, desc, group]`, מסך הבית מחולק ל-Work/Manage (`.home-wrap`, `.home-band`), `TITLES` בלי אמוג'י,
+  `body.dataset.view` לפי המסך. בסרגל: `#tb-brand` (לוגו + שם חברה → בית) ו-`#btn-home` (`Home ›`).
+- ייצוא Excel (`io/excel.js` `_XL`, `salesDesk/export.js`) באותם צבעים: גרפיט בכותרות, נחושת בשורת המחיר לכמות.
+

@@ -34,7 +34,7 @@ export async function renderManufacturing(){
 
   if(!list.length){
     setContent(`<div class="card" style="max-width:640px;margin:30px auto;text-align:center;padding:40px 30px">
-      <div style="font-size:44px;margin-bottom:10px">🛠️</div>
+      <div class="empty-ic" style="font-size:44px;margin-bottom:10px">🛠️</div>
       <h3 style="margin-bottom:6px">${esc(T('No manufacturing instructions yet'))}</h3>
       <p style="color:var(--muted);font-size:13px;margin-bottom:20px">
         ${esc(T('A manufacturing instruction holds the material list, the order of operations, the inspection checks and the tooling for one assembly. Write one from scratch, or take the starting content from a cut & strip specification and edit it.'))}</p>
