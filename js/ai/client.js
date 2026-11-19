@@ -47,8 +47,70 @@ export async function aiProbeProxy(){
     if(!resp.ok) return S.aiProxy;
     const j=await resp.json();
     _aiSetProxy(!!(j && j.configured));
+    _aiSetThinkCtl(!!(j && j.thinking));
   }catch(e){ /* keep the last known road */ }
   return S.aiProxy;
+}
+
+// ── Which model does which job (v1.82) ───────────────────────────────────────
+// Two tiers. READ is the strong model, for the jobs where a misread costs a
+// cable: reading a drawing (the cut & strip analysis, a parts list off a
+// picture, finding the table on the sheet, a title block off a picture) and the
+// web search for a crimp tool. LIGHT is the small model — about a twentieth of
+// the price — for text and small, well-defined jobs: a parts list from the PDF
+// text layer, a title block from text, the labour estimate, the notes, the
+// manufacturing steps, translations.
+//
+// Thinking. The current models think before they answer unless told not to,
+// and the thinking is billed and counted against max_tokens. On a dense
+// drawing the cut & strip analysis spent its whole 16,000-token budget
+// thinking, wrote nothing, and failed after six minutes with "empty response".
+// None of these jobs is a puzzle — they read and transcribe — so thinking is
+// turned off for all of them; only the agentic crimp-tool search keeps it, at
+// low effort. That needs the server (aiProxy) to pass the setting on, which it
+// says in its GET answer ({thinking:true}). Until it does, the old models and
+// budgets stay, with room left for the thinking that cannot be switched off.
+export const AI_LIGHT_MODEL='claude-haiku-5-5', AI_LIGHT_MODEL_OLD='claude-haiku-4-5-20251001';
+export const AI_TASKS={
+  cs_core:     {tier:'read',  min:32000},   // cut & strip: the drawing, read once
+  cs_detail:   {tier:'read',  min:32000},   // its wiring table, labels, notes
+  cs_bom:      {tier:'read',  min:32000},   // its part list, when the first reading missed it
+  bom_image:   {tier:'read',  min:16000},   // a parts list read off a picture
+  bom_locate:  {tier:'read',  min:2048},    // where the parts list is on the sheet
+  title_image: {tier:'read',  min:2048},    // drawing #, title, revision off a picture
+  tools_web:   {tier:'read',  think:'adaptive', effort:'low'},  // crimp tool: web search + reasoning
+  bom_text:    {tier:'light'},              // a parts list from the PDF text layer / a spreadsheet
+  title_text:  {tier:'light'},
+  process:     {tier:'light'},              // manufacturing steps and minutes
+  notes:       {tier:'light'},
+  mfg_steps:   {tier:'light'},
+  translate:   {tier:'light'},
+};
+// Models from the 5 family think by default (and take no temperature).
+export function _aiThinksByDefault(model){ return _AI_NO_TEMPERATURE_RE.test(String(model||'')); }
+export function _aiSetThinkCtl(on){
+  S.aiThinkCtl=!!on;
+  try{ if(on) localStorage.setItem('ai_think','1'); else localStorage.removeItem('ai_think'); }catch(e){}
+}
+export function aiModelFor(task){
+  const t=AI_TASKS[task]||{tier:'light'};
+  if(t.tier==='read') return _csModel();
+  // The new small model only when its thinking can be switched off: thinking
+  // inside a 400-token budget leaves nothing for the answer.
+  return (S.aiThinkCtl && !S._aiLightDown) ? AI_LIGHT_MODEL : AI_LIGHT_MODEL_OLD;
+}
+// The request body for one job: its model, and its thinking setting.
+export function aiBody(task, base){
+  const t=AI_TASKS[task]||{tier:'light'};
+  const b={...base, model:aiModelFor(task)};
+  b._task=task;
+  if(S.aiThinkCtl && _aiThinksByDefault(b.model)){
+    if(t.think==='adaptive'){ if(t.effort) b.output_config={effort:t.effort}; }
+    else b.thinking={type:'disabled'};
+  } else if(_aiThinksByDefault(b.model) && t.think!=='adaptive' && t.min && !(b.max_tokens>=t.min)){
+    b.max_tokens=t.min;   // thinking cannot be turned off: leave it room
+  }
+  return b;
 }
 
 // One Claude Messages request. `opts.body` is the JSON string; the answer is a
@@ -66,14 +128,32 @@ export function _aiBodyForModel(body){
   return JSON.stringify(o);
 }
 export async function _aiFetch(opts, timeoutMs){
-  opts={...opts, body:_aiBodyForModel(opts.body)};
   if(!auth.currentUser) throw new Error('Not signed in');
+  let o; try{ o=JSON.parse(opts.body); }catch{ o=null; }
+  const task=o && o._task;
+  if(o && '_task' in o){ delete o._task; opts={...opts, body:JSON.stringify(o)}; }
+  opts={...opts, body:_aiBodyForModel(opts.body)};
   const token=await auth.currentUser.getIdToken();
-  return _fetchWithRetry(AI_PROXY_URL,{
+  const resp=await _fetchWithRetry(AI_PROXY_URL,{
     method:'POST',
     headers:{Authorization:'Bearer '+token,'content-type':'application/json'},
     body:opts.body
   }, timeoutMs);
+  // A routed request the account or the server will not take is asked again
+  // the way it used to be asked, once, and remembered for the session:
+  //  - the new small model is not available → the previous small model;
+  //  - the thinking setting is refused → without it.
+  if(task && o && !resp.ok && (resp.status===400 || resp.status===404)){
+    let m=''; try{ const e=await resp.clone().json(); m=String(e?.error?.message||''); }catch{}
+    const base={...o}; delete base.thinking; delete base.output_config;
+    if(o.model===AI_LIGHT_MODEL && /model|not[_ ]found|not available|does not have access|permission/i.test(m)){
+      S._aiLightDown=true; return _aiFetch({...opts, body:JSON.stringify(aiBody(task, base))}, timeoutMs);
+    }
+    if((o.thinking||o.output_config) && /thinking|output_config|effort/i.test(m)){
+      _aiSetThinkCtl(false); return _aiFetch({...opts, body:JSON.stringify(aiBody(task, base))}, timeoutMs);
+    }
+  }
+  return resp;
 }
 
 export let _dbgLastAI='';

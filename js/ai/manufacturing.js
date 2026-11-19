@@ -1,4 +1,4 @@
-import { _AI_NO_KEY, _aiFetch, _aiReady, _aiText, _csProviderHint, _csSalvageJson } from './client.js';
+import { _AI_NO_KEY, _aiFetch, _aiReady, _aiText, _csProviderHint, _csSalvageJson, aiBody } from './client.js';
 import { _CS_ANALYSIS_TIMEOUT } from './cutstrip.js';
 import { _csConnectors, _csCutLength, _csMM, _csNum, _csSegLabel, _csSegments } from '../domain/cutstrip.js';
 import { _CS_SOURCE_LANG } from '../features/cutstrip/i18n.js';
@@ -67,8 +67,8 @@ gershayim \u05F4 instead.
 SPECIFICATION:
 ${_mfgSpecDigest(spec)}`;
   const resp=await _aiFetch({
-    body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:_MFG_STEPS_MAX_TOKENS,
-                         temperature:0,messages:[{role:'user',content:prompt}]})
+    body:JSON.stringify(aiBody('mfg_steps',{max_tokens:_MFG_STEPS_MAX_TOKENS,
+                         temperature:0,messages:[{role:'user',content:prompt}]}))
   }, _CS_ANALYSIS_TIMEOUT);
   if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}

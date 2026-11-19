@@ -140,6 +140,7 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
   // ── forwarding ──
   r = await call(P, { method: 'GET', token: 'tUser' });
   ok(r.json.configured === true, 'GET reports configured');
+  ok(r.json.thinking === true, 'GET says the thinking setting is passed on (v1.82)');
   r = await call(P, { token: 'tUser', body: { ...req, stream: true, tools: [{}] } });
   ok(r.status === 200 && r.json.content[0].text === 'hi', 'answer returned unchanged');
   const up = upstreamCalls.pop();
@@ -148,6 +149,17 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
   const sent = JSON.parse(up.init.body);
   ok(sent.model === req.model && sent.max_tokens === 16000 && sent.temperature === 0 && sent.messages[0].content === 'x', 'body forwarded');
   ok(!('stream' in sent) && !('tools' in sent), 'unexpected fields dropped');
+
+  // thinking: off or adaptive, and an effort level — nothing else of either
+  r = await call(P, { token: 'tUser', body: { ...req, thinking: { type: 'disabled' }, output_config: { effort: 'low' } } });
+  let sentTh = JSON.parse(upstreamCalls.pop().init.body);
+  ok(sentTh.thinking && sentTh.thinking.type === 'disabled' && sentTh.output_config.effort === 'low', 'thinking off and effort forwarded');
+  r = await call(P, { token: 'tUser', body: { ...req, thinking: { type: 'enabled', budget_tokens: 900000 }, output_config: { effort: 'max', format: { type: 'json_schema' } } } });
+  sentTh = JSON.parse(upstreamCalls.pop().init.body);
+  ok(!('thinking' in sentTh) && !('output_config' in sentTh), 'a thinking budget or another effort/output setting is not forwarded');
+  r = await call(P, { token: 'tUser', body: { ...req, thinking: { type: 'adaptive', display: 'summarized', budget_tokens: 5 } } });
+  sentTh = JSON.parse(upstreamCalls.pop().init.body);
+  ok(JSON.stringify(sentTh.thinking) === '{"type":"adaptive"}', 'adaptive thinking forwarded with nothing added');
 
   // web search is the one tool allowed through, capped; anything else is dropped
   r = await call(P, { token: 'tUser', body: { ...req, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 99, allowed_domains: ['x'] }, { type: 'computer_20250124', name: 'computer' }] } });
@@ -167,6 +179,10 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
   // ── limits ──
   r = await call(P, { token: 'tUser', body: { ...req, model: 'gpt-4o' } });
   ok(r.status === 400, 'non-Claude model refused');
+  r = await call(P, { token: 'tUser', body: { ...req, model: 'claude-opus-5-5' } });
+  ok(r.status === 400 && /Model not allowed/.test(r.json.error.message), 'a model the app does not use (an expensive one) is refused');
+  r = await call(P, { token: 'tUser', body: { ...req, model: 'claude-haiku-5-5' } });
+  ok(r.status === 200, 'the small model the app routes light jobs to is allowed');
   r = await call(P, { token: 'tUser', body: { ...req, max_tokens: 200000 } });
   ok(r.status === 400, 'oversized max_tokens refused');
   r = await call(P, { token: 'tUser', body: { ...req, messages: [] } });

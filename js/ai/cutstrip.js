@@ -1,5 +1,5 @@
 import { S } from '../core/state.js';
-import { _AI_NO_KEY, _CS_MAX_REPLY_CHARS, _aiFetch, _aiReady, _aiText, _csComplete, _csDeadProviders, _csIsKeyError, _csLoopy, _csModel, _csModelRejected, _csProviderHint, _csSalvageJson, _csStitch, _csTrimPrefill } from './client.js';
+import { _AI_NO_KEY, _CS_MAX_REPLY_CHARS, _aiFetch, _aiReady, _aiText, _csComplete, _csDeadProviders, _csIsKeyError, _csLoopy, _csModelRejected, _csProviderHint, _csSalvageJson, _csStitch, _csTrimPrefill, aiBody } from './client.js';
 import { logSystemAudit } from '../core/audit.js';
 import { _CS_CABLE_RE, _CS_CUT_MODEL, _csEndLegs, _csNormalize, _csProposeStrips, _csSyncCutLength } from '../domain/cutstrip.js';
 import { _CS_SOURCE_LANG } from '../features/cutstrip/i18n.js';
@@ -518,6 +518,14 @@ RULES — these matter more than completeness:
 ${langTail}`;
 }
 
+// The message when a reply came back with no text because the whole budget
+// went on thinking. Which fix applies depends on whether the server can switch
+// thinking off yet (aiProxy v1.82+).
+export function _csThoughtOut(){
+  return S.aiThinkCtl
+    ? 'The AI used its whole answer budget before writing the specification. Try again; if it happens again, analyse the drawing one sheet at a time.'
+    : 'The AI spent its whole answer budget thinking and wrote nothing. The server function (aiProxy) needs the v1.82 update, which turns thinking off for this analysis — deploy the functions, then try again.';
+}
 export const _CS_TRUNCATED='The analysis was cut off before it finished — this drawing produces more detail than one reply can hold. Try again; if it keeps happening, split the drawing or analyse it in English (Hebrew costs about twice the space).';
 // Unbalanced braces mean the JSON stopped mid-object. Saying "malformed" for
 // that sends the user looking for a bad drawing when the reply was simply
@@ -714,25 +722,30 @@ export async function _csAnthropic(text, isImage, imgData, lang){
   // temperature 0 for the same reason as the labor estimate: reading dimensions
   // off a drawing is not a creative task, and a spec that comes back different
   // every time it is run cannot be checked against itself.
-  const ask=async (msgs, temp)=>{
+  const ask=async (msgs, temp, task='cs_core')=>{
     const resp=await _aiFetch({
       // The first pass is at 0: reading dimensions off a drawing is not a
       // creative task, and a spec that comes back different every run cannot be
       // checked against itself. A continuation runs slightly warm, because a
       // reply that filled its window at 0 will often walk straight back into
       // the same repetition when continued at 0.
-      body:JSON.stringify({model:_csModel(),max_tokens:_CS_MAX_TOKENS,
-                           temperature:(temp!=null ? temp : (msgs.length>1?0.2:0)),messages:msgs})
+      body:JSON.stringify(aiBody(task,{max_tokens:_CS_MAX_TOKENS,
+                           temperature:(temp!=null ? temp : (msgs.length>1?0.2:0)),messages:msgs}))
     }, _CS_ANALYSIS_TIMEOUT);
     if(!resp.ok){let m=`Anthropic error ${resp.status}`;
       try{const e=await resp.json();m=e.error?.message||m;}catch{}
       // The stronger model is not available on every account. That is a
       // reason to fall back, once, to the one that is — not to fail the
       // analysis. Anything else is a real error and is reported as before.
-      if(_csModelRejected(resp.status, m)){ S._csModelDown=true; return ask(msgs, temp); }
+      if(_csModelRejected(resp.status, m)){ S._csModelDown=true; return ask(msgs, temp, task); }
       throw new Error(_csProviderHint('Anthropic', m));}
     const d=await resp.json();
-    return {text:_aiText(d), stop:d.stop_reason};
+    const text=_aiText(d);
+    // Nothing written and the budget gone: the model spent all of it thinking.
+    // Continuing would hand it an empty answer to carry on from — that is how a
+    // dense drawing failed after six minutes with "empty response".
+    if(!text.trim() && d.stop_reason==='max_tokens') throw new Error(_csThoughtOut());
+    return {text, stop:d.stop_reason};
   };
 
   // A long structured answer can outrun one reply. Rather than throwing the
@@ -740,8 +753,8 @@ export async function _csAnthropic(text, isImage, imgData, lang){
   // full analysis and usually ends the same way — the unfinished answer is
   // handed back to the model to carry on from, and the pieces are joined.
   // Each phase gets its own run of this, and therefore its own budget.
-  const run=async (msgs, temp)=>{
-  let out=await ask(msgs, temp);
+  const run=async (msgs, temp, task='cs_core')=>{
+  let out=await ask(msgs, temp, task);
   let reply=out.text, rounds=0, stopReason='';
   while(out.stop==='max_tokens' && rounds<_CS_MAX_CONTINUATIONS){
     // Three ways a continuation is not worth buying, all of them meaning the
@@ -757,7 +770,7 @@ export async function _csAnthropic(text, isImage, imgData, lang){
     // the rest of it. Trailing whitespace in a prefill is rejected by the API.
     const partial=_csTrimPrefill(reply);
     const before=partial.length;
-    out=await ask([...msgs, {role:'assistant', content:partial}]);
+    out=await ask([...msgs, {role:'assistant', content:partial}], undefined, task);
     reply=_csStitch(partial, out.text);
     // A continuation that adds almost nothing, or that only repeats what it
     // was handed, will do the same again next round.
@@ -828,7 +841,7 @@ export async function _csAnthropic(text, isImage, imgData, lang){
       const bm = isImage
         ? [{role:'user', content:[...imgBlocks, {type:'text', text:bp}]}]
         : [{role:'user', content: bp+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,24000)}];
-      const r=await run(bm);
+      const r=await run(bm, undefined, 'cs_bom');
       const got=(_csSalvageJson(r.reply)||{}).obj;
       const mats=Array.isArray(got?.materials) ? got.materials : [];
       if(mats.length){ spec.materials=mats; }
@@ -846,7 +859,7 @@ export async function _csAnthropic(text, isImage, imgData, lang){
     const dmsgs = isImage
       ? [{role:'user', content:[...imgBlocks, {type:'text', text:dprompt}]}]
       : [{role:'user', content: dprompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,24000)}];
-    const b=await run(dmsgs);
+    const b=await run(dmsgs, undefined, 'cs_detail');
     const det=(_csSalvageJson(b.reply)||{}).obj;
     const added=_csMergeDetail(spec, det);
     if(!added) spec._detail_thin=true;

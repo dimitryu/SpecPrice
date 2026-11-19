@@ -1,5 +1,5 @@
 import { S } from '../core/state.js';
-import { _AI_NO_KEY, _aiFetch, _aiReady, _aiText, _csModel, _csModelRejected, _dbgLastAI, _jsonEnd, _parseAIJson } from './client.js';
+import { _AI_NO_KEY, _aiFetch, _aiReady, _aiText, _csModelRejected, _dbgLastAI, _jsonEnd, _parseAIJson, aiBody } from './client.js';
 import { logSystemAudit } from '../core/audit.js';
 import { extractPDFPages } from '../io/pdf.js';
 
@@ -64,9 +64,9 @@ never pixels), including its header row and EVERY data row from the first item t
 If there is no parts list on this sheet: {"found":false}`;
 export async function _bomLocate(b64){
   const resp=await _aiFetch({
-    body:JSON.stringify({model:_csModel(), max_tokens:300, temperature:0, messages:[{role:'user',content:[
+    body:JSON.stringify(aiBody('bom_locate',{max_tokens:300, temperature:0, messages:[{role:'user',content:[
       {type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},
-      {type:'text',text:_BOM_LOCATE_PROMPT}]}]})
+      {type:'text',text:_BOM_LOCATE_PROMPT}]}]}))
   });
   if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}
@@ -480,8 +480,8 @@ export async function _anthropicBOM(text, isImage, imgData, filename, sourceType
     // A table read off a picture goes to the stronger model: small print in a
     // scanned or pasted parts list is exactly where the small one misreads a
     // digit or drops a row. Text needs no eyes and stays on the fast one.
-    body:JSON.stringify({model:isImage?_csModel():'claude-haiku-4-5-20251001',
-                         max_tokens:isImage?8192:4096, temperature:0, messages})
+    body:JSON.stringify(aiBody(isImage?'bom_image':'bom_text',
+                         {max_tokens:isImage?8192:4096, temperature:0, messages}))
   });
   if(!resp.ok){let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}
@@ -532,8 +532,8 @@ export async function aiReadTitleBlock(text, isImage, imgData){
       {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
       {type:'text',text:_TITLE_BLOCK_PROMPT+txt}]}]
       : [{role:'user', content:_TITLE_BLOCK_PROMPT+txt}];
-    const resp=await _aiFetch({body:JSON.stringify({model:(isImage&&imgData)?_csModel():'claude-haiku-4-5-20251001',
-      max_tokens:400, temperature:0, messages})});
+    const resp=await _aiFetch({body:JSON.stringify(aiBody((isImage&&imgData)?'title_image':'title_text',
+      {max_tokens:400, temperature:0, messages}))});
     if(!resp.ok) throw new Error('Anthropic error '+resp.status);
     const data=await resp.json();
     const tb=_parseTitleBlockJson(_aiText(data));

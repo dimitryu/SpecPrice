@@ -1,4 +1,4 @@
-import { _aiFetch, _aiReady, _aiText } from './client.js';
+import { _aiFetch, _aiReady, _aiText, aiBody } from './client.js';
 import { logSystemAudit } from '../core/audit.js';
 
 // ── Sales Desk only: AI cable-manufacturing-process analysis ─────────────────
@@ -113,7 +113,7 @@ export async function _anthropicCableProcess(text, isImage, imgData, rowsList, h
     // and a number that moves every time it's asked can't be trusted or
     // checked. It won't be bit-identical (no LLM guarantees that), but the
     // spread drops from "significantly different" to noise.
-    body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:2048, temperature:0, messages})
+    body:JSON.stringify(aiBody('process',{max_tokens:2048, temperature:0, messages}))
   });
   if(!resp.ok){let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}
@@ -168,7 +168,7 @@ export async function _anthropicNotes(text, isImage, imgData){
     {type:'text',text:prompt}
   ]}] : [{role:'user', content: prompt+'\n\nDRAWING TEXT:\n'+String(text||'').slice(0,20000)}];
   const resp = await _aiFetch({
-    body:JSON.stringify({model:'claude-haiku-4-5-20251001', max_tokens:1536, messages})
+    body:JSON.stringify(aiBody('notes',{max_tokens:1536, messages}))
   });
   if(!resp.ok){let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}throw new Error(m);}

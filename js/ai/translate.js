@@ -1,4 +1,4 @@
-import { _aiFetch, _aiText } from './client.js';
+import { _aiFetch, _aiText, aiBody } from './client.js';
 
 export async function _csTranslateChunk(todo, lang, bucket){
   const langName = lang==='ru' ? 'Russian' : (lang==='he' ? 'Hebrew' : 'English');
@@ -12,8 +12,8 @@ export async function _csTranslateChunk(todo, lang, bucket){
     +JSON.stringify(todo, null, 0);
 
   const resp=await _aiFetch({
-    body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:16000,temperature:0,
-                         messages:[{role:'user',content:prompt}]})
+    body:JSON.stringify(aiBody('translate',{max_tokens:16000,temperature:0,
+                         messages:[{role:'user',content:prompt}]}))
   });
   if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }
@@ -44,8 +44,8 @@ export async function aiTranslateOperations(todo, lang){
     +JSON.stringify(todo, null, 0);
 
   const resp=await _aiFetch({
-    body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:2048,
-                         messages:[{role:'user',content:prompt}]})
+    body:JSON.stringify(aiBody('translate',{max_tokens:2048,
+                         messages:[{role:'user',content:prompt}]}))
   });
   if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json(); m=e.error?.message||m;}catch{} throw new Error(m); }

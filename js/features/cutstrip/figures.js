@@ -369,6 +369,60 @@ export function _csRunAnnot(spec, r, xFarEnd, xHubEnd, y, rtlAttr, T, isTrunk, s
 // are written in inches, but nobody at the bench measures in them, and two
 // numbers on one dimension line is an invitation to read the wrong one.
 export const _CS_FIG_STRANDS=7;
+
+// ── Drawn the way the cable looks (v1.82) ────────────────────────────────────
+// The figure follows the cable on the drawing, not a generic one: the jacket in
+// its colour, and a multi-conductor cable opened into its own wires — each in
+// its insulation colour, as thick as its gauge, as long as its leg, labelled
+// with where it goes. The operator compares it with the cable in their hand.
+const _CS_WIRE_COLORS=[
+  [/^(blk|black|bk|שחור|черн)/i,'#1F1F23'], [/^(wht|white|wh|לבן|бел)/i,'#F4F3EE'],
+  [/^(red|rd|אדום|красн)/i,'#C62828'],      [/^(grn|green|gn|ירוק|зел)/i,'#2E7D32'],
+  [/^(blu|blue|bu|כחול|син|голуб)/i,'#1E5AA8'], [/^(brn|brown|br|חום|корич)/i,'#6D4C2F'],
+  [/^(yel|yellow|ye|צהוב|желт)/i,'#F2C200'],  [/^(orn|org|orange|or|כתום|оранж)/i,'#E8731A'],
+  [/^(gry|grey|gray|gy|אפור|сер)/i,'#8A8F96'], [/^(vio|violet|purple|pur|vt|סגול|фиолет)/i,'#7B3FA0'],
+  [/^(pnk|pink|pk|ורוד|розов)/i,'#E58FB0'],  [/^(clr|clear|natural|nat|שקוף)/i,'#E8E2D0'],
+];
+function _csColorOf(word){
+  const w=String(word||'').trim();
+  for(const [re,hex] of _CS_WIRE_COLORS) if(re.test(w)) return hex;
+  return null;
+}
+// "Yellow-Green", "GRN/YEL", "WHT/RED" → a base colour and a stripe.
+export function _csWireColor(name){
+  const parts=String(name||'').split(/[\/\-\s,+]+/).filter(Boolean);
+  const cols=parts.map(_csColorOf).filter(Boolean);
+  return {base:cols[0]||'#B9B2A6', stripe:cols[1]||null, known:cols.length>0};
+}
+// The jacket's colour, from the cable's own description.
+export function _csJacketColor(seg, spec){
+  const pn=String(seg?.cable_part_number||'').trim().toUpperCase();
+  const m=(spec?.materials||[]).find(x=>String(x.part_number||'').trim().toUpperCase()===pn);
+  const txt=`${seg?.jacket_color||''} ${seg?.cable_description||''} ${m?.description||''}`;
+  for(const w of txt.split(/[^A-Za-z\u0590-\u05FF\u0400-\u04FF]+/)){
+    const c=_csColorOf(w); if(c) return c;
+  }
+  return '#1A1A22';
+}
+const _csAwgPx=awg=>{ const a=parseFloat(awg); if(!(a>0)) return 8;
+  return Math.max(4, Math.min(18, Math.round(4+(30-a)*0.75))); };
+// The wires of this end: its legs when it fans out, else every conductor of the
+// cable. Each with its colour, gauge, length from the jacket face, strip, and
+// where it goes.
+export function _csEndWires(seg, end){
+  const conds=Array.isArray(seg?.conductors)?seg.conductors:[];
+  const atFrom=String(end?.ref||'').trim().toUpperCase()===String(seg?.from||'').trim().toUpperCase();
+  const legs=Array.isArray(end?.legs)?end.legs:[];
+  if(legs.length) return legs.map(l=>{
+    const c=conds.find(x=>String(x.color||'').toLowerCase()===String(l.conductor||'').toLowerCase()
+                          || String(x.name||'').toLowerCase()===String(l.conductor||'').toLowerCase());
+    return {color:String(l.conductor||c?.color||''), awg:c?.awg, len:_csNum(l.length_mm), strip:_csNum(l.strip_mm),
+            to:String(l.to||''), term:String(l.terminal_pn||''), confirmed:l.confirmed!==false};
+  });
+  if(conds.length<2) return [];
+  return conds.map(c=>({color:String(c.color||''), awg:c.awg, len:null, strip:null,
+    to:String((atFrom?c.from_pin:c.to_pin)||c.name||''), name:String(c.name||''), term:'', confirmed:true}));
+}
 export function _csStripSVG(seg, end, spec){
   const T=_csT;
   let cuts=(end?.strip||[]).filter(s=>!s.derived && _csNum(s.value_mm)>0)
@@ -388,16 +442,26 @@ export function _csStripSVG(seg, end, spec){
   if(unknown) cuts=[{code:'A', mm:null, confirmed:false,
                      label:T('no strip dimension on the drawing — fill it in')}];
 
-  const X_END=90, X_JACKET=470, X_TIP=1010;
+  const allWires=_csEndWires(seg, end);
+  const MAXW=12, wires=allWires.slice(0,MAXW);
+  const fan=wires.length>=2;
+  const X_END=fan?190:90, X_JACKET=fan?520:470, X_TIP=1010;
   const A=unknown ? null : cuts[cuts.length-1].mm;   // the outermost cut sets the scale
-  const S=(A!=null && A>0) ? (X_JACKET-X_END)/A : 1;
-  const CY=210, JH=64;
+  // A leg longer than the jacket strip sets the scale instead, so it fits.
+  const legMax=Math.max(0, ...wires.map(w=>w.len||0));
+  const D=(A!=null && A>0) ? Math.max(A, legMax) : (legMax||0);
+  const S=D>0 ? (X_JACKET-X_END)/D : 1;
+  const fanH=fan ? wires.reduce((a,w)=>a+_csAwgPx(w.awg)+10,0) : 0;
+  const CY=fan ? Math.max(210, 130+fanH/2) : 210, JH=64;
   // With nothing to scale to, the bands are laid out evenly: the picture is
-  // schematic, and the numbers beside it say so.
+  // schematic, and the numbers beside it say so. Positions are measured from
+  // the jacket face back towards the end of the cable.
   const at=mm=>{
     if(A==null || mm==null) return X_JACKET;
-    return X_END+mm*S;
+    return X_JACKET-(A-mm)*S;
   };
+  const jacketCol=_csJacketColor(seg, spec);
+  const jacketLight=/^#(F|E|D|C)/i.test(jacketCol);
 
   // Everything the jacket was covering, drawn band by band from the end.
   // Each cut removes one layer and exposes the next one down, so the band a cut
@@ -408,6 +472,7 @@ export function _csStripSVG(seg, end, spec){
   let g='';
   // band between each pair of cuts, outermost first so the jacket is drawn last
   for(let i=cuts.length-1;i>=1;i--){
+    if(fan && cuts[i-1].conductor) continue;   // the wires below show their own insulation
     const xL=at(cuts[i-1].mm), xR=at(cuts[i].mm);
     const depth=(cuts.length-1)-i;                 // 0 = the band the jacket cut opens
     const h=JH*(0.80-0.16*depth);
@@ -424,35 +489,68 @@ export function _csStripSVG(seg, end, spec){
     if(nm) g+=`<text x="${((xL+xR)/2).toFixed(1)}" y="${(CY-h/2-9).toFixed(1)}" text-anchor="middle"
         font-size="12" font-weight="700" fill="#3A4350">${_csSvgTxt(nm)}</text>`;
   }
-  // bare strands, from the cable end to the innermost cut
-  const xBare=at(cuts[0].mm);
-  for(let i=0;i<_CS_FIG_STRANDS;i++){
-    const off=(i-(_CS_FIG_STRANDS-1)/2)*8.5;
-    const y0=CY+off*0.72, y1=CY-off*0.5, y2=CY+off*0.62, y3=CY+off*0.3;
-    g+=`<path d="M${X_END},${y0.toFixed(1)} C${X_END+60},${y1.toFixed(1)} ${xBare-70},${y2.toFixed(1)} ${xBare.toFixed(1)},${y3.toFixed(1)}"
-      fill="none" stroke="#C2703A" stroke-width="2.1" stroke-linecap="round"/>`;
+  const tinned=/tinned|tin[- ]plated|מצופה/i.test(`${seg?.cable_description||''}`);
+  const metal=tinned?'#B8BCC2':'#C2703A';
+  if(fan){
+    // The cable opened into its own wires, fanned out the way they leave it.
+    const nonW=cuts.filter(c=>!c.conductor);
+    const xFan=nonW.length ? at(nonW[0].mm) : X_JACKET;
+    const wStrip=(cuts.find(c=>c.conductor)||{}).mm;
+    let yy=CY-fanH/2;
+    wires.forEach((w,i)=>{
+      const th=_csAwgPx(w.awg), col=_csWireColor(w.color);
+      const yEnd=yy+th/2; yy+=th+10;
+      const yStart=CY+((i-(wires.length-1)/2)*Math.min(8,(JH-16)/Math.max(1,wires.length-1)));
+      const xTip = w.len!=null && A!=null ? X_JACKET-w.len*S : at(0);
+      const st = w.strip!=null ? w.strip : wStrip;
+      const xIns = st!=null && S ? Math.min(xFan-20, xTip+st*S) : xTip+18;
+      const bend=Math.min(60, (xFan-xIns)*0.45);
+      const path=`M${xFan.toFixed(1)},${yStart.toFixed(1)} C${(xFan-bend).toFixed(1)},${yStart.toFixed(1)} ${(xFan-bend).toFixed(1)},${yEnd.toFixed(1)} ${(xFan-bend*2).toFixed(1)},${yEnd.toFixed(1)} L${xIns.toFixed(1)},${yEnd.toFixed(1)}`;
+      g+=`<path d="${path}" fill="none" stroke="#3A4350" stroke-width="${th+2}" stroke-linecap="butt"/>
+          <path d="${path}" fill="none" stroke="${col.base}" stroke-width="${th}" stroke-linecap="butt"/>`;
+      if(col.stripe) g+=`<path d="${path}" fill="none" stroke="${col.stripe}" stroke-width="${Math.max(2,th*0.42).toFixed(1)}" stroke-dasharray="7 7"/>`;
+      // bare strands — or a ferrule / terminal over them when the drawing names one
+      g+=`<line x1="${xTip.toFixed(1)}" y1="${yEnd.toFixed(1)}" x2="${xIns.toFixed(1)}" y2="${yEnd.toFixed(1)}" stroke="${metal}" stroke-width="${Math.max(2,th*0.7).toFixed(1)}"/>`;
+      for(const d of [-0.25,0.25]) g+=`<line x1="${xTip.toFixed(1)}" y1="${(yEnd+d*th).toFixed(1)}" x2="${xIns.toFixed(1)}" y2="${(yEnd+d*th*0.6).toFixed(1)}" stroke="${metal}" stroke-width="1"/>`;
+      if(w.term) g+=`<rect x="${(xTip-2).toFixed(1)}" y="${(yEnd-th/2-3).toFixed(1)}" width="${(xIns-xTip+4).toFixed(1)}" height="${(th+6).toFixed(1)}" rx="2" fill="none" stroke="#6B7079" stroke-width="1.2" stroke-dasharray="3 2"/>`;
+      const lbl=[w.color||'?', w.to?`→ ${w.to}`:''].filter(Boolean).join(' ')+(w.len!=null?`  ${w.len} mm`:'');
+      g+=`<text x="${(xTip-8).toFixed(1)}" y="${(yEnd+4).toFixed(1)}" text-anchor="end" font-size="11.5" font-weight="600" fill="${w.confirmed?'#1C232D':'#DC2626'}">${_csSvgTxt(lbl)}${w.confirmed?'':' *'}</text>`;
+    });
+    if(allWires.length>MAXW)
+      g+=`<text x="${(X_END).toFixed(1)}" y="${(CY+fanH/2+16).toFixed(1)}" font-size="11.5" fill="#6B7079">+${allWires.length-MAXW} ${_csSvgTxt(T('more wires — see the wiring table'))}</text>`;
+  } else {
+    // bare strands, from the cable end to the innermost cut
+    const xBare=at(cuts[0].mm), x0=at(0);
+    for(let i=0;i<_CS_FIG_STRANDS;i++){
+      const off=(i-(_CS_FIG_STRANDS-1)/2)*8.5;
+      const y0=CY+off*0.72, y1=CY-off*0.5, y2=CY+off*0.62, y3=CY+off*0.3;
+      g+=`<path d="M${x0.toFixed(1)},${y0.toFixed(1)} C${(x0+60).toFixed(1)},${y1.toFixed(1)} ${xBare-70},${y2.toFixed(1)} ${xBare.toFixed(1)},${y3.toFixed(1)}"
+        fill="none" stroke="${metal}" stroke-width="2.1" stroke-linecap="round"/>`;
+    }
   }
-  // the jacket
-  g+=`<rect x="${X_JACKET}" y="${CY-JH/2}" width="${X_TIP-X_JACKET}" height="${JH}" rx="${JH/2}" fill="#1A1A22"/>
-      <rect x="${X_JACKET}" y="${CY-JH/2}" width="34" height="${JH}" fill="#1A1A22"/>
-      <line x1="${X_JACKET+28}" y1="${CY-10}" x2="${X_TIP-24}" y2="${CY-10}" stroke="#6B7079" stroke-width="2.4"/>`;
+  // the jacket, in its own colour
+  g+=`<rect x="${X_JACKET}" y="${CY-JH/2}" width="${X_TIP-X_JACKET}" height="${JH}" rx="${JH/2}" fill="${jacketCol}" stroke="${jacketLight?'#6B7079':jacketCol}" stroke-width="1.2"/>
+      <rect x="${X_JACKET}" y="${CY-JH/2}" width="34" height="${JH}" fill="${jacketCol}"/>
+      <line x1="${X_JACKET+28}" y1="${CY-10}" x2="${X_TIP-24}" y2="${CY-10}" stroke="${jacketLight?'#FFFFFF':'#6B7079'}" stroke-width="2.4" opacity="${jacketLight?0.9:1}"/>`;
   // every cut face, square to the axis
-  cuts.forEach(c=>{ const x=at(c.mm);
+  // (each wire of an opened cable shows its own insulation end instead)
+  cuts.forEach(c=>{ if(fan && c.conductor) return; const x=at(c.mm);
     g+=`<line x1="${x.toFixed(1)}" y1="${CY-JH/2-8}" x2="${x.toFixed(1)}" y2="${CY+JH/2+8}" stroke="#DC2626" stroke-width="2.6"/>`; });
 
   // dimensions, largest at the bottom so the lines never cross
-  let y=CY+JH/2+46;
+  let y=Math.max(CY+JH/2, fan?CY+fanH/2:0)+46;
+  const x0=at(0);
   cuts.slice().reverse().forEach(c=>{
     const x=at(c.mm), col=c.confirmed?'#1C232D':'#DC2626';
-    g+=`<line x1="${X_END}" y1="${y}" x2="${x.toFixed(1)}" y2="${y}" stroke="${col}" stroke-width="1.5"
+    g+=`<line x1="${x0.toFixed(1)}" y1="${y}" x2="${x.toFixed(1)}" y2="${y}" stroke="${col}" stroke-width="1.5"
           marker-start="url(#csFigL)" marker-end="url(#csFigR)"/>
         <line x1="${x.toFixed(1)}" y1="${CY+JH/2+8}" x2="${x.toFixed(1)}" y2="${(y+7).toFixed(1)}" stroke="${col}" stroke-width=".9" stroke-dasharray="3 3"/>
-        <text x="${X_END}" y="${y-9}" font-size="17" font-weight="800" fill="${col}">${
+        <text x="${x0.toFixed(1)}" y="${y-9}" font-size="17" font-weight="800" fill="${col}">${
           _csSvgTxt(c.code?`${c.code} = `:'')}${c.mm==null?'?':c.mm} mm${c.confirmed?'':' *'}</text>
         <text x="${(x+14).toFixed(1)}" y="${y+5}" font-size="11.5" fill="#6B7079">${_csSvgTxt(_csP(c.label||''))}</text>`;
     y+=42;
   });
-  g+=`<line x1="${X_END}" y1="${CY-JH/2-8}" x2="${X_END}" y2="${(y-30).toFixed(1)}" stroke="#A39E95" stroke-width=".9" stroke-dasharray="3 3"/>`;
+  g+=`<line x1="${x0.toFixed(1)}" y1="${(fan?CY-fanH/2:CY-JH/2)-8}" x2="${x0.toFixed(1)}" y2="${(y-30).toFixed(1)}" stroke="#A39E95" stroke-width=".9" stroke-dasharray="3 3"/>`;
 
   // what this end costs the cut length — the same two numbers the cut table
   // prints, read from the same fields, so they cannot drift apart

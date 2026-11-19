@@ -40,6 +40,9 @@ export const S = {
   // goes through the aiProxy function — see _aiFetch. Remembered so the first
   // request after a reload already takes that road.
   aiProxy: localStorage.getItem('ai_proxy') === '1',
+  // The server passes the thinking setting on (aiProxy v1.82+) — see aiBody.
+  aiThinkCtl: localStorage.getItem('ai_think') === '1',
+  _aiLightDown: false,
   // owner: data/parts.js
   allParts: [],
   // owner: data/parts.js

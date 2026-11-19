@@ -222,3 +222,20 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
 - C&S: הדף נבנה מאחורי החלון, והחלון נשאר עם Total time וכפתור `#cs-import-close` ("Open the sheet").
 - RFQ: אחרי הקריאה השלבים נשארים מעל טבלת הבדיקה ב-`<details class="stages-done">` מקופל.
 
+## v1.82 — מודל לכל משימה, חשיבה כבויה, שרטוט קצה כמו הכבל
+
+- **הכשל ב-C&S ("The AI returned an empty response" אחרי ~6 דקות):** `claude-sonnet-5` חושב כברירת מחדל (adaptive),
+  והחשיבה נספרת ב-`max_tokens`. בשרטוט צפוף (WLS-090-009, 2 גיליונות) כל 16,000 הטוקנים הלכו לחשיבה — התשובה הייתה בלי טקסט,
+  וה"המשך" נבנה על prefill ריק. עכשיו: `ask()` עוצר מיד על תשובה בלי טקסט עם `max_tokens` (`_csThoughtOut()`), והחשיבה מכובה.
+- **ניתוב (`ai/client.js`):** `AI_TASKS` + `aiBody(task, base)` + `aiModelFor(task)`. READ = `_csModel()` (Sonnet 5) לקריאת שרטוט
+  מתמונה ולחיפוש כלים; LIGHT = `claude-haiku-5-5` לטקסט ולמשימות קטנות. `thinking:{type:'disabled'}` לכל משימות הקריאה;
+  `tools_web` נשאר adaptive עם `output_config.effort:'low'`. `_task` רק לניתוב — `_aiFetch` מוחק אותו לפני השליחה.
+- **תלות בשרת:** `aiProxy` מעביר `thinking`/`output_config` (מסונן) ומחזיר ב-GET `thinking:true` → `S.aiThinkCtl` (`aiProbeProxy`).
+  בלי זה: LIGHT נשאר `claude-haiku-4-5-20251001` (לא חושב), ו-READ מקבל `max_tokens` מינימלי (`min`) כדי שיהיה מקום לחשיבה.
+  `_aiFetch` חוזר פעם אחת: מודל קטן חדש נדחה → הישן (`S._aiLightDown`); `thinking` נדחה → בלי (`aiThinkCtl=false`).
+- **שרת:** רשימת מודלים מותרת `AI_MODELS_ALLOWED` (sonnet-5, sonnet-5-5, haiku-5-5, haiku-4-5-20251001) — מודל חדש נוסף כאן ובאפליקציה יחד.
+  **דורש `firebase deploy --only functions`.**
+- **שרטוט קצה (`_csStripSVG`, `figures.js`):** המעטה בצבע מהתיאור (`_csJacketColor`), וכבל רב-גידי נפתח לגידים (`_csEndWires`):
+  צבע (`_csWireColor`, כולל פס לדו-צבעי), עובי לפי AWG, legs באורך שלהם, תווית צבע → פין/יעד. גיד יחיד — כמו קודם.
+- בדיקות: `tests/ai-routing-harness.js`, ותוספות ב-`cs-harness.js` וב-`functions-harness.js`.
+

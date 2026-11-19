@@ -312,7 +312,7 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
              +'"markers":[{"label":"A","segment":"S1","text_lines":["TAG"]}],'
              +'"engineering_notes":[{"n":"1","text":"note one","action":""}]}';
   let calls=[];
-  vm.runInContext(`aiProxy=true; _csDeadProviders={};
+  vm.runInContext(`aiProxy=true; aiThinkCtl=true; _csDeadProviders={};
     _fetchWithRetry=async(u,o)=>{ const body=JSON.parse(o.body); __f.note(body);
       const n=__f.count();
       return {ok:true, json:async()=>n===1
@@ -336,6 +336,10 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
      calls[1].messages[calls[1].messages.length-1].role==='assistant'
      && calls[1].messages[calls[1].messages.length-1].content.endsWith('descrip'));
   ok('continuation: ...asking in bites, not one long mouthful', calls[0].max_tokens<=20000);
+  ok('thinking: off for every pass of the analysis (v1.82) — it ate the whole budget on a dense drawing',
+     calls.every(c=>c.thinking && c.thinking.type==='disabled'));
+  ok('model: the drawing is read by the strong model, the wiring table too', calls.every(c=>c.model==='claude-sonnet-5'));
+  ok('request: the routing tag never leaves the browser', calls.every(c=>!('_task' in c)));
   // A model that takes no temperature (claude-sonnet-5) is sent none — see
   // _aiBodyForModel; the smaller model keeps the deterministic/warm passes.
   const noTemp=c=>/sonnet-5|opus-5/.test(c.model) && !('temperature' in c);
@@ -468,6 +472,42 @@ const SPEC={_id:'CBL-1', kind:undefined, drawing_number:'CBL-1', drawing_name:'P
   const mw=await M._mfgWriteSteps(SPEC,'en');
   ok('mfg: the drafted sequence comes back, not empty', mw.steps.length===1 && mw.steps[0].title==='Cut');
   ok('mfg: ...with its inspection lines and tools', mw.inspection.length===1 && mw.tools.length===1 && mw.tools[0].tool==='PCT-2510');
+
+  // ── v1.82: the strip figure looks like the cable on the drawing ──────
+  const wc=M._csWireColor;
+  ok('figure: wire colours from the drawing\'s abbreviations, words and Hebrew',
+     wc('RED').base==='#C62828' && wc('WHT').base==='#F4F3EE' && wc('Brown').base==='#6D4C2F' && wc('שחור').base==='#1F1F23');
+  ok('figure: a two-colour wire is a base with a stripe', wc('Yellow-Green').base==='#F2C200' && wc('Yellow-Green').stripe==='#2E7D32' && wc('WHT/RED').stripe==='#C62828');
+  ok('figure: the jacket takes the cable\'s colour, black when nothing says otherwise',
+     M._csJacketColor({cable_description:'RG316 coax, grey jacket'},{})==='#8A8F96' && M._csJacketColor({cable_description:'Power cable'},{})==='#1A1A22');
+  const fseg={id:'S1',from:'P1',to:'J1',conductor_strip_mm:5,
+    conductors:[{color:'RED',awg:22,from_pin:'1',to_pin:'A'},{color:'BLK',awg:22,from_pin:'2',to_pin:'B'},{color:'GRN/YEL',awg:20,from_pin:'3',to_pin:'C'}],
+    ends:[{ref:'P1',strip:[{code:'A',value_mm:40,confirmed:true}]},
+          {ref:'J1',strip:[{code:'A',value_mm:60,confirmed:true}],legs:[{conductor:'RED',to:'T1',length_mm:60,strip_mm:8},{conductor:'BLK',to:'T2',length_mm:30,strip_mm:8,confirmed:false}]}]};
+  const svgA=M._csStripSVG(fseg, fseg.ends[0], {segments:[fseg]});
+  ok('figure: a multi-conductor end is opened into its own wires, in their colours',
+     svgA.includes('#C62828') && svgA.includes('#1F1F23') && svgA.includes('#F2C200') && /RED → 1/.test(svgA) && /BLK → 2/.test(svgA));
+  const svgB=M._csStripSVG(fseg, fseg.ends[1], {segments:[fseg]});
+  ok('figure: a fan-out end draws its legs — where each goes and how long', /RED → T1  60 mm/.test(svgB) && /BLK → T2  30 mm \*/.test(svgB) && !/GRN\/YEL/.test(svgB));
+  const one={id:'S9',from:'X',to:'Y',ends:[{ref:'X',strip:[{code:'A',value_mm:6,confirmed:true}]}]};
+  ok('figure: a single conductor keeps the strands drawing', /stroke="#C2703A" stroke-width="2.1"/.test(M._csStripSVG(one, one.ends[0], {segments:[one]})));
+
+  // ── v1.82: a reply that is all thinking and no text ──────────────────
+  // What failed a dense two-sheet drawing after 6 min: the budget went on
+  // thinking, the reply had no text, and the "continuation" carried on from
+  // nothing. Now it stops at once and says what happened.
+  let thCalls=[];
+  ctx.__f.th=b=>thCalls.push(b);
+  vm.runInContext(`aiThinkCtl=false; _csDeadProviders={};
+    _fetchWithRetry=async(u,o)=>{ __f.th(JSON.parse(o.body));
+      return {ok:true, json:async()=>({content:[{type:'thinking',thinking:''}], stop_reason:'max_tokens'})}; };`, ctx);
+  let thErr='';
+  try{ await M.aiAnalyzeCutStrip('drawing text', false, null, 'en'); }catch(e){ thErr=e.message; }
+  ok('thinking-only reply: one request, not a continuation built on nothing', thCalls.length===1);
+  ok('thinking-only reply: says the budget went on thinking, and what fixes it ('+thErr.slice(0,60)+')',
+     /thinking/.test(thErr) && /aiProxy/.test(thErr) && !/empty response/.test(thErr));
+  ok('thinking-only reply: before the server can switch thinking off, the budget leaves it room', thCalls[0].max_tokens===32000 && !('thinking' in thCalls[0]));
+  vm.runInContext(`aiThinkCtl=false;`, ctx);
 
   console.log(`\n  ${pass} passed, ${fail} failed\n`);
   fails.forEach(f=>console.log('  ✗ '+f));

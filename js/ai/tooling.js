@@ -1,5 +1,5 @@
 import { S } from '../core/state.js';
-import { _aiFetch, _aiReady, _csModel, _csModelRejected, _parseAIJson } from './client.js';
+import { _aiFetch, _aiReady, _csModelRejected, _parseAIJson, aiBody } from './client.js';
 import { logSystemAudit } from '../core/audit.js';
 import { _bomBadToolPn } from '../domain/bom.js';
 
@@ -68,7 +68,7 @@ export async function aiFindCrimpTools(contacts){
     let messages=[{role:'user', content:_crimpToolPrompt(list, web, deep)}];
     let text='', searched=false; const searches=[], opened=[];
     for(let turn=0; turn<5; turn++){
-      const body={model:_csModel(), max_tokens:4096, temperature:0, messages};
+      const body=aiBody('tools_web',{max_tokens:4096, temperature:0, messages});
       if(web) body.tools=[{...WEB_SEARCH_TOOL, max_uses:Math.min(12, (deep?5:3)*list.length+(deep?4:2))},
                           {...WEB_FETCH_TOOL, max_uses:Math.min(8, (deep?3:2)*list.length+(deep?2:1))}];
       const resp=await _aiFetch({body:JSON.stringify(body)}, 240000);

@@ -1294,6 +1294,11 @@ const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const AI_TEST_MODEL = 'claude-haiku-4-5-20251001';
 const AI_MODEL_RE = /^claude-[a-z0-9.\-]+$/i;
+// v1.82: only the models the app routes its jobs to (ai/client.js AI_TASKS and
+// its fallbacks). Any signed-in member could otherwise ask for the most
+// expensive model there is on the company's key. A new model is added here and
+// in the app together, and deployed.
+const AI_MODELS_ALLOWED = new Set(['claude-sonnet-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-haiku-4-5-20251001']);
 const AI_MAX_TOKENS = 32000;
 // The fields the app sends. Anything else (tools, streaming, metadata …) is
 // dropped rather than forwarded: the proxy only has to do what the app does.
@@ -1321,6 +1326,23 @@ function aiSafeTools(tools) {
     out.push(safe);
   }
   return out.length ? out : undefined;
+}
+// Thinking (v1.82). The current models think before answering unless told not
+// to, and that thinking is billed and counts against max_tokens — a dense
+// drawing used a whole 16,000-token reply thinking and returned no text. The
+// app turns it off for its reading jobs and keeps it, at low effort, for the
+// crimp-tool search. Only those settings pass: thinking off or adaptive (no
+// budget of its own), and an effort level — nothing that raises the cost
+// beyond what max_tokens already caps.
+const AI_THINKING_TYPES = ['disabled', 'adaptive'];
+const AI_EFFORTS = ['low', 'medium', 'high'];
+function aiSafeThinking(t) {
+  if (!t || typeof t !== 'object' || !AI_THINKING_TYPES.includes(t.type)) return undefined;
+  return { type: t.type };
+}
+function aiSafeOutputConfig(c) {
+  if (!c || typeof c !== 'object' || !AI_EFFORTS.includes(c.effort)) return undefined;
+  return { effort: c.effort };
 }
 // Under the function's own 540s limit, above the app's longest wait (300s).
 const AI_UPSTREAM_TIMEOUT_MS = 520000;
@@ -1406,7 +1428,8 @@ exports.aiProxy = onRequest(
     catch (e) { return aiError(res, e.code || 401, e.message); }
 
     if (req.method === 'GET') {
-      return void res.status(200).json({ configured: !!(await getAiKey()) });
+      // thinking:true tells the app this server passes the thinking setting on.
+      return void res.status(200).json({ configured: !!(await getAiKey()), thinking: true });
     }
     if (req.method !== 'POST') return aiError(res, 405, 'Use GET or POST');
 
@@ -1421,7 +1444,8 @@ exports.aiProxy = onRequest(
 
     const src = (req.body && typeof req.body === 'object') ? req.body : null;
     if (!src) return aiError(res, 400, 'Request body must be JSON');
-    if (!AI_MODEL_RE.test(String(src.model || ''))) return aiError(res, 400, `Model not allowed: ${src.model}`);
+    if (!AI_MODEL_RE.test(String(src.model || '')) || !AI_MODELS_ALLOWED.has(String(src.model)))
+      return aiError(res, 400, `Model not allowed: ${src.model}`);
     if (!Array.isArray(src.messages) || !src.messages.length) return aiError(res, 400, 'messages is required');
     const maxTok = Number(src.max_tokens);
     if (!(maxTok > 0) || maxTok > AI_MAX_TOKENS) return aiError(res, 400, `max_tokens must be 1–${AI_MAX_TOKENS}`);
@@ -1430,6 +1454,10 @@ exports.aiProxy = onRequest(
     for (const f of AI_FIELDS) if (src[f] !== undefined) body[f] = src[f];
     const tools = aiSafeTools(src.tools);
     if (tools) body.tools = tools;
+    const thinking = aiSafeThinking(src.thinking);
+    if (thinking) body.thinking = thinking;
+    const outputConfig = aiSafeOutputConfig(src.output_config);
+    if (outputConfig) body.output_config = outputConfig;
 
     const t0 = Date.now();
     let upstream;
