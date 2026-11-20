@@ -306,3 +306,5 @@ details.sym-legend summary { color:var(--muted); }
 #btn-ps-refresh.is-busy .ic { animation:ps-spin .8s linear infinite; }
 @keyframes ps-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ps-skel, #btn-ps-refresh.is-busy .ic { animation:none; } }
+/* rows still to come on a long page (v1.83.1) */
+#ps-table tr.ps-more-row td { text-align:center; color:var(--muted); font-size:12px; padding:10px; background:var(--surface-2); }

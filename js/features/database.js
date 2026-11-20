@@ -1,7 +1,7 @@
 import { S } from '../core/state.js';
 import { logAudit } from '../core/audit.js';
-import { freezeLeftColumns, loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../core/table.js';
-import { _buildPager, closeModal, debounce, esc, fmtDate, fmtPrice, setActions, setContent, showModal, toast } from '../core/ui.js';
+import { freezeLeftColumns, loadColOrder, loadColWidths, lockTableLayout, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../core/table.js';
+import { _buildPager, afterPaint, closeModal, debounce, esc, fmtDate, fmtPrice, setActions, setContent, showModal, toast } from '../core/ui.js';
 import { _PS_TRASH_DAY_OPTIONS, _psAutoPurge, _psDaysLeft, _psDeletedMs, _psIsAdmin, _psPurge, _psRestore, _psSetTrashDays, _psSoftDelete, loadParts, peekParts, purgeLegacyFindChipsFields, refreshParts, updatePartFields } from '../data/parts.js';
 import { _partDrawings, _pnKey } from '../domain/bom.js';
 import { _sdLineCost } from '../domain/pricing.js';
@@ -14,6 +14,10 @@ export let sortAsc     = true;
 export let psPage      = 1;
 export let psPageSize  = (()=>{ const v=localStorage.getItem('psPageSize'); return v==='all' ? 'all' : (parseInt(v)||20); })();
 export function openTrashModal(onChange){
+  // The table behind is redrawn only if something was restored or removed,
+  // and only after the dialog is gone from the screen: closing never waits.
+  let changed=false;
+  const done=()=>{ if(changed && onChange) afterPaint(onChange); };
   const render=()=>{
     const now=Date.now();
     const rows=[...S.trashParts].sort((a,b)=>_psDeletedMs(b)-_psDeletedMs(a));
@@ -54,20 +58,22 @@ export function openTrashModal(onChange){
     });
     body.querySelector('#trash-restore')?.addEventListener('click',async()=>{
       const ids=sel(); if(!ids.length){ toast('No rows selected','error'); return; }
-      try{ const n=await _psRestore(ids); toast(`Restored ${n} part(s)`,'success'); render(); onChange&&onChange(); }
+      try{ const n=await _psRestore(ids); toast(`Restored ${n} part(s)`,'success'); changed=true; render(); }
       catch(err){ toast('Error: '+err.message,'error'); logAudit('database_restore_parts',{error:err.message},false); }
     });
     body.querySelector('#trash-purge')?.addEventListener('click',async()=>{
       const ids=sel(); if(!ids.length){ toast('No rows selected','error'); return; }
       if(!confirm(`Delete ${ids.length} part(s) permanently? They cannot be restored from the app afterwards.`)) return;
-      try{ const n=await _psPurge(ids,'manual'); toast(`Permanently deleted ${n} part(s)`,'success'); render(); onChange&&onChange(); }
+      try{ const n=await _psPurge(ids,'manual'); toast(`Permanently deleted ${n} part(s)`,'success'); changed=true; render(); }
       catch(err){ toast('Error: '+err.message,'error'); logAudit('database_purge_parts',{error:err.message},false); }
     });
   };
-  showModal(`<div class="modal" style="max-width:1000px;width:96vw">
-    <div class="modal-head"><h3>🗑 Deleted items</h3><button class="btn btn-ghost btn-sm" id="trash-close">✕</button></div>
+  const bg=showModal(`<div class="modal" style="max-width:1000px;width:96vw">
+    <div class="modal-head"><h3>🗑 Deleted items</h3><button class="btn btn-ghost btn-sm" id="trash-close" title="Close">✕</button></div>
     <div class="modal-body" id="trash-body"></div></div>`);
-  document.getElementById('trash-close')?.addEventListener('click',()=>{ closeModal(); onChange&&onChange(); });
+  document.getElementById('trash-close')?.addEventListener('click',()=>{ closeModal(); done(); });
+  // a click outside the dialog closes it too (showModal) — same redraw rule
+  bg.addEventListener('click',e=>{ if(e.target===bg) done(); });
   render();
 }
 
@@ -387,15 +393,61 @@ export function _psRedrawQuietly(tries=0){
   const inp=document.getElementById('ps-search');
   const filter=inp ? inp.value : '';
   const hadFocus=ae===inp, caret=inp ? inp.selectionStart : 0;
-  const checked=new Set([...document.querySelectorAll('.ps-check:checked')].map(cb=>cb.dataset.id));
+  _psSyncSel();
+  const drawn=document.querySelectorAll('#ps-table tbody tr[data-id]').length;
   const wrap=document.getElementById('ps-table-wrap');
   const sl=wrap?wrap.scrollLeft:0, st=wrap?wrap.scrollTop:0, wy=window.scrollY;
-  _psRender(filter, {keepFocus:hadFocus});
-  document.querySelectorAll('.ps-check').forEach(cb=>{ if(checked.has(cb.dataset.id)) cb.checked=true; });
+  _psRender(filter, {keepFocus:hadFocus, keepSel:true, minRows:drawn});
   const w2=document.getElementById('ps-table-wrap'); if(w2){ w2.scrollLeft=sl; w2.scrollTop=st; }
   if(window.scrollY!==wy) window.scrollTo(0, wy);
   const ni=document.getElementById('ps-search');
   if(ni && hadFocus){ ni.focus(); try{ ni.setSelectionRange(caret, caret); }catch{} }
+}
+
+// ── Rows drawn as they are needed (v1.83.1) ──
+// A page of 500 or "All" used to put every row in the table at once; the
+// browser then spent seconds laying it out, on opening and again after every
+// sort, search or dialog close. Now the first PS_FIRST_ROWS rows are drawn,
+// and PS_MORE_ROWS more each time the table is scrolled near its end. Search,
+// sort, Check Price and Export still work on every matching part.
+export const PS_FIRST_ROWS=40, PS_MORE_ROWS=60;
+let _psSel=new Set();
+export function _psSelected(){ _psSyncSel(); return new Set(_psSel); }
+// The ticks on screen are the truth for the rows that are drawn.
+function _psSyncSel(){
+  document.querySelectorAll('#ps-table .ps-check').forEach(cb=>{
+    if(cb.checked) _psSel.add(cb.dataset.id); else _psSel.delete(cb.dataset.id);
+  });
+  const all=document.getElementById('ps-check-all');
+  const n=document.querySelectorAll('#ps-table tbody tr[data-id]').length;
+  if(all && n) all.checked=[...document.querySelectorAll('#ps-table .ps-check')].every(cb=>cb.checked);
+}
+function _psMoreRowHTML(shown, total, span){
+  return shown<total
+    ? `<tr class="ps-more-row"><td colspan="${span}">Showing ${shown} of ${total} — scroll down for more</td></tr>` : '';
+}
+function _psMoreRows(table, pageRows, firstN, rowHTML, span){
+  const wrap=document.getElementById('ps-table-wrap');
+  if(!wrap || firstN>=pageRows.length) return;
+  let shown=firstN, queued=false;
+  const fill=()=>{
+    queued=false;
+    if(!wrap.isConnected || shown>=pageRows.length) return;
+    if(wrap.scrollTop+wrap.clientHeight < wrap.scrollHeight-600) return;
+    // Pin the column widths before the first batch: with the widths fixed the
+    // browser lays out only the new rows, not the whole table again, and the
+    // columns do not jump as longer rows arrive.
+    if(!table.classList.contains('cols-fixed')) lockTableLayout(table, loadColWidths('partstock'));
+    const next=pageRows.slice(shown, shown+PS_MORE_ROWS);
+    shown+=next.length;
+    const tb=table.tBodies[0];
+    tb.querySelector('.ps-more-row')?.remove();
+    tb.insertAdjacentHTML('beforeend', next.map(rowHTML).join('')+_psMoreRowHTML(shown, pageRows.length, span));
+    queue();   // still near the end (a tall screen): draw the next batch on the next frame
+  };
+  const queue=()=>{ if(queued) return; queued=true; (globalThis.requestAnimationFrame||setTimeout)(fill); };
+  wrap.addEventListener('scroll', queue, {passive:true});
+  queue();
 }
 
 // Draws the screen from S.allParts, or — with view.loading — the locked
@@ -440,10 +492,18 @@ export function _psRender(filter='', view={}){
 
   const COLS=loadColOrder('partstock',_PS_DEFAULT_COLS);
   const arrow=k=>k===sortCol?(sortAsc?' ▲':' ▼'):'';
-  const rows=pageRows.map(p=>`<tr data-id="${esc(p._id)}">
-      <td style="text-align:center"><input type="checkbox" class="ps-check" data-id="${esc(p._id)}"></td>
+  // Selection lives in _psSel, not in the checkboxes: rows further down the
+  // page may not be drawn yet (see _psMoreRows), and must still count.
+  if(!view.keepSel) _psSel=new Set();
+  const rowHTML=p=>`<tr data-id="${esc(p._id)}">
+      <td style="text-align:center"><input type="checkbox" class="ps-check" data-id="${esc(p._id)}"${_psSel.has(p._id)?' checked':''}></td>
       ${COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${_psCellHTML(c.k,p)}</td>`).join('')}
-    </tr>`).join('');
+    </tr>`;
+  // Only the first rows are drawn now; the rest follow as the table is
+  // scrolled. Laying out a 1000-row table took seconds, and every sort,
+  // search or dialog close waited for it (v1.83.1).
+  const firstN=loading ? pageRows.length : Math.min(pageRows.length, Math.max(PS_FIRST_ROWS, view.minRows||0));
+  const rows=pageRows.slice(0, firstN).map(rowHTML).join('') + _psMoreRowHTML(firstN, pageRows.length, COLS.length+1);
   const skel=loading && !pageRows.length
     ? Array.from({length:8},(_,i)=>`<tr class="ps-skel-row"><td></td>${COLS.map((c,j)=>`<td><span class="ps-skel" style="width:${40+((i*7+j*13)%45)}%"></span></td>`).join('')}</tr>`).join('')
     : '';
@@ -497,10 +557,17 @@ export function _psRender(filter='', view={}){
 
   const inp=document.getElementById('ps-search');
   wireSearchClear('ps-search','ps-search-clear');
-  document.querySelectorAll('#ps-table .ps-dwg-link').forEach(l=>l.addEventListener('click',e=>{
-    e.preventDefault(); psPage=1; renderPartStock(`"${l.dataset.dwg}"`);
-  }));
-  wireShiftCheck(document.querySelector('#ps-table'),'.ps-check');
+  const table=document.getElementById('ps-table');
+  _psMoreRows(table, pageRows, firstN, rowHTML, COLS.length+1);
+  // One listener on the table for every row, drawn now or later.
+  table.addEventListener('click',e=>{
+    const l=e.target.closest('.ps-dwg-link');
+    if(l){ e.preventDefault(); psPage=1; renderPartStock(`"${l.dataset.dwg}"`); }
+  });
+  wireShiftCheck(table,'.ps-check');
+  // after wireShiftCheck, so a shift-click range is already ticked when read
+  table.addEventListener('click',e=>{ if(e.target.closest('.ps-check')) _psSyncSel(); });
+  table.addEventListener('change',e=>{ if(e.target.closest('.ps-check')) _psSyncSel(); });
   makeTableResizable(document.querySelector('#ps-table'),'partstock');
   freezeLeftColumns(document.querySelector('#ps-table'), 1+PS_FROZEN_COLS);
   makeColumnsReorderable(document.querySelector('#ps-table'),'partstock',COLS,()=>renderPartStock(inp.value));
@@ -512,7 +579,7 @@ export function _psRender(filter='', view={}){
       const ni=document.getElementById('ps-search');
       if(ni){ni.focus();ni.setSelectionRange(s,s);}
     });
-  },260));
+  },150));   // a redraw now takes a few ms, so the wait after typing can be short
   if(view.keepFocus!==false) inp.focus();
   document.querySelectorAll('thead th[data-col]').forEach(th=>th.addEventListener('click',()=>{
     const k=th.dataset.col;
@@ -539,18 +606,20 @@ export function _psRender(filter='', view={}){
 
   // Check-all toggle (current page only)
   document.getElementById('ps-check-all')?.addEventListener('change',e=>{
+    _psSel=e.target.checked ? new Set(pageRows.map(p=>p._id)) : new Set();
     document.querySelectorAll('.ps-check').forEach(cb=>cb.checked=e.target.checked);
   });
 
   // Stock toggle — hand-editable per part, independent of the Tools Catalog
   // import that auto-checks it (see saveToolsImport / _psCellHTML 'own_stock').
-  document.querySelectorAll('.ps-stock-toggle').forEach(cb=>cb.addEventListener('change',async()=>{
+  table.addEventListener('change',async e=>{
+    const cb=e.target.closest('.ps-stock-toggle'); if(!cb) return;
     const id=cb.dataset.id, val=cb.checked;
     try{
       await updatePartFields(id,{own_stock:val});
       const p=S.allParts.find(p=>p._id===id); if(p) p.own_stock=val;
-    }catch(e){ toast('Error: '+e.message,'error'); cb.checked=!val; }
-  }));
+    }catch(err){ toast('Error: '+err.message,'error'); cb.checked=!val; }
+  });
 
   // Refresh — force a fresh read from Firestore (bypasses the in-memory allParts cache)
   // The table stays on screen while it reads; the button says it is working.
@@ -564,9 +633,9 @@ export function _psRender(filter='', view={}){
 
   // FindChips button — check selected rows (or all matching rows across every page if none selected)
   document.getElementById('btn-ps-fc')?.addEventListener('click',()=>{
-    const checked=[...document.querySelectorAll('.ps-check:checked')].map(cb=>cb.dataset.id);
-    const targets = checked.length
-      ? sorted.filter(p=>checked.includes(p._id))
+    _psSyncSel();
+    const targets = _psSel.size
+      ? sorted.filter(p=>_psSel.has(p._id))
       : sorted.slice(0,2000);
     const items=targets.filter(p=>p.part_number).map(p=>({
       _id:p._id, part_number:p.part_number, qty:parseFloat(p.qty)||1, unit:p.unit||p.units||'',
@@ -584,8 +653,8 @@ export function _psRender(filter='', view={}){
 
   // Export Excel — selected rows only, or all filtered rows (across every page) if none selected
   document.getElementById('btn-ps-export')?.addEventListener('click',()=>{
-    const checked=[...document.querySelectorAll('.ps-check:checked')].map(cb=>cb.dataset.id);
-    const targets = checked.length ? sorted.filter(p=>checked.includes(p._id)) : sorted;
+    _psSyncSel();
+    const targets = _psSel.size ? sorted.filter(p=>_psSel.has(p._id)) : sorted;
     exportPartStockExcel(targets, sorted.length, COLS);
   });
 
@@ -594,7 +663,8 @@ export function _psRender(filter='', view={}){
   // the company's retention period. The audit log keeps their full content.
   document.getElementById('btn-ps-delsel')?.addEventListener('click', async()=>{
     if(!_psIsAdmin()){ toast('Only an admin can delete from the Database','error'); return; }
-    const checked=[...document.querySelectorAll('.ps-check:checked')].map(cb=>cb.dataset.id);
+    _psSyncSel();
+    const checked=[..._psSel];
     if(!checked.length){ toast('No rows selected','error'); return; }
     if(!confirm(`Move ${checked.length} selected part(s) to Deleted items?\nThey can be restored for ${S._psTrashDays} days.`)) return;
     try{

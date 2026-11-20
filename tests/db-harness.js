@@ -205,6 +205,32 @@ const DAY=86400000;
   ok('guard: the role check is the admin role', M._psIsAdmin()===false);
   ok('guard: and no auto purge runs for a user', (await M._psAutoPurge())===0);
 
+  // ── a long page draws its first rows only, and selection covers them all (v1.83.1) ──
+  for(let i=0;i<100;i++) DB[PC]['L'+i]={part_number:'L'+String(i).padStart(3,'0'), description:'live '+i};
+  vm.runInContext(`currentUserRole='admin'; psPageSize='all'; allParts=[]; trashParts=[];`, ctx);
+  // jsdom has no layout: give the table a height so it is not "scrolled to the end"
+  Object.defineProperty(g.HTMLElement.prototype,'scrollHeight',{configurable:true,get(){ return 5000; }});
+  await M.renderPartStock(''); await settle();
+  const live=Object.values(DB[PC]).filter(p=>!p.deleted).length;
+  const drawn=()=>g.document.querySelectorAll('#ps-table tbody tr[data-id]').length;
+  ok('long page: only the first rows are drawn at once', live>M.PS_FIRST_ROWS && drawn()===M.PS_FIRST_ROWS);
+  ok('long page: says how many are left', new RegExp(`Showing ${M.PS_FIRST_ROWS} of ${live}`).test(html()));
+  ok('long page: the count is still every part', new RegExp(`${live} parts`).test(html()));
+  const all=g.document.getElementById('ps-check-all'); all.checked=true; all.dispatchEvent(new g.Event('change'));
+  ok('select all: picks every row of the page, drawn or not', M._psSelected().size===live);
+  const cb=g.document.querySelector('#ps-table .ps-check'); cb.checked=false; cb.dispatchEvent(new g.Event('change',{bubbles:true}));
+  ok('select all: un-ticking one drawn row leaves the rest', M._psSelected().size===live-1);
+  // closing Deleted items without a change does not redraw the table
+  const tbl=g.document.getElementById('ps-table');
+  M.openTrashModal(()=>M.renderPartStock(''));
+  g.document.getElementById('trash-close').click(); await settle();
+  ok('trash: closing without a change keeps the table as it was', g.document.getElementById('ps-table')===tbl && !g.document.getElementById('modal-bg'));
+  // scrolled to the end: the next rows come in
+  delete g.HTMLElement.prototype.scrollHeight;
+  g.document.getElementById('ps-table-wrap').dispatchEvent(new g.Event('scroll')); await settle();
+  ok('long page: scrolling to the end draws the rest', g.document.querySelectorAll('#ps-table tbody tr[data-id]').length===live && !g.document.querySelector('.ps-more-row'));
+  vm.runInContext(`psPageSize=20;`, ctx);
+
   // pure helpers
   const now=Date.now();
   ok('days: a fresh delete has the full period left', M._psDaysLeft({deletedAtMs:now},30,now)===30);

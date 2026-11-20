@@ -57,6 +57,13 @@ export function showModal(html){
   return bg;
 }
 export function closeModal(){const m=document.getElementById('modal-bg');if(m)m.remove();}
+// Runs fn after the browser has painted what is on screen now — for work that
+// follows a click (a redraw after a dialog closes), so the click shows at once.
+export function afterPaint(fn){
+  const raf=globalThis.requestAnimationFrame;
+  if(typeof raf!=='function'){ setTimeout(fn,0); return; }
+  raf(()=>setTimeout(fn,0));
+}
 
 export function setContent(html){document.getElementById('content').innerHTML=html;}
 export function setActions(html){document.getElementById('topbar-actions').innerHTML=html;}

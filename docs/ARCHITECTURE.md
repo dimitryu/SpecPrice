@@ -258,3 +258,13 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
   - הנתב כבר לא מנקה `S.allParts` בכניסה ל-Database.
 - **Hover = lit (`06-theme.css`):** כפתור/כרטיס מתחת לעכבר נדלק בנחושת כמו הראשי; הראשי באותה שורה חוזר למסגרת (`:has()`); אדומים נדלקים באדום; `:focus-visible` כמו hover.
 - Stub של Firestore (`tests/smoke`) מכיר `limit` ו-`__partsDelay`/`__peekDelay`. בדיקות: `tests/db-load-harness.js` (20), `db-harness.js` מחכה ל-purge שרץ אחרי הציור.
+
+## v1.83.1 — כל לחיצה עונה מיד
+- **הסיבה:** עם "All" (או 500) בעמוד, טבלה של ~1200 שורות לקחה כ-3 שניות לפריסה (layout) — בפתיחה, ושוב אחרי כל מיון, חיפוש וסגירת חלון (סגירת Deleted items קראה ל-`renderPartStock` מיד).
+- **שורות לפי גלילה (`features/database.js`):** `PS_FIRST_ROWS`=40 שורות מצוירות מיד, ו-`PS_MORE_ROWS`=60 נוספות כשהגלילה מתקרבת לסוף (`_psMoreRows`, מאזין `scroll` על `#ps-table-wrap`), עם שורת "Showing n of N — scroll down for more". לפני המנה הראשונה רוחבי העמודות ננעלים (`lockTableLayout`) כדי שהפריסה תהיה רק של השורות החדשות.
+- **בחירה ב-`_psSel` (Set):** סמן-הכול בוחר את כל שורות העמוד, גם אלה שלא צוירו; `_psSyncSel()` מסנכרן מתיבות הסימון שעל המסך. Check Price / Export / Delete קוראים ממנו (`_psSelected()` לבדיקות).
+- מאזינים לשורות (קישור שרטוט, Stock) עברו ל-delegation על הטבלה, כך שהם עובדים גם לשורות שנוספות בגלילה.
+- **`afterPaint(fn)`** ב-`core/ui.js`: עבודה שאחרי לחיצה רצה אחרי שהמסך צויר. Deleted items: סגירה מצוירת מיד; ציור הטבלה מחדש רק אם שוחזר/נמחק משהו, ואחרי שהחלון נעלם.
+- Check Price: מסגרת החלון מצוירת קודם, והשורות (עד ~1200) נכנסות בפריים הבא.
+- חיפוש: debounce ירד מ-260 ל-150 ms.
+- מדידות (1200 חלקים, All): פתיחת Database 3.3s→0.1s, מיון 2.6s→0.05s, סגירת Deleted items 2.9s→0.03s.

@@ -1,6 +1,6 @@
 import { S } from '../core/state.js';
 import { logDrawingsOf, logSystemAudit, setLogDrawing } from '../core/audit.js';
-import { closeModal, esc, showModal, toast } from '../core/ui.js';
+import { afterPaint, closeModal, esc, showModal, toast } from '../core/ui.js';
 import { mergePartDoc, updatePartFields } from '../data/parts.js';
 import { lookupBottleOffers, lookupPartPrices } from '../data/pricing.js';
 import { SD_NOMINAL_LABEL_PRICE, _adhesiveFamily, _parsePackMl, _priceTargetQty, _sdBottlesFor, _sdBottlesText, _sdIsLabelRow, _sdLineCost, _sdPickBottles, _sdRecalcTotal } from '../domain/pricing.js';
@@ -108,6 +108,26 @@ export async function runFCCheckModal(items, mode, opts={}){
       mouser_pack_ml:it.mouser_pack_ml, digikey_pack_ml:it.digikey_pack_ml, onlinecomp_pack_ml:it.onlinecomp_pack_ml, farnell_pack_ml:it.farnell_pack_ml, [field]:p}, field);
   };
 
+  // The rows are built here but put in only after the dialog has been painted:
+  // a check of the whole Database is a thousand rows, and laying them out
+  // first kept the button looking dead for a moment (v1.83.1).
+  const _fcRowsHTML=headless ? '' : items.map((it,i)=>`<tr id="fc-row-${i}">
+              <td id="fc-pn-${i}">${esc(it.part_number)}${(it.alt_mpns||[]).length>1
+                ? `<span style="margin-left:5px;padding:1px 5px;border-radius:8px;background:var(--chip-bg);color:var(--chip-ink);font-size:9px;font-weight:700" title="${esc((it.alt_mpns||[]).map(a=>a.mpn).join('\n'))}">${(it.alt_mpns||[]).length} QVL</span>`
+                : ''}</td>
+              <td id="fc-mf-${i}" style="color:var(--muted)">${esc(it.manufacturer||'')||'—'}</td>
+              <td>${it.qty||1}</td>
+              <td id="fc-mo-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-ms-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-dk-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-ds-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-oc-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-os-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-fa-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-fs-${i}" style="color:var(--muted)">—</td>
+              <td id="fc-pr-${i}" style="color:var(--muted)">${money(_lineCost(it,'priority_price',parseFloat(it.priority_price)||0))||'—'}</td>
+              <td id="fc-st-${i}"><span class="ring" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle"></span></td>
+            </tr>`).join('');
   if(!headless) showModal(`<div class="modal" style="width:min(96vw,1160px)">
     <div class="modal-head"><h3>🔍 Check Price</h3><button class="close-modal" id="fc-close-x">✕</button></div>
     <div class="modal-body" id="fc-modal-body">
@@ -129,23 +149,7 @@ export async function runFCCheckModal(items, mode, opts={}){
             <th>Status</th>
           </tr></thead>
           <tbody id="fc-res-tbody">
-            ${items.map((it,i)=>`<tr id="fc-row-${i}">
-              <td id="fc-pn-${i}">${esc(it.part_number)}${(it.alt_mpns||[]).length>1
-                ? `<span style="margin-left:5px;padding:1px 5px;border-radius:8px;background:var(--chip-bg);color:var(--chip-ink);font-size:9px;font-weight:700" title="${esc((it.alt_mpns||[]).map(a=>a.mpn).join('\n'))}">${(it.alt_mpns||[]).length} QVL</span>`
-                : ''}</td>
-              <td id="fc-mf-${i}" style="color:var(--muted)">${esc(it.manufacturer||'')||'—'}</td>
-              <td>${it.qty||1}</td>
-              <td id="fc-mo-${i}" style="color:var(--muted)">—</td>
-              <td id="fc-ms-${i}" style="color:var(--muted)">—</td>
-              <td id="fc-dk-${i}" style="color:var(--muted)">—</td>
-              <td id="fc-ds-${i}" style="color:var(--muted)">—</td>
-              <td id="fc-oc-${i}" style="color:var(--muted)">—</td>
-              <td id="fc-os-${i}" style="color:var(--muted)">—</td>
-              <td id="fc-fa-${i}" style="color:var(--muted)">—</td>
-              <td id="fc-fs-${i}" style="color:var(--muted)">—</td>
-              <td id="fc-pr-${i}" style="color:var(--muted)">${money(_lineCost(it,'priority_price',parseFloat(it.priority_price)||0))||'—'}</td>
-              <td id="fc-st-${i}"><span class="ring" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle"></span></td>
-            </tr>`).join('')}
+
           </tbody>
         </table>
       </div>
@@ -177,6 +181,10 @@ export async function runFCCheckModal(items, mode, opts={}){
       <span id="fc-summary" style="font-size:12px;color:var(--muted)"></span>
     </div>
   </div>`);
+  if(!headless){
+    if(items.length>60) await new Promise(r=>afterPaint(r));
+    const tb=document.getElementById('fc-res-tbody'); if(tb) tb.innerHTML=_fcRowsHTML;
+  }
 
   const _fcRefresh=()=>{ if(mode==='parts'){S.allParts=[];renderPartStock();}else{renderSalesDesk();} };
   document.getElementById('btn-fc-stop')?.addEventListener('click',()=>{stopped=true;closeModal();_fcRefresh();});
