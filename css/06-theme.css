@@ -22,7 +22,7 @@
   --bg:#F3F1EC; --grid:rgba(31,38,48,.045);
   --surface:#FFFFFF; --surface-2:#F8F6F2; --line:#DDD8CF; --line-2:#E9E5DD;
   --primary:#B4532A; --primary-h:#963F1C; --on-primary:#FFFFFF; --primary-soft:#F6E7DE;
-  --ok:#2E7D4F; --ok-soft:#E3F1E8; --bad:#B42318; --bad-soft:#FBE9E7;
+  --ok:#2A7349; --ok-soft:#E3F1E8; --bad:#B42318; --bad-soft:#FBE9E7;
   --warn:#A15C07; --warn-soft:#FCF0DC;
   --info-bg:#F4F1EB; --info-line:#E3DDD3; --link:#9A4520;
   --chip-bg:#ECE6DC; --chip-ink:#5A4632;
@@ -242,3 +242,67 @@ details.sym-legend summary { color:var(--muted); }
    the light page hover turned them into a grey block with grey text. */
 .topbar .btn-ghost:hover:not(:disabled) { background:rgba(255,255,255,.14); color:#F3F1EC; border-color:rgba(255,255,255,.12); }
 .tb-brand .tb-name { white-space:nowrap; }
+
+/* ── Hover = lit (v1.83) ──
+   The button under the pointer lights up the way the screen's primary does
+   (copper fill, white text), so it is always clear what a click will press.
+   While another button in the same row is lit, that row's primary steps back
+   to a copper outline: one lit button at a time. Keyboard focus lights the
+   same way. Red buttons light in red: they keep their meaning. */
+.btn:not(:disabled):is(:hover,:focus-visible),
+.tbl-scroll-btn:not(:disabled):is(:hover,:focus-visible),
+.topbar .btn:not(:disabled):is(:hover,:focus-visible),
+.topbar .btn-ghost:not(:disabled):is(:hover,:focus-visible),
+.tb-chip:not(:disabled):is(:hover,:focus-visible),
+.role-save:not(:disabled):is(:hover,:focus-visible) {
+  background:var(--primary) !important; border-color:var(--primary) !important; color:#fff !important; opacity:1; }
+/* the primary itself goes one step darker */
+:is(.btn-primary, .btn-green:not(#btn-sd-fc,#btn-ps-export,#btn-bom-export,#stat-export-all,#btn-invite-user,#btn-new-role,#trash-restore),
+    #btn-sd-file, #btn-ps-fc, #btn-cs-new, #btn-cs-new2, #btn-mfg-new, #btn-mfg-new2, #btn-support-send, #btn-add-drawing,
+    .modal-foot .btn-blue):not(:disabled):is(:hover,:focus-visible) {
+  background:var(--primary-h) !important; border-color:var(--primary-h) !important; color:#fff !important; }
+.btn-red:not(:disabled):is(:hover,:focus-visible), #btn-sd-clear:not(:disabled):is(:hover,:focus-visible) {
+  background:var(--bad) !important; border-color:var(--bad) !important; color:#fff !important; }
+.modal-foot .btn-red:not(:disabled):is(:hover,:focus-visible) { background:#911B12 !important; border-color:#911B12 !important; }
+/* the row's primary steps back while a sibling is lit */
+:not(.topbar *):has(> :is(.btn,.tbl-scroll-btn):not(:disabled):hover)
+  > :is(.btn-primary, .btn-green:not(#btn-sd-fc,#btn-ps-export,#btn-bom-export,#stat-export-all,#btn-invite-user,#btn-new-role,#trash-restore),
+        #btn-sd-file, #btn-ps-fc, #btn-cs-new, #btn-cs-new2, #btn-mfg-new, #btn-mfg-new2, #btn-support-send, #btn-add-drawing,
+        .modal-foot .btn-blue):not(:hover):not(:focus-visible) {
+  background:var(--surface) !important; color:var(--primary-h) !important; border-color:var(--primary) !important; }
+.topbar:has(.btn:not(:disabled):hover) :is(.btn-green,.btn-primary):not(.is-on):not(:hover):not(:focus-visible) {
+  background:transparent !important; color:#F3F1EC !important; border-color:var(--primary) !important; }
+/* the two-way switch: the selected option stays copper; the one under the pointer gets a copper frame */
+.topbar .tb-seg .btn:not(.is-on):not(:disabled):is(:hover,:focus-visible) {
+  background:rgba(180,83,42,.18) !important; border-color:var(--primary) !important; color:#fff !important; }
+.sd-view-btn[aria-pressed="false"]:is(:hover,:focus-visible) { background:var(--primary-soft) !important; color:var(--primary-h) !important;
+  box-shadow:inset 0 0 0 1px var(--primary); }
+#btn-home:is(:hover,:focus-visible) { color:#fff !important; text-decoration:underline; text-decoration-color:var(--primary);
+  text-decoration-thickness:2px; text-underline-offset:6px; }
+
+/* Home cards: the card under the pointer lights like the first (hero) card,
+   and the hero steps back while another card is lit. */
+.home-btn:not(.home-btn-off):not(:disabled):is(:hover,:focus-visible) {
+  border-color:var(--primary) !important; box-shadow:inset 3px 0 0 var(--primary), 0 6px 18px rgba(28,35,45,.08); }
+.home-btn:not(.home-btn-off):not(:disabled):is(:hover,:focus-visible) .home-btn-icon {
+  background:var(--primary); color:#fff; border-color:var(--primary); }
+.home-btn:not(.home-btn-off):not(:disabled):is(:hover,:focus-visible) .home-btn-go { color:var(--primary); }
+.home-wrap:has(.home-btn:not(.home-btn-off):not(:disabled):hover) .home-btn-hero:not(:hover) {
+  border-color:var(--line); box-shadow:none; }
+.home-wrap:has(.home-btn:not(.home-btn-off):not(:disabled):hover) .home-btn-hero:not(:hover) .home-btn-icon {
+  background:var(--surface-2); color:var(--primary); border-color:var(--line-2); }
+
+/* ── Database: loading frame (v1.83) ──
+   The table frame is on screen at once; placeholder bars stand in for rows
+   until the first page arrives. Controls stay locked until the full list is in. */
+.ring.ring-sm { width:13px; height:13px; border-width:2px; border-color:var(--line-2); border-top-color:var(--primary); }
+.ps-loading-badge { display:inline-flex; align-items:center; gap:7px; color:var(--primary-h); font-weight:600; }
+.ps-skel { display:inline-block; height:10px; border-radius:5px; vertical-align:middle;
+  background:linear-gradient(90deg, var(--line-2) 0%, #F3EFE8 50%, var(--line-2) 100%); background-size:200% 100%;
+  animation:ps-skel 1.2s ease-in-out infinite; }
+@keyframes ps-skel { from { background-position:100% 0; } to { background-position:-100% 0; } }
+#ps-table.ps-is-loading thead th { cursor:default; }
+#ps-table.ps-is-loading tbody tr { opacity:.85; }
+#btn-ps-refresh.is-busy .ic { animation:ps-spin .8s linear infinite; }
+@keyframes ps-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ps-skel, #btn-ps-refresh.is-busy .ic { animation:none; } }

@@ -64,6 +64,8 @@ const audits=a=>Object.values(DB[AL]||{}).filter(x=>x.action===a);
 const html=()=>g.document.getElementById('content').innerHTML;
 const actions=()=>g.document.getElementById('topbar-actions').innerHTML+html();
 const tick=()=>new Promise(r=>setTimeout(r,0));
+// v1.83: the purge runs after the screen is drawn and redraws it when done.
+const settle=async()=>{ for(let i=0;i<8;i++) await tick(); };
 const DAY=86400000;
 
 (async()=>{
@@ -76,9 +78,9 @@ const DAY=86400000;
   DB['companies']={c1:{name:'Radion'}};
 
   // ── a regular user: sees only live parts, and cannot delete ─────────────
-  vm.runInContext(`companyId='c1'; currentUserEmail='user@x'; currentUserRole='agent';
+  vm.runInContext(`companyId='c1'; currentUserEmail='user@x'; currentUserRole='agent'; S.currentView='part-stock';
     allParts=[]; trashParts=[]; _psTrashDays=30;`, ctx);
-  await M.renderPartStock('');
+  await M.renderPartStock(''); await settle();
   ok('user: the Database lists the live parts', /P-LIVE-1/.test(html()) && /P-LIVE-2/.test(html()));
   no('user: ...and never a deleted one', /P-RECENT|P-OLD/.test(html()));
   no('user: no Delete button', /btn-ps-delsel/.test(actions()));
@@ -87,7 +89,7 @@ const DAY=86400000;
 
   // ── an admin: parts past their retention are purged on opening ──────────
   vm.runInContext(`currentUserEmail='admin@x'; currentUserRole='admin'; allParts=[]; trashParts=[];`, ctx);
-  await M.renderPartStock('');
+  await M.renderPartStock(''); await settle();
   no('admin: a part deleted 40 days ago is gone for good', !!DB[PC]['P-OLD']);
   ok('admin: ...and the audit log kept its content first',
      audits('database_purge_parts').some(a=>(a.details.items||[]).some(i=>i.part_number==='P-OLD' && i.description==='Old part')));

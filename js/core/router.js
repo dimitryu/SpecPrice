@@ -6,6 +6,7 @@ import { allowedViews, canView, disabledViews, isReadOnlyUser } from './roles.js
 import { companyName, currentUserRole } from './session.js';
 import { esc, setActions, setContent } from './ui.js';
 import { APP_VER } from './version.js';
+import { prefetchParts } from '../data/parts.js';
 import { renderAdminPage } from '../features/admin.js';
 import { renderCustomers } from '../features/customers.js';
 import { renderCutStrip } from '../features/cutstrip/list.js';
@@ -44,14 +45,13 @@ export function route(v, opts={}){
   if(S.currentView!=='home') logAudit('screen_open',{screen:S.currentView},true);
   if(S.currentView==='home') renderHome();
   else if(S.currentView==='part-stock'){
-    // Navigating to Part Stock always refetches from Firestore, so parts added
-    // on other screens (Add Drawing extraction, Priority Import, etc.) show up
-    // immediately without needing a full page reload. Same-screen interactions
-    // (search/sort/paging) call renderPartStock() directly rather than route(),
-    // so they keep reusing the in-memory cache and don't re-hit Firestore on
-    // every keystroke.
-    S.allParts=[];
-    renderPartStock();
+    // Navigating to the Database draws at once from the list in memory (Home
+    // prefetches it) and then reads Firestore again in the background, so
+    // parts added on other screens or by other users still show up — the
+    // table is redrawn quietly if anything changed (v1.83). Same-screen
+    // interactions (search/sort/paging) call renderPartStock() directly and
+    // reuse the in-memory list without re-reading.
+    renderPartStock('', {revalidate:true});
   }
   else if(S.currentView==='rfq') renderRFQList();
   else if(S.currentView==='sales-desk') renderSalesDesk();
@@ -139,6 +139,17 @@ export function renderHome(){
     </div>`);
   document.querySelectorAll('.home-btn:not(.home-btn-off)')
     .forEach(b=>b.addEventListener('click',()=>route(b.dataset.view)));
+  // Read the parts list while the user is still on Home (v1.83), so the
+  // Database (and the Sales Desk's "Add from Database") open without waiting:
+  // at once when the pointer reaches a card that uses it, otherwise when the
+  // browser is idle. One read per session; the Database re-checks it anyway.
+  const usesParts=['part-stock','sales-desk'].filter(v=>views.includes(v)&&!off.has(v));
+  if(usesParts.length){
+    usesParts.forEach(v=>document.querySelector(`.home-btn[data-view="${v}"]`)
+      ?.addEventListener('pointerenter',()=>prefetchParts(),{once:true}));
+    const idle=window.requestIdleCallback||(f=>setTimeout(f,600));
+    idle(()=>prefetchParts(),{timeout:1500});
+  }
   document.getElementById('btn-home-signout')?.addEventListener('click',
     () => logAudit('logout',null,true).finally(()=>signOut(auth).then(() => location.href = 'index.html')));
   _supRenderBadges();   // the Admin tile carries the "waiting for you" count

@@ -239,3 +239,22 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
   צבע (`_csWireColor`, כולל פס לדו-צבעי), עובי לפי AWG, legs באורך שלהם, תווית צבע → פין/יעד. גיד יחיד — כמו קודם.
 - בדיקות: `tests/ai-routing-harness.js`, ותוספות ב-`cs-harness.js` וב-`functions-harness.js`.
 
+
+## v1.82.1 — מערכת עיצוב כתובה וניגודיות
+- **`DESIGN.md`** בשורש הפרויקט: מערכת העיצוב Copper & Graphite כמקור האמת לכל החלטה ויזואלית (טוקנים, גופנים, מרווחים, רכיבים, נגישות, יומן החלטות).
+- ניגודיות: `--muted` #6B6F76 → **#666A71** (4.47 → 4.81), `--ok`/`--green` #2E7D4F → **#2A7349** (4.33 → 4.94). גם ב-`index.html`.
+
+## v1.83 — Database נפתח מהר, ו-hover ברור
+- **טעינת רשימת החלקים (`data/parts.js`):**
+  - `prefetchParts()` — מסך הבית מתחיל לקרוא את `parts_cache` כשהדפדפן פנוי, ומיד כשהעכבר מגיע לכרטיס Database / Sales Desk. קריאה אחת לסשן.
+  - `loadParts()` — משתף קריאה שכבר רצה (`_partsFetch`). קריאה שהתחילה **לפני** ש-`S.allParts` נוקה לא נחשבת — נקרא שוב. כך כל המקומות שעושים `S.allParts=[]; await loadParts()` אחרי שמירה ממשיכים לקבל נתונים טריים.
+  - `peekParts(n)` — `query(limit(n))` למבט ראשון בלבד (בלי מחוקים). לא מחפשים / ממיינים / מייצאים ממנו.
+  - `refreshParts()` — קריאה חוזרת ברקע; מחזיר true רק אם טביעת האצבע (`S._partsSig`) השתנתה. `S._partsAt` — מתי נקרא.
+- **מסך Database (`features/database.js`):**
+  - `renderPartStock(filter, {revalidate})` — רשימה בזיכרון: מצייר מיד, ואז `refreshParts()` ברקע (רק אם הרשימה בת יותר מ-20 שניות, `PS_FRESH_MS`).
+  - טעינה קרה: מסגרת טבלה עם שורות placeholder (`.ps-skel`) → השורות הראשונות (`PS_PEEK_MAX`=100) עם "First n parts — loading the rest…" → הטבלה המלאה. כל הפקדים נעולים עד שהכול נטען.
+  - `_psRender` — הציור עצמו (מה שהיה גוף `renderPartStock`). `_psRedrawQuietly` — ציור חוזר ששומר חיפוש+סמן, שורות מסומנות וגלילה; מחכה אם פתוח חלון או עורכים תא.
+  - `_psAutoPurge` רץ **אחרי** הציור ולא חוסם אותו. Refresh משאיר את הטבלה ומסובב אייקון.
+  - הנתב כבר לא מנקה `S.allParts` בכניסה ל-Database.
+- **Hover = lit (`06-theme.css`):** כפתור/כרטיס מתחת לעכבר נדלק בנחושת כמו הראשי; הראשי באותה שורה חוזר למסגרת (`:has()`); אדומים נדלקים באדום; `:focus-visible` כמו hover.
+- Stub של Firestore (`tests/smoke`) מכיר `limit` ו-`__partsDelay`/`__peekDelay`. בדיקות: `tests/db-load-harness.js` (20), `db-harness.js` מחכה ל-purge שרץ אחרי הציור.

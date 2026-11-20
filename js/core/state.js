@@ -50,6 +50,10 @@ export const S = {
   // purged. Loaded with the same snapshot as allParts, kept apart from it so
   // no other screen ever sees a deleted part.
   trashParts: [],
+  // When the parts list was last read (ms) and a fingerprint of what it held:
+  // the Database uses them to skip a needless re-read and to redraw only on change.
+  _partsAt: 0,
+  _partsSig: '',
   // owner: data/parts.js
   _psTrashDays: 30,
   // owner: features/cutstrip/list.js

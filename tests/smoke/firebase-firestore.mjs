@@ -7,7 +7,7 @@ export function getFirestore(){ return {}; }
 export function collection(db,...a){ return { __col:p(a) }; }
 export function doc(db,...a){ if(db&&db.__col){ return { __doc:db.__col, id:a[0]||('id'+(++seq)) }; }
   return { __doc:p(a.slice(0,-1)), id:a[a.length-1] }; }
-export function query(col,...cl){ return { ...col, __where:cl.filter(c=>c&&c.__w), __order:cl.find(c=>c&&c.__o) }; }
+export function query(col,...cl){ const l=cl.find(c=>c&&c.__l); return { ...col, __where:cl.filter(c=>c&&c.__w), __order:cl.find(c=>c&&c.__o), __limit:l?l.__l:0 }; }
 export function where(f,op,v){ return { __w:true, f, op, v }; }
 export function orderBy(f,d){ return { __o:true, f, d }; }
 export function limit(n){ return { __l:n }; }
@@ -16,9 +16,15 @@ export function arrayUnion(...v){ return { __au:v }; }
 export function deleteField(){ return { __del:true }; }
 const snap=(path,id,data)=>({ id, exists:()=>data!==undefined, data:()=>data, ref:{ __doc:path, id } });
 export async function getDoc(r){ const d=(DB[r.__doc]||{})[r.id]; return snap(r.__doc, r.id, d); }
-export async function getDocs(q){ const col=DB[q.__col]||{}; let rows=Object.entries(col).map(([id,d])=>snap(q.__col,id,d));
+// __partsDelay / __peekDelay (ms) make a parts_cache read slow, to test the Database loading frame.
+// __partsReads counts the reads of parts_cache ({full, peek}).
+export async function getDocs(q){
+  if(/parts_cache$/.test(q.__col||'')){ const c=(globalThis.__partsReads=globalThis.__partsReads||{full:0,peek:0}); if(q.__limit) c.peek++; else c.full++;
+    const ms=q.__limit?globalThis.__peekDelay:globalThis.__partsDelay; if(ms) await new Promise(res=>setTimeout(res,ms)); }
+  const col=DB[q.__col]||{}; let rows=Object.entries(col).map(([id,d])=>snap(q.__col,id,d));
   for(const w of (q.__where||[])) rows=rows.filter(r=>{ const v=r.data()[w.f]; return w.op==='=='?v===w.v:w.op==='in'?(w.v||[]).includes(v):true; });
   if(q.__order){ const f=q.__order.f; rows=rows.filter(r=>r.data()[f]!=null); }
+  if(q.__limit) rows=rows.slice(0,q.__limit);
   return { docs:rows, size:rows.length, empty:!rows.length, forEach:fn=>rows.forEach(fn) }; }
 const apply=(c,patch)=>{ for(const [k,v] of Object.entries(patch||{})){ if(v&&v.__del) delete c[k]; else if(v&&v.__au) c[k]=[...(c[k]||[]),...v.__au]; else c[k]=v; } };
 export async function setDoc(r,d,o){ if(globalThis.__dbDelay) await new Promise(res=>setTimeout(res,globalThis.__dbDelay)); const t=(DB[r.__doc]=DB[r.__doc]||{}); if(o&&o.merge&&t[r.id]) apply(t[r.id],d); else { t[r.id]={}; apply(t[r.id],d); } }

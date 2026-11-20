@@ -1,20 +1,74 @@
 import { S } from '../core/state.js';
 import { logAudit, logSystemAudit } from '../core/audit.js';
-import { arrayUnion, collection, db, deleteField, doc, getDoc, getDocs, serverTimestamp, setDoc, updateDoc, writeBatch } from '../core/firebase.js';
+import { arrayUnion, collection, db, deleteField, doc, getDoc, getDocs, limit, query, serverTimestamp, setDoc, updateDoc, writeBatch } from '../core/firebase.js';
 import { PROTECTED_ROLE } from '../core/roles.js';
 import { companyId, currentUserRole } from '../core/session.js';
 import { toast } from '../core/ui.js';
 import { _dbNormalizeUnit, _mergePartDrawing, _partDrawingsPatch, _sdDbNewDoc, _sdDbPatch } from '../domain/bom.js';
 
-export async function loadParts(){
-  if(S.allParts.length>0) return;
-  const snap=await getDocs(collection(db,'companies',companyId,'parts_cache'));
-  const docs=snap.docs.map(d=>({_id:d.id,...d.data()}));
+// ── Loading the parts list ───────────────────────────────────────────────────
+// The whole parts_cache (about a thousand documents) is one read of a few
+// seconds. Four things keep the Database screen from waiting on it (v1.83):
+//  · prefetchParts() starts that read while the user is still on Home, so the
+//    list is usually in memory before the Database card is clicked;
+//  · loadParts() shares a read already in flight instead of starting another;
+//  · peekParts(n) reads only the first n parts, for a first look on a cold load;
+//  · refreshParts() reads again in the background after the screen is drawn
+//    from memory, and says whether anything changed.
+// Code that needs a fresh list still clears S.allParts and calls loadParts():
+// a read that started BEFORE the clear is never trusted for that call.
+const _partsCol=()=>collection(db,'companies',companyId,'parts_cache');
+const _partsDocs=snap=>snap.docs.map(d=>({_id:d.id,...d.data()}));
+export function _partsFingerprint(docs){ try{ return JSON.stringify(docs); }catch{ return 'x'+Math.random(); } }
+function _partsApply(docs){
   // A deleted part is only marked, never removed at once (see the recycle
   // bin below). Every screen reads allParts, so splitting here is the one
   // place that keeps a deleted part out of searches, quotes and exports.
   S.allParts=docs.filter(p=>!_psIsDeleted(p));
   S.trashParts=docs.filter(_psIsDeleted);
+  S._partsSig=_partsFingerprint(docs);
+  S._partsAt=Date.now();
+}
+let _partsFetch=null;   // {ref, p}: the read in flight, and the S.allParts it was started for
+function _partsStart(){
+  const e={ref:S.allParts};
+  e.p=getDocs(_partsCol()).then(_partsDocs);
+  _partsFetch=e;
+  e.p.then(()=>{ if(_partsFetch===e) _partsFetch=null; }, ()=>{ if(_partsFetch===e) _partsFetch=null; });
+  return e;
+}
+export function _partsInFlight(){ return !!_partsFetch; }
+export async function loadParts(){
+  if(S.allParts.length>0) return;
+  const e=(_partsFetch && _partsFetch.ref===S.allParts) ? _partsFetch : _partsStart();
+  const docs=await e.p;
+  if(S.allParts!==e.ref){
+    if(S.allParts.length>0) return;   // another read filled it meanwhile
+    return loadParts();               // cleared after this read started: read again
+  }
+  _partsApply(docs);
+}
+// Start reading the list in the background (Home calls this). Never throws.
+export function prefetchParts(){
+  if(!companyId || S.allParts.length>0 || _partsFetch) return;
+  loadParts().catch(e=>console.warn('[parts] prefetch', e?.message));
+}
+// The first n parts in document order, deleted ones left out. For display only
+// while the full list loads: never search, sort, price or export from these.
+export async function peekParts(n){
+  const snap=await getDocs(query(_partsCol(), limit(n)));
+  return _partsDocs(snap).filter(p=>!_psIsDeleted(p));
+}
+// Read the list again and replace the one in memory. true when it changed.
+// Skipped (false) if something else replaced S.allParts while it was reading.
+export async function refreshParts(){
+  const ref=S.allParts;
+  const docs=_partsDocs(await getDocs(_partsCol()));
+  if(S.allParts!==ref) return false;
+  const sig=_partsFingerprint(docs);
+  if(sig===S._partsSig) return false;
+  _partsApply(docs);
+  return true;
 }
 
 // ── Recycle bin ───────────────────────────────────────────────────────────────

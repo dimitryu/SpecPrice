@@ -31,6 +31,12 @@ const L=require('./lib.js');
     await L.mark(o.page,['#ps-search','#ps-page-size','#btn-ps-refresh','#btn-ps-fc','#btn-ps-import','#btn-ps-export','#btn-ps-delsel','#btn-ps-trash','.count-badge']);
     const tb=await (await o.page.$('.toolbar')).boundingBox();
     await L.shot(o.page,'03-db-toolbar',{x:0,y:0,width:1000,height:tb.y+tb.height+16}); await o.b.close(); }
+  // the first open while the list is still on its way (v1.83)
+  { const o=await L.open({w:1300,h:620,init:'globalThis.__partsDelay=60000;globalThis.__peekDelay=50;'}); await L.signIn(o.page);
+    await o.page.click('.home-btn[data-view="part-stock"]'); await o.page.waitForSelector('#ps-table tbody tr[data-id]');
+    await o.page.mouse.move(5,600); await o.page.waitForTimeout(300);
+    await L.mark(o.page,[{sel:'#ps-table tbody',pad:2},{sel:'#ps-loading',pad:4},{sel:'#btn-ps-export',pad:3}]);
+    await L.shot(o.page,'03b-db-loading',{x:0,y:0,width:1300,height:470}); await o.b.close(); }
   await L.mark(page,[{sel:'#ps-table thead',pad:2},{sel:'.price-green',idx:1,pad:4},{sel:'.price-red',idx:1,pad:4},{sel:'.ps-stock-toggle',idx:1,pad:6},{sel:'#ps-table tbody tr td:nth-child(3)',idx:4,pad:2}]);
   await L.shot(page,'04-db-table',{x:0,y:70,width:1500,height:460});
   // check price modal on 4 selected rows

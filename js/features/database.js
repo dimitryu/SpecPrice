@@ -2,7 +2,7 @@ import { S } from '../core/state.js';
 import { logAudit } from '../core/audit.js';
 import { freezeLeftColumns, loadColOrder, makeColumnsReorderable, makeTableResizable, parseBoolQuery, wireScrollButtons, wireSearchClear, wireShiftCheck } from '../core/table.js';
 import { _buildPager, closeModal, debounce, esc, fmtDate, fmtPrice, setActions, setContent, showModal, toast } from '../core/ui.js';
-import { _PS_TRASH_DAY_OPTIONS, _psAutoPurge, _psDaysLeft, _psDeletedMs, _psIsAdmin, _psPurge, _psRestore, _psSetTrashDays, _psSoftDelete, loadParts, purgeLegacyFindChipsFields, updatePartFields } from '../data/parts.js';
+import { _PS_TRASH_DAY_OPTIONS, _psAutoPurge, _psDaysLeft, _psDeletedMs, _psIsAdmin, _psPurge, _psRestore, _psSetTrashDays, _psSoftDelete, loadParts, peekParts, purgeLegacyFindChipsFields, refreshParts, updatePartFields } from '../data/parts.js';
 import { _partDrawings, _pnKey } from '../domain/bom.js';
 import { _sdLineCost } from '../domain/pricing.js';
 import { openImportDataModal } from './importData.js';
@@ -339,25 +339,82 @@ export const _PRICE_LEGEND_HTML = `
     <span><strong style="color:#B45309">Stock 0</strong> listed, none on hand · <strong>—</strong> not listed by that vendor</span>
   </div>`;
 
-export async function renderPartStock(filter=''){
-  setContent(`<div style="text-align:center;padding:60px;color:var(--muted)"><div class="ring" style="margin:0 auto 12px"></div>Loading parts…</div>`);
+// ── Opening the Database fast (v1.83) ────────────────────────────────────────
+// The screen never waits on the whole parts list if it can help it:
+//  · list already in memory (prefetched on Home, or from an earlier visit):
+//    drawn at once, then read again in the background (opts.revalidate) and
+//    redrawn quietly only if something changed;
+//  · cold load: the table frame is drawn at once with placeholder rows, then
+//    the first page of parts as soon as it arrives, with the controls locked
+//    and "loading the rest"; the full table replaces it when the list is in.
+// Search, sort, paging, price check and export only ever run on the full list.
+export const PS_PEEK_MAX=100;
+export const PS_FRESH_MS=20000;
+export async function renderPartStock(filter='', opts={}){
   setActions('');
-  try { await loadParts(); } catch(e){ setContent(`<p style="color:red;padding:20px">${e.message}</p>`); return; }
+  if(!S.allParts.length){
+    _psRender(filter, {loading:true, rows:[]});
+    const full=loadParts();
+    const n=psPageSize==='all' ? 50 : Math.min(psPageSize, PS_PEEK_MAX);
+    peekParts(n).then(rows=>{
+      if(S.allParts.length || S.currentView!=='part-stock' || !rows.length || !document.getElementById('ps-loading')) return;
+      _psRender(filter, {loading:true, rows});
+    }).catch(()=>{});
+    try { await full; } catch(e){ setContent(`<p style="color:var(--bad);padding:20px">${esc(e.message)}</p>`); return; }
+    if(S.currentView!=='part-stock') return;
+    opts={...opts, revalidate:false};   // just read: nothing to check again
+  }
+  _psRender(filter);
   purgeLegacyFindChipsFields();  // fire-and-forget; never blocks the render
-  await _psAutoPurge();          // admins only; removes parts past their retention
+  // Admins only: removes parts past their retention. After the draw, so it
+  // never holds the screen; redraws only if it removed something.
+  _psAutoPurge().then(n=>{ if(n>0) _psRedrawQuietly(); }).catch(()=>{});
+  // Read again only if the list in memory is not fresh: a list read in the
+  // last 20 s (the Home prefetch, or a save on another screen, which always
+  // re-reads) would only cost a second read of the same thing.
+  if(opts.revalidate && Date.now()-(S._partsAt||0) > PS_FRESH_MS) refreshParts().then(ch=>{ if(ch) _psRedrawQuietly(); }).catch(e=>console.warn('[Database] refresh', e?.message));
+}
 
-  const predicate=parseBoolQuery(filter);
+// Redraw with the list now in memory, keeping what the user had on screen:
+// the search text and caret, ticked rows and scroll. Waits while a dialog is
+// open or a cell is being edited (up to 2 minutes), so it never pulls the
+// table out from under the user.
+export function _psRedrawQuietly(tries=0){
+  if(S.currentView!=='part-stock' || !document.getElementById('ps-table')) return;
+  const ae=document.activeElement;
+  const busy=document.getElementById('modal-bg') || (ae && ae.isContentEditable) || document.body.classList.contains('col-dragging');
+  if(busy){ if(tries<120) setTimeout(()=>_psRedrawQuietly(tries+1), 1000); return; }
+  const inp=document.getElementById('ps-search');
+  const filter=inp ? inp.value : '';
+  const hadFocus=ae===inp, caret=inp ? inp.selectionStart : 0;
+  const checked=new Set([...document.querySelectorAll('.ps-check:checked')].map(cb=>cb.dataset.id));
+  const wrap=document.getElementById('ps-table-wrap');
+  const sl=wrap?wrap.scrollLeft:0, st=wrap?wrap.scrollTop:0, wy=window.scrollY;
+  _psRender(filter, {keepFocus:hadFocus});
+  document.querySelectorAll('.ps-check').forEach(cb=>{ if(checked.has(cb.dataset.id)) cb.checked=true; });
+  const w2=document.getElementById('ps-table-wrap'); if(w2){ w2.scrollLeft=sl; w2.scrollTop=st; }
+  if(window.scrollY!==wy) window.scrollTo(0, wy);
+  const ni=document.getElementById('ps-search');
+  if(ni && hadFocus){ ni.focus(); try{ ni.setSelectionRange(caret, caret); }catch{} }
+}
+
+// Draws the screen from S.allParts, or — with view.loading — the locked
+// "loading" frame from view.rows (placeholder rows when there are none).
+export function _psRender(filter='', view={}){
+  const loading=!!view.loading;
+  const src=loading ? (view.rows||[]) : S.allParts;
+  const predicate=parseBoolQuery(loading ? '' : filter);
   // A search that IS a drawing number: the table shows that drawing's BOM —
   // the parts saved from it, with that drawing's revision and QTY.
   const _dwgQ=String(filter||'').trim().replace(/^"(.*)"$/,'$1').trim();
   const _dwgKey=_pnKey(_dwgQ);
-  const _dwgBom=_dwgKey.length>=4 ? S.allParts.filter(p=>_partDrawings(p).some(d=>_pnKey(d.drawing_number)===_dwgKey)) : [];
-  const filtered=(filter||'').trim()
-    ? S.allParts.filter(p=>predicate([p.part_number,p.drawing_number,p.drawing_name,p.atlantium_pn,
+  const _dwgBom=(!loading && _dwgKey.length>=4) ? S.allParts.filter(p=>_partDrawings(p).some(d=>_pnKey(d.drawing_number)===_dwgKey)) : [];
+  const filtered=(!loading && (filter||'').trim())
+    ? src.filter(p=>predicate([p.part_number,p.drawing_number,p.drawing_name,p.atlantium_pn,
         _partDrawings(p).map(d=>[d.drawing_name,d.atlantium_pn,d.revision?'rev '+d.revision:''].join(' ')).join(' '),p.description,
         p.manufacturer,p.distributor,p.qty,p.unit,p.units,(p.rfq_names||[]).join(' '),
         p.pin_count].map(v=>String(v||'')).join(' | ').toLowerCase()))
-    : S.allParts;
+    : src;
 
   // Sort ALWAYS runs over the full filtered set (all matching parts across every page),
   // never just the rows currently visible on screen.
@@ -372,9 +429,13 @@ export async function renderPartStock(filter=''){
   const totalItems=sorted.length;
   const effPageSize = psPageSize==='all' ? Math.max(totalItems,1) : psPageSize;
   const totalPages = psPageSize==='all' ? 1 : Math.max(1,Math.ceil(totalItems/psPageSize));
-  if(psPage>totalPages) psPage=totalPages;
-  if(psPage<1) psPage=1;
-  const pageStart=(psPage-1)*effPageSize;
+  // The loading frame always shows the first rows it has, and leaves the
+  // page the user was on alone for when the full list is in.
+  if(!loading){
+    if(psPage>totalPages) psPage=totalPages;
+    if(psPage<1) psPage=1;
+  }
+  const pageStart=loading ? 0 : (psPage-1)*effPageSize;
   const pageRows=sorted.slice(pageStart,pageStart+effPageSize);
 
   const COLS=loadColOrder('partstock',_PS_DEFAULT_COLS);
@@ -383,6 +444,9 @@ export async function renderPartStock(filter=''){
       <td style="text-align:center"><input type="checkbox" class="ps-check" data-id="${esc(p._id)}"></td>
       ${COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${_psCellHTML(c.k,p)}</td>`).join('')}
     </tr>`).join('');
+  const skel=loading && !pageRows.length
+    ? Array.from({length:8},(_,i)=>`<tr class="ps-skel-row"><td></td>${COLS.map((c,j)=>`<td><span class="ps-skel" style="width:${40+((i*7+j*13)%45)}%"></span></td>`).join('')}</tr>`).join('')
+    : '';
 
   const pageSizeOpts=[10,20,50,100,200,500].map(n=>`<option value="${n}" ${n===psPageSize?'selected':''}>${n}/page</option>`).join('')
     +`<option value="all" ${psPageSize==='all'?'selected':''}>All</option>`;
@@ -402,7 +466,9 @@ export async function renderPartStock(filter=''){
       <button class="btn btn-green" id="btn-ps-export" style="white-space:nowrap;flex-shrink:0">📊 Export to Excel</button>
       ${_psIsAdmin() ? `<button class="btn btn-red" id="btn-ps-delsel" style="white-space:nowrap;flex-shrink:0">🗑 Delete Selected</button>
       <button class="btn btn-ghost" id="btn-ps-trash" style="white-space:nowrap;flex-shrink:0" title="Deleted parts — restore or remove for good">♻ Deleted items${S.trashParts.length?` (${S.trashParts.length})`:''}</button>` : ''}
-      <span class="count-badge">${totalItems} parts — page ${psPage}/${totalPages}</span>
+      ${loading
+        ? `<span class="count-badge ps-loading-badge" id="ps-loading" role="status"><span class="ring ring-sm"></span>${pageRows.length?`First ${pageRows.length} parts — loading the rest…`:'Loading parts…'}</span>`
+        : `<span class="count-badge">${totalItems} parts — page ${psPage}/${totalPages}</span>`}
     </div>
     ${_dwgBom.length?(()=>{
       const d0=_partDrawings(_dwgBom[0]).find(d=>_pnKey(d.drawing_number)===_dwgKey)||{};
@@ -414,11 +480,20 @@ export async function renderPartStock(filter=''){
         <th style="width:28px"><input type="checkbox" id="ps-check-all" title="Select all"></th>
         ${COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}" title="Drag to reorder">${c.l}${arrow(c.k)}</th>`).join('')}
       </tr></thead>
-      <tbody>${rows||`<tr class="empty-row"><td colspan="${COLS.length+1}">No parts found</td></tr>`}</tbody>
+      <tbody>${skel||rows||`<tr class="empty-row"><td colspan="${COLS.length+1}">No parts found</td></tr>`}</tbody>
     </table></div>
     ${_symbolsLegend('db', _PRICE_LEGEND_HTML)}
     ${_buildPager(psPage,totalPages,'ps')}`);
   _wireSymbolsLegend();
+  if(loading){
+    // Locked until the full list is in: a search, sort or export on part of
+    // the Database would give a wrong answer.
+    const wrap=document.getElementById('content');
+    wrap.querySelectorAll('.toolbar button, .toolbar select, .toolbar input, #ps-table input, #ps-pager button').forEach(el=>{ el.disabled=true; });
+    document.getElementById('ps-table')?.classList.add('ps-is-loading');
+    document.getElementById('ps-table-wrap')?.setAttribute('aria-busy','true');
+    return;
+  }
 
   const inp=document.getElementById('ps-search');
   wireSearchClear('ps-search','ps-search-clear');
@@ -438,7 +513,7 @@ export async function renderPartStock(filter=''){
       if(ni){ni.focus();ni.setSelectionRange(s,s);}
     });
   },260));
-  inp.focus();
+  if(view.keepFocus!==false) inp.focus();
   document.querySelectorAll('thead th[data-col]').forEach(th=>th.addEventListener('click',()=>{
     const k=th.dataset.col;
     if(sortCol===k)sortAsc=!sortAsc;else{sortCol=k;sortAsc=true;}
@@ -478,9 +553,13 @@ export async function renderPartStock(filter=''){
   }));
 
   // Refresh — force a fresh read from Firestore (bypasses the in-memory allParts cache)
-  document.getElementById('btn-ps-refresh')?.addEventListener('click',()=>{
-    S.allParts=[]; S.trashParts=[];
-    renderPartStock(inp.value);
+  // The table stays on screen while it reads; the button says it is working.
+  document.getElementById('btn-ps-refresh')?.addEventListener('click',async e=>{
+    const b=e.currentTarget; b.disabled=true; b.classList.add('is-busy');
+    try{ await refreshParts(); }
+    catch(err){ toast('Error: '+err.message,'error'); b.disabled=false; b.classList.remove('is-busy'); return; }
+    _psRedrawQuietly();
+    toast('Database is up to date','success');
   });
 
   // FindChips button — check selected rows (or all matching rows across every page if none selected)
