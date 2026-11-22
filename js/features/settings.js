@@ -1,5 +1,5 @@
 import { S } from '../core/state.js';
-import { _BOM_EXCEL_PROMPT, _BOM_TEXT_PROMPT, _BOM_TOOL_RULE_SECTION, _BOM_VISION_PROMPT, _TITLE_BLOCK_PROMPT } from '../ai/bom.js';
+import { _BOM_CALLOUT_PROMPT, _BOM_EXCEL_PROMPT, _BOM_LOCATE_PROMPT, _BOM_TEXT_PROMPT, _BOM_TOOL_RULE_SECTION, _BOM_VISION_PROMPT, _TITLE_BLOCK_PROMPT } from '../ai/bom.js';
 import { _csPrompt } from '../ai/cutstrip.js';
 import { _cableProcessPrompt, _notesPrompt } from '../ai/process.js';
 import { _crimpToolPrompt } from '../ai/tooling.js';
@@ -85,6 +85,12 @@ export function _aiPromptCatalog(){
     {id:'bom-vision', title:'BOM extraction — page image (vision)',
      note:'Fallback when the PDF text layer is empty/sparse (table drawn as graphics), and for image uploads. Sent with the rendered page image.',
      text:_BOM_VISION_PROMPT},
+    {id:'bom-locate', title:'Finding the parts list (or the part labels) on a sheet',
+     note:'Sent with each page image first. Says where the parts-list table is; when there is none, how many parts are named in labels on the drawing and where.',
+     text:_BOM_LOCATE_PROMPT},
+    {id:'bom-callouts', title:'BOM extraction — parts named on the drawing (no table)',
+     note:'Used when a sheet has no parts list and its parts are written in labels on the drawing, with or without balloons. Sent with the drawing area rendered sharp, and the whole sheet if fewer parts come back than labels were counted.',
+     text:_BOM_CALLOUT_PROMPT},
     {id:'bom-excel',  title:'BOM extraction — Excel / CSV spreadsheet',
      note:'Used when the uploaded file is a spreadsheet (ERP/PLM BOM export). Understands hierarchical exports where only some row types are real components and vendor data sits on child rows.',
      text:_BOM_EXCEL_PROMPT('<bom-export>.xlsx')},

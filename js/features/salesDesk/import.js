@@ -541,6 +541,9 @@ export function _sdAddImportedRows(rows){
       // which reads as a real part, gets sent to Check Price as one, and
       // matches nothing. An empty cell is the truthful answer.
       part_number:r.part_number||'', description:r.description||'',
+      // The maker the drawing names (or the Database knows) comes across too —
+      // it used to stay blank until someone ran Check Price (v1.83.2).
+      manufacturer:String(r.manufacturer||'').trim()||match?.manufacturer||'',
       drawing_number:r.drawing_number||(_partLatestDrawing(match)||{}).drawing_number||match?.drawing_name||'',
       drawing_name:r.drawing_name||'', revision:r.revision||'', atlantium_pn:r.atlantium_pn||'',
       pin_count:r.pin_count||'', customer_supplied:!!r.customer_supplied,

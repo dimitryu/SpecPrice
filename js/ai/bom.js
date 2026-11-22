@@ -61,8 +61,19 @@ Return ONE JSON object and nothing else:
 {"found":true,"box":[x0,y0,x1,y1],"rows":<about how many data rows>}
 where the box is the table's outline as FRACTIONS of the image (0 = left/top, 1 = right/bottom —
 never pixels), including its header row and EVERY data row from the first item to the last, e.g. {"found":true,"box":[0.03,0.77,0.64,0.97],"rows":7}.
-If there is no parts list on this sheet: {"found":false}`;
-export async function _bomLocate(b64){
+
+If there is NO parts list on this sheet, look for parts NAMED ON THE DRAWING instead. Many cable
+drawings have no table: each part is written in a text label beside the picture, usually on a
+leader line and sometimes with a balloon number, e.g. "RED LED INDICATOR / APEM PN: Q8F8BXXR02E /
+EYAL PN: 106009330" or "AWG-24 RED / WEICO PN: 2124/19-2". Count EVERY such label that carries a
+part number — with or without a balloon — and give the box around the picture and ALL of those
+labels (leave out the title block, the revision table, the frame and the general notes):
+{"found":false,"labels":<how many part labels>,"box":[x0,y0,x1,y1]}
+If the sheet has neither a parts list nor part labels: {"found":false,"labels":0}`;
+export async function _bomLocate(b64){ return (await _bomLocateAll(b64)).table; }
+// Where the parts are on a sheet: {table} when it has a parts list, else
+// {callouts:{labels, box}} when its parts are named in labels on the drawing.
+export async function _bomLocateAll(b64){
   const resp=await _aiFetch({
     body:JSON.stringify(aiBody('bom_locate',{max_tokens:300, temperature:0, messages:[{role:'user',content:[
       {type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},
@@ -70,10 +81,49 @@ export async function _bomLocate(b64){
   });
   if(!resp.ok){ let m=`Anthropic error ${resp.status}`;
     try{const e=await resp.json();m=e.error?.message||m;}catch{}
-    if(_csModelRejected(resp.status,m)){ S._csModelDown=true; return _bomLocate(b64); }
+    if(_csModelRejected(resp.status,m)){ S._csModelDown=true; return _bomLocateAll(b64); }
     throw new Error(m); }
   const d=await resp.json();
-  return _bomParseLocate(_aiText(d));
+  const text=_aiText(d);
+  const table=_bomParseLocate(text);
+  return {table, callouts: table ? null : _bomParseCallouts(text)};
+}
+// {"found":false,"labels":8,"box":[…]} → {labels:8, box:[…]}; a missing or
+// unusable box means "read the whole sheet". null when no part labels.
+export function _bomParseCallouts(text){
+  const s=String(text||''); let o=null;
+  for(let i=s.indexOf('{'); i>=0 && !o; i=s.indexOf('{', i+1)){
+    const end=_jsonEnd(s, i);
+    if(end<0) continue;
+    try{ const v=JSON.parse(s.slice(i, end+1)); if(v && typeof v==='object' && v.found===false) o=v; }catch{}
+  }
+  const labels=Math.round(Number(o?.labels)||0);
+  if(!o || labels<=0) return null;
+  let box=null;
+  if(Array.isArray(o.box) && o.box.length===4){
+    let b=o.box.map(Number);
+    if(b.every(Number.isFinite)){
+      if(b.some(v=>v>1.5)) b=b.map(v=>v/100);
+      if(!b.some(v=>v<-0.02 || v>1.02) && b[2]>b[0] && b[3]>b[1]) box=b;
+    }
+  }
+  return {labels, box};
+}
+// Two readings of a drawing's labels, put together by part number (the item is
+// a balloon number at best, and most labels have none).
+export function _bomUnionByPart(a, b){
+  const n=v=>String(v||'').replace(/\s+/g,'').toUpperCase();
+  const out=[], pns=new Set(), cpns=new Set(), descs=new Set();
+  const add=(r, check)=>{
+    const pn=n(r?.part_number), cpn=n(r?.atlantium_pn), d=n(r?.description)+'|'+n(r?.manufacturer);
+    // the same part: its maker's number or the company's number is there already
+    // (a part with neither is matched by description and maker)
+    if(check && ((pn && pns.has(pn)) || (cpn && cpns.has(cpn)) || (!pn && !cpn && descs.has(d)))) return;
+    out.push(r); if(pn) pns.add(pn); if(cpn) cpns.add(cpn); if(!pn && !cpn) descs.add(d);
+  };
+  (a||[]).forEach(r=>add(r,false));
+  (b||[]).forEach(r=>add(r,true));
+  return out;
 }
 export function _bomParseLocate(text){
   // The first {...} that parses and says "found" — prose or a second object
@@ -139,14 +189,19 @@ export async function _bomFromPDF(file, setMsg){
   if((!rows.length || bomPageSparse || textShort) && _aiReady()){
     if(textShort) setMsg(`The text gave ${_partRows(rows)} of ${textRows} rows — reading the table from the drawing…`, 50);
     const order=pageImages.map((_,i)=>i);
+    const calloutPages=[];
     if(bomPageIdx>0){ order.splice(order.indexOf(bomPageIdx),1); order.unshift(bomPageIdx); }
     for(let k=0;k<order.length && (!rows.length || how!=='region');k++){
       const pi=order[k];
       if(!pageImages[pi]) continue;
       setMsg(`Looking for the parts list on page ${pi+1}/${pageImages.length}…`, 50+Math.round(30*k/order.length));
-      let loc=null;
-      try{ loc=await _bomLocate(pageImages[pi]); }catch(e){ lastErr=e; say(`Page ${pi+1}: locating the parts list failed — ${e.message}`); continue; }
-      if(!loc){ say(`Page ${pi+1}: parts list not located${reply()}`); continue; }
+      let loc=null, found=null;
+      try{ found=await _bomLocateAll(pageImages[pi]); loc=found.table; }catch(e){ lastErr=e; say(`Page ${pi+1}: locating the parts list failed — ${e.message}`); continue; }
+      if(!loc){
+        if(found.callouts){ calloutPages.push({pi, ...found.callouts}); say(`Page ${pi+1}: no parts list — about ${found.callouts.labels} part label(s) on the drawing`); }
+        else say(`Page ${pi+1}: parts list not located${reply()}`);
+        continue;
+      }
       say(`Page ${pi+1}: parts list located at [${loc.box.map(v=>(+v).toFixed(2)).join(', ')}]`);
       setMsg(`Reading the parts list on page ${pi+1}…`, 60+Math.round(30*k/order.length));
       const bands=await crop(pi, loc.box);
@@ -176,14 +231,44 @@ export async function _bomFromPDF(file, setMsg){
       }
       if(got.length && _partRows(got)>=_partRows(rows)){ rows=got; page=pi; how='region'; }
     }
+    // 2b. No parts list, but the parts are named in labels on the drawing:
+    //     read the labels from the drawing area rendered sharp, and — if fewer
+    //     came back than the locator counted — from the whole sheet as well.
+    if(!rows.length && calloutPages.length){
+      for(const c of calloutPages){
+        setMsg(`Reading the part labels on page ${c.pi+1}…`, 80);
+        const lbl=`Page ${c.pi+1} part labels`;
+        let got=[];
+        if(c.box){
+          for(const b64 of await crop(c.pi, c.box))
+            got=_bomUnionByPart(got, await read(lbl, '', true, {b64, mimeType:'image/jpeg'}, file.name, 'callouts'));
+        }
+        if(_partRows(got) < c.labels){
+          if(c.box) say(`${lbl}: ${_partRows(got)} of about ${c.labels} read — reading the whole sheet as well`);
+          setMsg(`Reading the part labels on the whole page ${c.pi+1}…`, 84);
+          got=_bomUnionByPart(got, await read(`${lbl} (whole sheet)`, '', true, {b64:pageImages[c.pi], mimeType:'image/jpeg'}, file.name, 'callouts'));
+        }
+        if(got.length){ rows=got; page=c.pi; how='callouts'; say(`${lbl}: ${_partRows(got)} part(s) read from the labels`); break; }
+      }
+    }
     // 3. Nothing located: the whole sheet, as before.
     if(!rows.length){
       for(let k=0;k<order.length;k++){
         const pi=order[k];
         if(!pageImages[pi]) continue;
         setMsg(`Vision analysis: page ${pi+1}/${pageImages.length}…`, 85);
-        const got=await read(`Page ${pi+1} whole sheet`, '', true, {b64:pageImages[pi], mimeType:'image/jpeg'}, file.name);
-        if(got.length){ rows=got; page=pi; how='page'; break; }
+        let got=await read(`Page ${pi+1} whole sheet`, '', true, {b64:pageImages[pi], mimeType:'image/jpeg'}, file.name);
+        let gotHow='page';
+        // The sheet may name its parts in labels and the locator not have
+        // said so: read it that way too, unless 2b already did, and keep the
+        // reading with more parts (a table reading of such a sheet returns
+        // only the ballooned labels).
+        if(!calloutPages.some(c=>c.pi===pi)){
+          setMsg(`Reading the part labels on page ${pi+1}…`, 88);
+          const lab=await read(`Page ${pi+1} part labels (whole sheet)`, '', true, {b64:pageImages[pi], mimeType:'image/jpeg'}, file.name, 'callouts');
+          if(_partRows(lab)>_partRows(got)){ got=lab; gotHow='callouts'; }
+        }
+        if(got.length){ rows=got; page=pi; how=gotHow; break; }
       }
     }
   }
@@ -202,7 +287,7 @@ export async function _bomFromPDF(file, setMsg){
   const imgIdx = page>=0 ? page : (bomPageIdx>=0 ? bomPageIdx : 0);
   return {rows, diag, pageTexts, pageImages, pdfText, layoutText, textLen,
           imgData: pageImages[imgIdx] ? {b64:pageImages[imgIdx], mimeType:'image/jpeg'} : null,
-          fromImage: how==='region' || how==='page'};
+          fromImage: how==='region' || how==='page' || how==='callouts'};
 }
 
 // Multi-page drawings often put the actual BOM / Assembly Parts List table on
@@ -446,7 +531,64 @@ Return ONLY a valid JSON array, no explanation.
 Example: [{"item":"1","part_number":"M27500-20SC2S23","drawing_number":"","drawing_name":"","description":"CABLE 20AWG TWISTED PAIR","qty":"10000","unit":"mm","manufacturer":"","atlantium_pn":"","pin_count":"","price":""}]
 If no BOM is found, return: []`;
 
-// sourceType: 'drawing' (default — PDF text or page image) or 'excel'
+// ── Parts named on the drawing itself (v1.83.2) ──
+// Many cable drawings have no parts list: every part is a label on a leader
+// line, some with a balloon number and most without. Read with the table
+// prompt, such a sheet gave only the ballooned parts (3 of 8 on 70299220).
+export const _BOM_CALLOUT_PROMPT =
+  `You are an expert at reading cable and wire-harness drawings.
+
+This drawing has NO parts-list table. Its parts are named in TEXT LABELS on the drawing itself —
+each label sits beside the picture, usually at the end of a leader line, and SOME have a balloon
+(a circled item number) while MOST do not. Extract EVERY part that a label names, ballooned or not.
+A typical sheet has 5–15 of them; read the whole picture, every side of it, before answering.
+
+WHAT A LABEL LOOKS LIKE (one label = one part):
+  RED LED INDICATOR            ← description
+  APEM PN: Q8F8BXXR02E         ← manufacturer's part number (maker name before "PN")
+  EYAL PN: 106009330           ← the drawing company's own number
+or just two lines such as "AWG-24 RED / WEICO PN: 2124/19-2", or a single line such as
+"TYCO PN: TMS-SCE-1/8-2".
+
+For each part return:
+- "item": the balloon number when the label has a balloon, otherwise ""
+- "description": the label's words that are not part numbers, exactly as printed (e.g. "RED LED
+  INDICATOR", "RES. 2.73kOhm, 0.5W", "AWG-24 RED", "HEATSHRINK TUBE"); "" when the label has only
+  part numbers
+- "manufacturer": the maker named before the manufacturer's PN ("APEM", "WEICO", "VISHAY",
+  "TYCO RAYCHEM", "PANDUIT"), else ""
+- "part_number": the MANUFACTURER's part number, character by character as printed
+  (Q8F8BXXR02E, 2124/19-2, RNF-100-1/4-0)
+- "atlantium_pn": the drawing company's own number — the "<COMPANY> PN:" line that repeats on most
+  labels with the same company name (here "EYAL PN:"; it matches the company in the title block),
+  else "". When a label has only that company number, put it here and leave "part_number" "".
+- "qty": how many the cable needs:
+  · a count printed by the label or its balloon — "x2", "X2", "2X", "(2)", "2 PLCS" → "2"
+  · a wire or cable: its LENGTH in mm, from the dimension that spans that wire (a wire that runs
+    from one end of the cable to the other takes the overall length), with "unit":"mm"; when the
+    length cannot be told from the drawing, qty "" and unit "mm"
+  · anything else with no count shown → "1"
+- "unit": "pc" for counted parts, "mm" for wire/cable lengths; "" when unsure
+- "drawing_number", "drawing_name", "pin_count", "customer_supplied", "price": "" (pin_count only
+  for a connector whose number of contacts is printed)
+
+SAME PART TWICE: two labels with the same part number are the same part fitted in two places —
+one row whose qty is the total.
+
+NOT PARTS: the title block, the revision table, dimensions and tolerances, the frame, and the
+general NOTES (a note such as "GOLD FASTON TERMINAL DENOTES ANODE" explains a part, it is not one).
+Do not add a part that no label names, however obviously the cable needs it.
+
+${_BOM_TOOL_RULE_SECTION}
+
+Read every part number character by character — they are precise; never correct or complete one.
+
+Return ONLY a valid JSON array, no explanation.
+Example: [{"item":"1","part_number":"Q8F8BXXR02E","atlantium_pn":"106009330","description":"RED LED INDICATOR","manufacturer":"APEM","qty":"1","unit":"pc","drawing_number":"","drawing_name":"","pin_count":"","customer_supplied":"","price":""},{"item":"","part_number":"2124/19-2","atlantium_pn":"33212402","description":"AWG-24 RED","manufacturer":"WEICO","qty":"130","unit":"mm","drawing_number":"","drawing_name":"","pin_count":"","customer_supplied":"","price":""}]
+If the drawing names no parts, return: []`;
+
+// sourceType: 'drawing' (default — PDF text or page image), 'callouts' (a
+// drawing whose parts are named in labels, see above) or 'excel'
 // (spreadsheet grid from extractExcelText, which needs its own prompt).
 export async function aiExtractBOM(text, isImage, imgData, filename, sourceType='drawing'){
   // ms is written on both paths so the Statistics screen can average how long a
@@ -456,7 +598,7 @@ export async function aiExtractBOM(text, isImage, imgData, filename, sourceType=
   try{
     if(!_aiReady()) throw new Error(_AI_NO_KEY);
     const rows=await _anthropicBOM(text, isImage, imgData, filename, sourceType);
-    logSystemAudit('drawing_bom_search',{filename,provider:'anthropic',mode:sourceType==='excel'?'excel':(isImage?'vision':'text'),rowsFound:rows.length,ms:Date.now()-_t0},true);
+    logSystemAudit('drawing_bom_search',{filename,provider:'anthropic',mode:sourceType==='excel'?'excel':sourceType==='callouts'?'callouts':(isImage?'vision':'text'),rowsFound:rows.length,ms:Date.now()-_t0},true);
     return rows;
   }catch(e){
     logSystemAudit('drawing_bom_search',{filename,error:e.message,ms:Date.now()-_t0},false);
@@ -474,7 +616,7 @@ export function _bomTextLimitFor(sourceType){ return sourceType==='excel' ? 1000
 export async function _anthropicBOM(text, isImage, imgData, filename, sourceType='drawing'){
   const messages = isImage ? [{role:'user',content:[
     {type:'image',source:{type:'base64',media_type:imgData.mimeType,data:imgData.b64}},
-    {type:'text',text:_BOM_VISION_PROMPT}
+    {type:'text',text:sourceType==='callouts' ? _BOM_CALLOUT_PROMPT : _BOM_VISION_PROMPT}
   ]}] : [{role:'user', content: _bomTextPromptFor(sourceType,filename)+'\n'+text.slice(0,_bomTextLimitFor(sourceType))}];
   const resp = await _aiFetch({
     // A table read off a picture goes to the stronger model: small print in a

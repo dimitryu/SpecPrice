@@ -189,7 +189,9 @@ async function open(opts={}){
       if(m==='GET') return json({configured:true});
       const body=JSON.parse(r.request().postData());
       if(opts.aiDelay) await new Promise(res=>setTimeout(res,opts.aiDelay));
-      const rep=aiReply(body);
+      // opts.ai(body) answers first when a script needs its own replies (undefined → the demo ones)
+      const own=opts.ai ? await opts.ai(body) : undefined;
+      const rep=own!==undefined ? own : aiReply(body);
       if(rep && typeof rep==='object') return json({content:[...(body.tools?rep.blocks:[]),{type:'text',text:rep.text}],stop_reason:'end_turn'});
       return json({content:[{type:'text',text:rep}],stop_reason:'end_turn'});
     }

@@ -2478,6 +2478,34 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('locate: pixels are not used', loc('{"found":true,"box":[55,1100,1263,1370]}'), null);
   t('locate: an inside-out box is not used', loc('{"found":true,"box":[0.6,0.9,0.1,0.8]}'), null);
   t('locate: not found', loc('{"found":false}'), null);
+  // v1.83.2: a sheet whose parts are named in labels on the drawing
+  const co=G('_bomParseCallouts');
+  t('labels: count and box', co('No table. {"found":false,"labels":8,"box":[0.26,0.36,0.73,0.65]}'), {labels:8, box:[0.26,0.36,0.73,0.65]});
+  t('labels: percent box', co('{"found":false,"labels":5,"box":[26,36,73,65]}').box, [0.26,0.36,0.73,0.65]);
+  t('labels: no box → whole sheet', co('{"found":false,"labels":4}'), {labels:4, box:null});
+  t('labels: a pixel box is not used', co('{"found":false,"labels":4,"box":[300,400,900,800]}'), {labels:4, box:null});
+  t('labels: none', co('{"found":false,"labels":0}'), null);
+  t('labels: plain not found', co('{"found":false}'), null);
+  t('labels: a table is not labels', co('{"found":true,"box":[0,0,1,1],"rows":3}'), null);
+  t('labels: the table parser ignores them', loc('{"found":false,"labels":8,"box":[0.26,0.36,0.73,0.65]}'), null);
+  const ub=G('_bomUnionByPart');
+  const A=[{item:'1',part_number:'Q8F8BXXR02E',atlantium_pn:'106009330'},{item:'',part_number:'2124/19-2',atlantium_pn:'33212402'}];
+  t('labels union: a second reading adds what is missing',
+    ub(A,[{part_number:'Q8F8BXXR02E',atlantium_pn:'106009330'},{part_number:'RNF-100-1/8-0',atlantium_pn:'32900489'}]).map(r=>r.part_number),
+    ['Q8F8BXXR02E','2124/19-2','RNF-100-1/8-0']);
+  t('labels union: same company PN with a misread maker PN is one part',
+    ub(A,[{part_number:'2124/19-Z',atlantium_pn:'33212402'}]).length, 2);
+  t('labels union: one-character different PNs are different parts',
+    ub([{part_number:'RNF-100-1/4-0',atlantium_pn:'32900531'}],[{part_number:'RNF-100-1/8-0',atlantium_pn:'32900489'}]).length, 2);
+  t('labels union: parts with no number match by description and maker',
+    ub([{description:'LABEL',manufacturer:'X'}],[{description:'label',manufacturer:'x'},{description:'TIE',manufacturer:'X'}]).length, 2);
+  const CP=G('_BOM_CALLOUT_PROMPT'), LP=G('_BOM_LOCATE_PROMPT');
+  ok('labels prompt: every labelled part, ballooned or not', /ballooned or not/.test(CP) && /MOST do not/.test(CP));
+  ok('labels prompt: maker PN vs company PN', /"part_number": the MANUFACTURER/.test(CP) && /"atlantium_pn": the drawing company/.test(CP));
+  ok('labels prompt: x2 counts, wire length in mm', /"x2"/.test(CP) && /LENGTH in mm/.test(CP));
+  ok('labels prompt: notes and title block are not parts', /NOT PARTS/.test(CP) && /title block/.test(CP));
+  ok('labels prompt: no tool rows', CP.includes(G('_BOM_TOOL_RULE_SECTION')));
+  ok('locate prompt: reports part labels when there is no table', /"labels":<how many part labels>/.test(LP));
 }
 
 // ─────────────────────────────────────────── v1.67: logs name the drawing; ml adhesives; drawings per part; ferrules; missed rows
