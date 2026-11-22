@@ -109,17 +109,36 @@ export function _bomParseCallouts(text){
   }
   return {labels, box};
 }
+// One label, one row. A reading sometimes returns a label twice — once with
+// its part numbers and once without them (70299220: "AWG-24 BLACK" with
+// 2124/19-0, and again with no number at all). A row with no maker PN and no
+// company PN is dropped when another row has the same description, and a row
+// with nothing at all to identify it is dropped too.
+export function _bomCalloutTidy(rows){
+  const n=v=>String(v||'').replace(/\s+/g,' ').trim().toUpperCase();
+  const list=(rows||[]).filter(r=>r && typeof r==='object');
+  const numbered=new Set(list.filter(r=>n(r.part_number)||n(r.atlantium_pn)).map(r=>n(r.description)).filter(Boolean));
+  const seen=new Set();
+  return list.filter(r=>{
+    if(n(r.part_number) || n(r.atlantium_pn)) return true;
+    const d=n(r.description);
+    if(!d) return false;
+    if(numbered.has(d) || seen.has(d)) return false;
+    seen.add(d); return true;
+  });
+}
 // Two readings of a drawing's labels, put together by part number (the item is
 // a balloon number at best, and most labels have none).
 export function _bomUnionByPart(a, b){
   const n=v=>String(v||'').replace(/\s+/g,'').toUpperCase();
   const out=[], pns=new Set(), cpns=new Set(), descs=new Set();
   const add=(r, check)=>{
-    const pn=n(r?.part_number), cpn=n(r?.atlantium_pn), d=n(r?.description)+'|'+n(r?.manufacturer);
+    const pn=n(r?.part_number), cpn=n(r?.atlantium_pn), d=n(r?.description);
     // the same part: its maker's number or the company's number is there already
-    // (a part with neither is matched by description and maker)
+    // (a part with neither is matched by its description: a second reading that
+    // missed a label's numbers must not add that label again — v1.83.3)
     if(check && ((pn && pns.has(pn)) || (cpn && cpns.has(cpn)) || (!pn && !cpn && descs.has(d)))) return;
-    out.push(r); if(pn) pns.add(pn); if(cpn) cpns.add(cpn); if(!pn && !cpn) descs.add(d);
+    out.push(r); if(pn) pns.add(pn); if(cpn) cpns.add(cpn); descs.add(d);
   };
   (a||[]).forEach(r=>add(r,false));
   (b||[]).forEach(r=>add(r,true));
@@ -248,6 +267,8 @@ export async function _bomFromPDF(file, setMsg){
           setMsg(`Reading the part labels on the whole page ${c.pi+1}…`, 84);
           got=_bomUnionByPart(got, await read(`${lbl} (whole sheet)`, '', true, {b64:pageImages[c.pi], mimeType:'image/jpeg'}, file.name, 'callouts'));
         }
+        const n0=got.length; got=_bomCalloutTidy(got);
+        if(got.length<n0) say(`${lbl}: ${n0-got.length} repeated label(s) with no part number dropped`);
         if(got.length){ rows=got; page=c.pi; how='callouts'; say(`${lbl}: ${_partRows(got)} part(s) read from the labels`); break; }
       }
     }
@@ -265,7 +286,7 @@ export async function _bomFromPDF(file, setMsg){
         // only the ballooned labels).
         if(!calloutPages.some(c=>c.pi===pi)){
           setMsg(`Reading the part labels on page ${pi+1}…`, 88);
-          const lab=await read(`Page ${pi+1} part labels (whole sheet)`, '', true, {b64:pageImages[pi], mimeType:'image/jpeg'}, file.name, 'callouts');
+          const lab=_bomCalloutTidy(await read(`Page ${pi+1} part labels (whole sheet)`, '', true, {b64:pageImages[pi], mimeType:'image/jpeg'}, file.name, 'callouts'));
           if(_partRows(lab)>_partRows(got)){ got=lab; gotHow='callouts'; }
         }
         if(got.length){ rows=got; page=pi; how=gotHow; break; }
@@ -564,13 +585,22 @@ For each part return:
   else "". When a label has only that company number, put it here and leave "part_number" "".
 - "qty": how many the cable needs:
   · a count printed by the label or its balloon — "x2", "X2", "2X", "(2)", "2 PLCS" → "2"
-  · a wire or cable: its LENGTH in mm, from the dimension that spans that wire (a wire that runs
-    from one end of the cable to the other takes the overall length), with "unit":"mm"; when the
-    length cannot be told from the drawing, qty "" and unit "mm"
+  · a wire or cable: its LENGTH in mm, with "unit":"mm". A wire that runs from one end of the
+    cable to the other takes the OVERALL length dimension (end to end, e.g. "130±5" → "130") —
+    even when a part sits in the middle of it (a resistor, a diode, a splice, heat shrink): a
+    shorter dimension that ends at such a part (e.g. "85±5" to the resistor) only says WHERE that
+    part is, it is not the length of the wire. Wires laid side by side between the same two ends
+    (e.g. a RED and a BLACK from the connector to the terminals) all take that same length. Use a
+    shorter dimension only for a wire that really ends there. When the length cannot be told
+    from the drawing, qty "" and unit "mm"
   · anything else with no count shown → "1"
 - "unit": "pc" for counted parts, "mm" for wire/cable lengths; "" when unsure
 - "drawing_number", "drawing_name", "pin_count", "customer_supplied", "price": "" (pin_count only
   for a connector whose number of contacts is printed)
+
+ONE LABEL = ONE ROW: never return the same label twice. A label's part numbers belong on its
+own row — never a second row for the same label without them. Every row should carry the part
+number(s) printed on its label; if one cannot be read, return that label once with what can be read.
 
 SAME PART TWICE: two labels with the same part number are the same part fitted in two places —
 one row whose qty is the total.

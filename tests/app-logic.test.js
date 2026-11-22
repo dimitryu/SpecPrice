@@ -2499,7 +2499,23 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
     ub([{part_number:'RNF-100-1/4-0',atlantium_pn:'32900531'}],[{part_number:'RNF-100-1/8-0',atlantium_pn:'32900489'}]).length, 2);
   t('labels union: parts with no number match by description and maker',
     ub([{description:'LABEL',manufacturer:'X'}],[{description:'label',manufacturer:'x'},{description:'TIE',manufacturer:'X'}]).length, 2);
+  // v1.83.3: one label, one row
+  const td=G('_bomCalloutTidy');
+  const R=[{part_number:'2124/19-0',atlantium_pn:'33212401',description:'AWG-24 BLACK'},
+           {part_number:'',atlantium_pn:'',description:'AWG-24 black '},
+           {part_number:'RNF-100-1/4-0',atlantium_pn:'32900531',description:'HEATSHRING TUBE'},
+           {part_number:'RNF-100-1/8-0',atlantium_pn:'32900489',description:'HEATSHRING TUBE'}];
+  t('labels tidy: a numberless repeat of a numbered label is dropped', td(R).map(r=>r.part_number), ['2124/19-0','RNF-100-1/4-0','RNF-100-1/8-0']);
+  t('labels tidy: two numbered parts with one description both stay', td(R).filter(r=>r.description==='HEATSHRING TUBE').length, 2);
+  t('labels tidy: a numberless part of its own stays, once', td([{description:'AWG-24 GREEN'},{description:'AWG-24 GREEN'}]).length, 1);
+  t('labels tidy: a row with nothing to identify it is dropped', td([{part_number:'',description:''},{part_number:'X1'}]).map(r=>r.part_number), ['X1']);
+  t('labels tidy: a company PN alone is enough', td([{atlantium_pn:'32900484',description:''}]).length, 1);
+  t('labels union: a second reading never re-adds a label without its numbers',
+    ub([{part_number:'2124/19-0',atlantium_pn:'33212401',description:'AWG-24 BLACK',manufacturer:'WEICO'}],[{description:'AWG-24 BLACK',manufacturer:''}]).length, 1);
   const CP=G('_BOM_CALLOUT_PROMPT'), LP=G('_BOM_LOCATE_PROMPT');
+  ok('labels prompt: one label = one row', /ONE LABEL = ONE ROW/.test(CP));
+  ok('labels prompt: a wire through an inline part takes the overall length (v1.83.4)',
+     /OVERALL length dimension/.test(CP) && /only says WHERE that\s+part is/.test(CP) && /side by side/.test(CP));
   ok('labels prompt: every labelled part, ballooned or not', /ballooned or not/.test(CP) && /MOST do not/.test(CP));
   ok('labels prompt: maker PN vs company PN', /"part_number": the MANUFACTURER/.test(CP) && /"atlantium_pn": the drawing company/.test(CP));
   ok('labels prompt: x2 counts, wire length in mm', /"x2"/.test(CP) && /LENGTH in mm/.test(CP));
