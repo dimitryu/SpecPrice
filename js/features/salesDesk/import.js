@@ -541,6 +541,13 @@ export function _sdAddImportedRows(rows){
       // which reads as a real part, gets sent to Check Price as one, and
       // matches nothing. An empty cell is the truthful answer.
       part_number:r.part_number||'', description:r.description||'',
+      // The ITEM number the drawing gives this part (its parts list's ITEM
+      // column, or the balloon by its label), so the desk can be checked
+      // against the drawing line by line. A row the app added — a crimp tool
+      // found for a contact — is not on the drawing and gets none. Shown on
+      // the desk and in the Excel quotation only; never saved to the Database
+      // (v1.83.6).
+      item: r.tool_source ? '' : String(r.item??'').trim(),
       // The maker the drawing names (or the Database knows) comes across too —
       // it used to stay blank until someone ran Check Price (v1.83.2).
       manufacturer:String(r.manufacturer||'').trim()||match?.manufacturer||'',

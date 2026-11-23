@@ -404,7 +404,7 @@ table that lacks real item numbers and part numbers, even if it superficially
 has similar-looking column headers (e.g. "NAME", "DESCRIPTION").
 
 COLUMN MAPPING (column names may vary between drawings):
-- "item" → row number (1, 2, 3 ...) — look for: ITEM, #, NO., SEQ
+- "item" → the ITEM number exactly as printed — look for: ITEM, #, NO., SEQ. It is the number of the part's balloon on the drawing, so never renumber, close gaps or invent one
 - "description" → component description — look for: DESCRIPTION, DESC, NAME
 - "atlantium_pn" → company internal part number — look for: ATLANTIUM PN, INTERNAL PN, CATALOG NO, CUST PN, CUSTOMER PN, a "<COMPANY INITIALS> PART No." column such as B.B PART No.
 - "manufacturer" → maker name — look for: MANUFACTURER, MFG, MAKE, VENDOR
@@ -489,7 +489,7 @@ below it), return an empty array [] rather than extracting from the wrong
 table or inventing rows.
 
 For each row extract:
-- "item": row/item number (1, 2, 3 ...)
+- "item": the ITEM number exactly as printed (ITEM / # / NO. column) — it is the number of the part's balloon on the drawing, so never renumber, close gaps or invent one
 - "part_number": the MANUFACTURER part number — the MANUFACTURER PART No. / MFR P/N column when there is one (see TWO PART-NUMBER COLUMNS), otherwise the PART NUMBER / PN / P/N column
 - "drawing_number": drawing number (DWG NO, DRAWING NO)
 - "drawing_name": drawing title or assembly name
@@ -572,7 +572,9 @@ or just two lines such as "AWG-24 RED / WEICO PN: 2124/19-2", or a single line s
 "TYCO PN: TMS-SCE-1/8-2".
 
 For each part return:
-- "item": the balloon number when the label has a balloon, otherwise ""
+- "item": the BALLOON number of that part (the circled number on its label or on a leader to the
+  same part) — read it exactly; the user checks the table against the drawing by these numbers.
+  Never invent, renumber or fill in a number for a part that has no balloon: leave "" then
 - "description": the label's words that are not part numbers, exactly as printed (e.g. "RED LED
   INDICATOR", "RES. 2.73kOhm, 0.5W", "AWG-24 RED", "HEATSHRINK TUBE"); "" when the label has only
   part numbers

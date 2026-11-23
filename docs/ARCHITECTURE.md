@@ -296,3 +296,12 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
 - הקפאה: `freezeLeftColumns(…, 2+SD_FROZEN_COLS)` (תיבת סימון, #, ועוד 3). colspan של שורת קבוצה ושל "No parts" = `SD_COLS.length+3`.
 - Excel: עמודת Item ממוספרת עכשיו 1…N **לכל שרטוט** (קודם רצה ברצף על כל ההזמנה) — זהה למסך.
 - בדיקות: 4 ב-`sd-labor-harness.js`, 3 ב-`xl-export-harness.js`.
+
+## v1.83.6 — עמודת Item = מספר ה-ITEM / הבלון בשרטוט (מחליף את 1…N של v1.83.5)
+- דימה: לא מספר רץ — מספר ה-ITEM מהשרטוט (עמודת ITEM בטבלה, או הבלון כשאין טבלה), כדי להשוות שורה-שורה. מה שהמערכת הוסיפה (TOOL) — בלי מספר.
+- `_sdAddImportedRows`: `item: r.tool_source ? '' : String(r.item??'').trim()` — כלי שהמערכת מצאה (יש לו `tool_source`) בלי מספר; כלי שהשרטוט עצמו מונה שומר את ה-ITEM. Add from Database / New Row — בלי מספר.
+- Sales Desk: העמודה **Item** (אחרי תיבת הסימון, קבועה) היא `<input class="sd-item">` שניתן לתקן; מיון בלחיצה על הכותרת (`_sdItemCompare`: טבעי, 2 לפני 10, "3A" אחרי 3, ריקים תמיד בסוף); החיפוש כולל את ה-Item. הוסר `_sdItemNumbers`.
+- Excel: עמודת Item = `r.item` (מספר רגיל נכתב כמספר; ריק לכלים/חלקים שנוספו).
+- **לא נשמר ב-Database:** `_sdDbPatch`/`_sdDbNewDoc`/`saveBOMToPartStock` לא כותבים `item` (נבדק).
+- פרומפטים: טבלה (טקסט/תמונה) — ITEM בדיוק כפי שמודפס, מספר הבלון בשרטוט, בלי מספור מחדש/השלמה; תוויות — `item` = מספר הבלון, נקרא בדיוק, אף פעם לא ממציאים.
+- בדיקות: `sd-labor-harness.js` (Item בטבלה, מיון, ייבוא, לא נשמר ב-DB), `xl-export-harness.js`, `app-logic.test.js` (פרומפטים).

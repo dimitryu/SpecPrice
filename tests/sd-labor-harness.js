@@ -104,12 +104,22 @@ vm.runInContext(`aiProxy=true; companyId='c1'; currentUserEmail='u@x'; currentUs
   try{ await M.renderSalesDesk(); }catch(e){ console.error('render', e.message); }
   const html=g.document.getElementById('content').innerHTML;
   ok('table: the Sales Desk table renders', /MNF P\/N/.test(html) && /Part Cost/.test(html));
-  // v1.83.5: # column, 1…N within the drawing, never stored on the row
-  const nos=[...g.document.querySelectorAll('#sd-tbody td.sd-no')].map(td=>+td.textContent);
-  ok('table: every row has its item number 1…N', nos.length===items.length && nos.every((n,k)=>n===k+1));
-  ok('table: the # header sits right after the checkbox', /id="sd-check-all"[^]*?<\/th>\s*<th class="sd-no-h\b/.test(html));
+  // v1.83.6: Item column = the drawing's own ITEM number (r.item), never a counter
+  const cellItems=()=>[...g.document.querySelectorAll('#sd-tbody input.sd-item')].map(x=>x.value);
+  ok('table: the Item column shows each row\'s drawing ITEM', cellItems().length===items.length && cellItems().every((v,k)=>v===String(items[k].item||'')));
+  ok('table: the Item header sits right after the checkbox', /id="sd-check-all"[^]*?<\/th>\s*<th class="sd-no-h\b/.test(html));
   ok('table: the group heading spans the extra column', new RegExp(`colspan="${g.document.querySelectorAll('#sd-table thead th').length}"`).test(html));
-  ok('table: the number is not saved on the rows', items.every(r=>!('item' in r) && !('item_no' in r) && !('_itemNo' in r)));
+  ok('table: a row with no ITEM shows an empty cell, not a made-up number', !items[0].item ? cellItems()[0]==='' : true);
+  const cmp=M._sdItemCompare;
+  ok('item sort: 2 before 10, 3 before 3A, empty last', ['10','','3A','2','3'].sort(cmp).join(',')==='2,3,3A,10,');
+  // the import keeps the drawing's ITEM; a tool the system found gets none
+  const imp=M._sdAddImportedRows([{item:'7',part_number:'P-7',description:'PLUG',qty:'1',unit:'pc'},
+                                  {item:'8',part_number:'T-1',description:'HAND CRIMP TOOL for P-7',qty:'1',unit:'pc',tool_source:'ai'},
+                                  {item:' 4 ',part_number:'TL-9',description:'CRIMP TOOL',qty:'1',unit:'pc'}]);
+  ok('import: a drawing row keeps its ITEM', imp[0].item==='7');
+  ok('import: a tool the system added gets no ITEM', imp[1].item==='');
+  ok('import: a tool the drawing itself lists keeps its ITEM', imp[2].item==='4');
+  ok('database: ITEM is never saved', !('item' in M._sdDbNewDoc({...imp[0]},[imp[0]])) && !('item' in M._sdDbPatch({...imp[0]},{part_number:'P-7'},[imp[0]])));
   ok('table: there is no Labor Time column in it', !/<th[^>]*>\s*Labor Time\s*</.test(html) && !/sd-labor-time/.test(html));
   ok('table: the summary still shows Labor Time (min / cable) with its 📋 button',
      /Labor Time \(min \/ cable\)/.test(html) && /sd-btn-breakdown/.test(html));

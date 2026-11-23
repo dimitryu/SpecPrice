@@ -362,11 +362,12 @@ export async function exportSalesDeskExcel(){
       const firstRow=row;
       const toolCells=[];
 
-      // Numbered 1…N within each drawing, like the Sales Desk's # column.
-      itemNo=0;
       g.rows.forEach((r,i)=>{
         const isTool=_sdIsToolRow(r);
-        itemNo++;
+        // The drawing's own ITEM number, as on the desk (v1.83.6); empty for a
+        // row that is not on the drawing. A plain number goes in as a number.
+        const _it=String(r.item??'').trim();
+        itemNo = /^\d+$/.test(_it) ? +_it : _it;
         const n=row;
         const qty=parseFloat(r.qty)||0;
         // Part Cost. Manual price in the app → kept as a per-unit price, so a

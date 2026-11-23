@@ -2514,6 +2514,8 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
     ub([{part_number:'2124/19-0',atlantium_pn:'33212401',description:'AWG-24 BLACK',manufacturer:'WEICO'}],[{description:'AWG-24 BLACK',manufacturer:''}]).length, 1);
   const CP=G('_BOM_CALLOUT_PROMPT'), LP=G('_BOM_LOCATE_PROMPT');
   ok('labels prompt: one label = one row', /ONE LABEL = ONE ROW/.test(CP));
+  ok('table prompts: ITEM as printed, never renumbered (v1.83.6)', [G('_BOM_TEXT_PROMPT')('x'), G('_BOM_VISION_PROMPT')].every(p=>/ITEM number exactly as printed/.test(p) && /never renumber/.test(p)));
+  ok('labels prompt: item = the balloon number, never invented (v1.83.6)', /"item": the BALLOON number/.test(CP) && /Never invent, renumber/.test(CP));
   ok('labels prompt: a wire through an inline part takes the overall length (v1.83.4)',
      /OVERALL length dimension/.test(CP) && /only says WHERE that\s+part is/.test(CP) && /side by side/.test(CP));
   ok('labels prompt: every labelled part, ballooned or not', /ballooned or not/.test(CP) && /MOST do not/.test(CP));

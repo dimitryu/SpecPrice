@@ -32,13 +32,13 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
   vm.runInContext(`loadExcelJS=async()=>__ExcelJS; logSystemAudit=async()=>{}; toast=()=>{};
     currentUserEmail='u@x'; companyLogoB64=''; allParts=[]; _sdDwgSettings={};
     sdItems=[
-      {drawing_number:'D1', part_number:'CAB-1', description:'CABLE 14AWG', qty:2000, unit:'mm',
+      {drawing_number:'D1', item:'1', part_number:'CAB-1', description:'CABLE 14AWG', qty:2000, unit:'mm',
        mouser_price:2.15, digikey_price:2.32, priority_price:2.05},
-      {drawing_number:'D1', part_number:'CON-1', description:'PLUG 4P', qty:1, unit:'pc',
+      {drawing_number:'D1', item:'2', part_number:'CON-1', description:'PLUG 4P', qty:1, unit:'pc',
        mouser_price:12.4, digikey_price:13.1, priority_price:''},
       {drawing_number:'D1', part_number:'LAB-1', description:'LABEL', qty:2, unit:'pc', manual_total:'3'},
       {drawing_number:'D1', part_number:'TL-1', description:'CRIMP TOOL for CON-1', qty:1, unit:'pc', est_price:185, tool_for:'CON-1'},
-      {drawing_number:'D2', part_number:'CON-2', description:'RECEPTACLE', qty:1, unit:'pc', digikey_price:17.75},
+      {drawing_number:'D2', item:'3A', part_number:'CON-2', description:'RECEPTACLE', qty:1, unit:'pc', digikey_price:17.75},
       {drawing_number:'D2', part_number:'LAB-2', description:'LABEL, PRINTABLE', qty:3, unit:'pc'},
       {drawing_number:'D2', part_number:'MRK-3', description:'MARKER SLEEVE', qty:2, unit:'pc', mouser_price:0.35},
       {drawing_number:'D2', part_number:'OC-1', description:'TERMINAL', qty:2, unit:'pc', mouser_price:6, onlinecomp_price:4.5, onlinecomp_match:'exact'},
@@ -77,13 +77,12 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
   ok('columns: nothing written right of Part Cost', !cells.some(c=>c.col>8));
 
   const rowOf=pn=>cells.find(c=>c.col===3 && c.value===pn).row;
-  // v1.83.5: Item is 1…N within each drawing, matching the Sales Desk # column
+  // v1.83.6: Item is the drawing's own ITEM number, as on the desk
   const itemOf=pn=>ws.getCell(rowOf(pn),1).value;
-  ok('item: first drawing numbered from 1', itemOf('CAB-1')===1 && itemOf('CON-1')===2 && itemOf('TL-1')===4);
-  ok('item: the second drawing starts again at 1', itemOf('CON-2')===1 && itemOf('TL-2')===9);
-  const nums=vm.runInContext('(()=>{ const m=_sdItemNumbers(); return sdItems.map(r=>m.get(r)); })()', ctx);
-  ok('item: the export and the desk give every row the same number',
-     items.every((r,k)=>ws.getCell(rowOf(r.part_number),1).value===nums[k]));
+  ok('item: the drawing ITEM goes in, a plain number as a number', itemOf('CAB-1')===1 && itemOf('CON-1')===2);
+  ok('item: an ITEM that is not a plain number stays as written', itemOf('CON-2')==='3A');
+  ok('item: rows not numbered on the drawing (tools, added parts) stay empty',
+     [null,undefined,''].includes(itemOf('TL-1')) && [null,undefined,''].includes(itemOf('LAB-1')));
   const pc=pn=>ws.getCell(rowOf(pn),8).value;
   const item=pn=>items.find(r=>r.part_number===pn);
   ['CAB-1','CON-1','LAB-1','TL-1','CON-2','LAB-2','MRK-3','OC-1','FA-1','FA-2'].forEach(pn=>{

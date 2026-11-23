@@ -594,14 +594,12 @@ export function _sdGeneralMinutesFor(dwg){
 
 // One costed group per drawing, in first-seen order so the quote reads in the
 // order the drawings were imported.
-// Item numbers: 1…N within each drawing, in the order the rows sit on the desk
-// (a drawing's own rows, then any added from the Database). Worked out on every
-// draw and never stored on the row, so it never reaches the Database; the
-// Excel quotation numbers its rows the same way (v1.83.5).
-export function _sdItemNumbers(rows=sdItems){
-  const out=new Map(), count=new Map();
-  for(const r of rows){ const k=_sdDwgKey(r); const n=(count.get(k)||0)+1; count.set(k,n); out.set(r,n); }
-  return out;
+// The drawing's ITEM number of a row (r.item, from the parts list or the
+// balloon), compared naturally: 2 before 10, "3A" after "3", rows with none last.
+export function _sdItemCompare(a, b){
+  const x=String(a??'').trim(), y=String(b??'').trim();
+  if(!x || !y) return x ? -1 : y ? 1 : 0;
+  return x.localeCompare(y, undefined, {numeric:true, sensitivity:'base'});
 }
 export function _sdComputeGroups(){
   const order=[]; const byDwg=new Map();
@@ -929,10 +927,16 @@ export async function renderSalesDesk(){
     const visibleIdx=sdItems.map((r,i)=>i).filter(i=>{
       if(!_sdFilterQ.trim()) return true;
       const r=sdItems[i];
-      return predicate(_SD_DEFAULT_COLS.map(c=>String(r[c.k]||'')).join(' | ').toLowerCase());
+      return predicate([r.item, ..._SD_DEFAULT_COLS.map(c=>r[c.k])].map(v=>String(v||'')).join(' | ').toLowerCase());
     });
     if(_sdSortCol){
       visibleIdx.sort((ia,ib)=>{
+        if(_sdSortCol==='item'){
+          // Rows with no ITEM stay last whichever way the column is sorted.
+          const a=sdItems[ia].item, b=sdItems[ib].item;
+          if(!String(a??'').trim() || !String(b??'').trim()) return _sdItemCompare(a,b);
+          return _sdSortAsc ? _sdItemCompare(a,b) : _sdItemCompare(b,a);
+        }
         let va=_sdSortValue(sdItems[ia],_sdSortCol), vb=_sdSortValue(sdItems[ib],_sdSortCol);
         if(_SD_NUMERIC_COLS.has(_sdSortCol)){ va=parseFloat(va)||0; vb=parseFloat(vb)||0; }
         else { va=String(va||'').toLowerCase(); vb=String(vb||'').toLowerCase(); }
@@ -945,7 +949,6 @@ export async function renderSalesDesk(){
     const _groups=_sdComputeGroups();
     const _finalFor={}; _groups.forEach(g=>{_finalFor[g.dwg]=g;});
     const _seen=new Set();
-    const _itemNo=_sdItemNumbers();
     const tbody=visibleIdx.map(i=>{
       const r=sdItems[i];
       const dwg=_sdDwgKey(r);
@@ -966,7 +969,7 @@ export async function renderSalesDesk(){
       if(_sdCollapsedRows.has(dwg)) return head;
       return head+`<tr data-i="${i}"${_toolRowAttrs(r)}>
       <td style="text-align:center"><input type="checkbox" class="sd-check" data-i="${i}"></td>
-      <td class="sd-no">${_itemNo.get(r)||''}</td>
+      <td class="sd-no"><input type="text" class="sd-item" data-i="${i}" value="${esc(r.item||'')}" title="ITEM number on the drawing — empty for a row that is not on it (a tool the system added, a part added from the Database)"></td>
       ${SD_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${_sdCellHTML(c.k,r,i)}</td>`).join('')}
       <td><button class="btn btn-red btn-sm" data-i="${i}">✕</button></td>
     </tr>`;
@@ -1013,6 +1016,10 @@ export async function renderSalesDesk(){
         r.description=String(r.description||'').replace(/\s*—\s*not identified yet.*$/i,'');
         renderSD();
       }
+    }));
+    // A corrected ITEM number: kept on the row for the desk and the Excel file only.
+    document.querySelectorAll('.sd-item').forEach(inp=>inp.addEventListener('change',()=>{
+      sdItems[+inp.dataset.i].item=inp.value.trim();
     }));
     document.querySelectorAll('.sd-pack-ml').forEach(inp=>inp.addEventListener('change',()=>{
       const r=sdItems[+inp.dataset.i], v=parseFloat(inp.value);
@@ -1090,7 +1097,7 @@ export async function renderSalesDesk(){
           <table style="width:100%" id="sd-table">
             <thead><tr>
               <th style="width:28px"><input type="checkbox" id="sd-check-all" title="Select all"></th>
-              <th class="sd-no-h" title="Item number within its drawing, 1…N — on screen and in the Excel quotation only, never saved to the Database">#</th>
+              <th class="sd-no-h" data-col="item" title="The ITEM number on the drawing, to check the desk against it line by line. Empty for rows that are not on the drawing. Click to sort. Not saved to the Database.">Item${_sdSortCol==='item'?(_sdSortAsc?' ▲':' ▼'):''}</th>
               ${SD_COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}" title="Click to sort — drag to reorder">${c.l}${c.k===_sdSortCol?(_sdSortAsc?' ▲':' ▼'):''}</th>`).join('')}
               <th style="width:40px"></th>
             </tr></thead>
