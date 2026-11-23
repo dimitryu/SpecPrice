@@ -104,6 +104,12 @@ vm.runInContext(`aiProxy=true; companyId='c1'; currentUserEmail='u@x'; currentUs
   try{ await M.renderSalesDesk(); }catch(e){ console.error('render', e.message); }
   const html=g.document.getElementById('content').innerHTML;
   ok('table: the Sales Desk table renders', /MNF P\/N/.test(html) && /Part Cost/.test(html));
+  // v1.83.5: # column, 1…N within the drawing, never stored on the row
+  const nos=[...g.document.querySelectorAll('#sd-tbody td.sd-no')].map(td=>+td.textContent);
+  ok('table: every row has its item number 1…N', nos.length===items.length && nos.every((n,k)=>n===k+1));
+  ok('table: the # header sits right after the checkbox', /id="sd-check-all"[^]*?<\/th>\s*<th class="sd-no-h\b/.test(html));
+  ok('table: the group heading spans the extra column', new RegExp(`colspan="${g.document.querySelectorAll('#sd-table thead th').length}"`).test(html));
+  ok('table: the number is not saved on the rows', items.every(r=>!('item' in r) && !('item_no' in r) && !('_itemNo' in r)));
   ok('table: there is no Labor Time column in it', !/<th[^>]*>\s*Labor Time\s*</.test(html) && !/sd-labor-time/.test(html));
   ok('table: the summary still shows Labor Time (min / cable) with its 📋 button',
      /Labor Time \(min \/ cable\)/.test(html) && /sd-btn-breakdown/.test(html));

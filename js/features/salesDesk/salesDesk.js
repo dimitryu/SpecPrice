@@ -594,6 +594,15 @@ export function _sdGeneralMinutesFor(dwg){
 
 // One costed group per drawing, in first-seen order so the quote reads in the
 // order the drawings were imported.
+// Item numbers: 1…N within each drawing, in the order the rows sit on the desk
+// (a drawing's own rows, then any added from the Database). Worked out on every
+// draw and never stored on the row, so it never reaches the Database; the
+// Excel quotation numbers its rows the same way (v1.83.5).
+export function _sdItemNumbers(rows=sdItems){
+  const out=new Map(), count=new Map();
+  for(const r of rows){ const k=_sdDwgKey(r); const n=(count.get(k)||0)+1; count.set(k,n); out.set(r,n); }
+  return out;
+}
 export function _sdComputeGroups(){
   const order=[]; const byDwg=new Map();
   for(const r of sdItems){
@@ -936,6 +945,7 @@ export async function renderSalesDesk(){
     const _groups=_sdComputeGroups();
     const _finalFor={}; _groups.forEach(g=>{_finalFor[g.dwg]=g;});
     const _seen=new Set();
+    const _itemNo=_sdItemNumbers();
     const tbody=visibleIdx.map(i=>{
       const r=sdItems[i];
       const dwg=_sdDwgKey(r);
@@ -945,7 +955,7 @@ export async function renderSalesDesk(){
         const g=_finalFor[dwg];
         const hidden=_sdCollapsedRows.has(dwg);
         head=`<tr class="sd-group-head" data-dwg="${esc(dwg)}" style="background:#EEF2F7;cursor:pointer">
-          <td colspan="${SD_COLS.length+2}" style="padding:6px 10px;font-weight:700;color:var(--blue-dark)">
+          <td colspan="${SD_COLS.length+3}" style="padding:6px 10px;font-weight:700;color:var(--blue-dark)">
             <span class="row-label-sticky"><span style="display:inline-block;width:12px">${hidden?'▸':'▾'}</span>
             ${esc(dwg)}
             ${_sdDwgUnits(dwg)>1?`<span style="margin-inline-start:6px;padding:1px 6px;border-radius:8px;background:var(--chip-bg);color:var(--chip-ink);font-size:10px;font-weight:700" title="QTY on every row below is multiplied by this">× ${_sdDwgUnits(dwg)} cables</span>`:''}
@@ -956,13 +966,14 @@ export async function renderSalesDesk(){
       if(_sdCollapsedRows.has(dwg)) return head;
       return head+`<tr data-i="${i}"${_toolRowAttrs(r)}>
       <td style="text-align:center"><input type="checkbox" class="sd-check" data-i="${i}"></td>
+      <td class="sd-no">${_itemNo.get(r)||''}</td>
       ${SD_COLS.map(c=>`<td${c.wrap?' class="wrap"':''}>${_sdCellHTML(c.k,r,i)}</td>`).join('')}
       <td><button class="btn btn-red btn-sm" data-i="${i}">✕</button></td>
     </tr>`;
     }).join('');
 
     document.getElementById('sd-tbody').innerHTML=tbody||
-      `<tr class="empty-row"><td colspan="${SD_COLS.length+2}">No parts added yet</td></tr>`;
+      `<tr class="empty-row"><td colspan="${SD_COLS.length+3}">No parts added yet</td></tr>`;
     document.querySelectorAll('.sd-group-head').forEach(tr=>tr.addEventListener('click',()=>{
       const d=tr.dataset.dwg;
       if(_sdCollapsedRows.has(d)) _sdCollapsedRows.delete(d); else _sdCollapsedRows.add(d);
@@ -1079,6 +1090,7 @@ export async function renderSalesDesk(){
           <table style="width:100%" id="sd-table">
             <thead><tr>
               <th style="width:28px"><input type="checkbox" id="sd-check-all" title="Select all"></th>
+              <th class="sd-no-h" title="Item number within its drawing, 1…N — on screen and in the Excel quotation only, never saved to the Database">#</th>
               ${SD_COLS.map(c=>`<th data-col="${c.k}" style="min-width:${c.w}" title="Click to sort — drag to reorder">${c.l}${c.k===_sdSortCol?(_sdSortAsc?' ▲':' ▼'):''}</th>`).join('')}
               <th style="width:40px"></th>
             </tr></thead>
@@ -1114,7 +1126,7 @@ export async function renderSalesDesk(){
   makeTableResizable(document.getElementById('sd-table'),'salesdesk');
   // The checkbox + the first three columns (Drawing #, Revision, MNF P/N) stay
   // put while the price columns scroll sideways.
-  freezeLeftColumns(document.getElementById('sd-table'), 1+SD_FROZEN_COLS);
+  freezeLeftColumns(document.getElementById('sd-table'), 2+SD_FROZEN_COLS);   // checkbox, #, then the first columns
   makeColumnsReorderable(document.getElementById('sd-table'),'salesdesk',SD_ALL_COLS,()=>renderSalesDesk());
   document.querySelectorAll('.sd-view-btn').forEach(b=>b.addEventListener('click',()=>{
     if(b.dataset.view===_sdViewMode()) return;

@@ -362,6 +362,8 @@ export async function exportSalesDeskExcel(){
       const firstRow=row;
       const toolCells=[];
 
+      // Numbered 1…N within each drawing, like the Sales Desk's # column.
+      itemNo=0;
       g.rows.forEach((r,i)=>{
         const isTool=_sdIsToolRow(r);
         itemNo++;

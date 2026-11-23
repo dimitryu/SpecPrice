@@ -308,3 +308,6 @@ details.sym-legend summary { color:var(--muted); }
 @media (prefers-reduced-motion: reduce) { .ps-skel, #btn-ps-refresh.is-busy .ic { animation:none; } }
 /* rows still to come on a long page (v1.83.1) */
 #ps-table tr.ps-more-row td { text-align:center; color:var(--muted); font-size:12px; padding:10px; background:var(--surface-2); }
+/* Sales Desk item number (v1.83.5): 1…N per drawing, read-only */
+#sd-table th.sd-no-h { width:34px; min-width:34px; text-align:center; }
+#sd-table td.sd-no { text-align:center; font-family:var(--mono); font-variant-numeric:tabular-nums; color:var(--muted); font-size:12px; }

@@ -77,6 +77,13 @@ const near=(a,b)=>Math.abs((+a||0)-(+b||0))<1e-6;
   ok('columns: nothing written right of Part Cost', !cells.some(c=>c.col>8));
 
   const rowOf=pn=>cells.find(c=>c.col===3 && c.value===pn).row;
+  // v1.83.5: Item is 1…N within each drawing, matching the Sales Desk # column
+  const itemOf=pn=>ws.getCell(rowOf(pn),1).value;
+  ok('item: first drawing numbered from 1', itemOf('CAB-1')===1 && itemOf('CON-1')===2 && itemOf('TL-1')===4);
+  ok('item: the second drawing starts again at 1', itemOf('CON-2')===1 && itemOf('TL-2')===9);
+  const nums=vm.runInContext('(()=>{ const m=_sdItemNumbers(); return sdItems.map(r=>m.get(r)); })()', ctx);
+  ok('item: the export and the desk give every row the same number',
+     items.every((r,k)=>ws.getCell(rowOf(r.part_number),1).value===nums[k]));
   const pc=pn=>ws.getCell(rowOf(pn),8).value;
   const item=pn=>items.find(r=>r.part_number===pn);
   ['CAB-1','CON-1','LAB-1','TL-1','CON-2','LAB-2','MRK-3','OC-1','FA-1','FA-2'].forEach(pn=>{
