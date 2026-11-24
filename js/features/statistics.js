@@ -141,11 +141,11 @@ export function _statCoverage(parts){
 }
 
 // ── Formatting ──────────────────────────────────────────────────────────────
+// Times are shown in seconds everywhere (v1.83.7): 0.4 s, 53.4 s, 125 s.
 export function _statFmtMs(ms){
   if(ms==null) return '—';
-  return ms<1000 ? `${Math.round(ms)} ms`
-       : ms<60000 ? `${(ms/1000).toFixed(1)} s`
-       : `${Math.floor(ms/60000)}m ${Math.round((ms%60000)/1000)}s`;
+  const s=ms/1000;
+  return s<100 ? `${s.toFixed(1)} s` : `${Math.round(s)} s`;
 }
 export function _statFmtNum(n,dp=0){ return n==null ? '—' : (+n).toLocaleString(undefined,{minimumFractionDigits:dp,maximumFractionDigits:dp}); }
 export function _statFmtPct(p){ return p==null ? '—' : `${p.toFixed(1)}%`; }

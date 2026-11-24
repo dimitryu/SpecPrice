@@ -75,8 +75,12 @@ const INIT=`window.__DB['companies/c1/cut_strip_specs']=(()=>{const o=${specs}; 
   await L.mark(page,[{sel:'#adm-bin-body .bin-chk',idx:0,pad:4},'#bin-restore','#bin-purge']);
   await L.shot(page,'49c-admin-bin',P);
   P=await L.panel(page,'#adm-logs-body');
-  { const r=await page.evaluate(()=>[...document.querySelectorAll('#adm-logs-body tbody tr')].findIndex(t=>/drawing_bom_search/.test(t.textContent)));
-    await L.mark(page,[{sel:'#adm-logs-body input',idx:0},{sel:'#adm-logs-body tbody tr',idx:Math.max(0,r),pad:1},{sel:'#adm-logs-body tbody td.adm-log-details',idx:Math.max(0,r),pad:1,at:'right'}]); }
+  // v1.83.7: one drawing analysis opened, every value labelled and each step in seconds
+  { const r=await page.evaluate(()=>[...document.querySelectorAll('#adm-logs-body tbody tr')].findIndex(t=>/sales_desk_add_from_drawing/.test(t.textContent)));
+    await page.evaluate(i=>{ const td=document.querySelectorAll('#adm-logs-body tbody td.adm-log-details')[i]; td.classList.add('is-open');
+      const w=document.querySelector('#adm-logs-body .table-wrap'); w.scrollTop=Math.max(0, td.closest('tr').offsetTop-80); }, Math.max(0,r));
+    await page.waitForTimeout(200);
+    await L.mark(page,[{sel:'#adm-logs-body input',idx:0},{sel:'#adm-logs-body tbody tr td:nth-child(3)',idx:Math.max(0,r),pad:1},{sel:'#adm-logs-body tbody td.adm-log-details',idx:Math.max(0,r),pad:1,at:'right'}]); }
   await L.shot(page,'49-admin-logs',P);
   P=await L.panel(page,'#adm-prompts-body'); await L.shot(page,'49b-admin-prompts',P);
   console.log('errors',errs);

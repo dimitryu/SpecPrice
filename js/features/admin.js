@@ -2,6 +2,7 @@ import { S } from '../core/state.js';
 import { _aiSetProxy } from '../ai/client.js';
 import { logAudit } from '../core/audit.js';
 import { auth } from '../core/firebase.js';
+import { logDescribe, logSearchText, logTitle } from '../core/logText.js';
 import { parseBoolQuery, wireSearchClear } from '../core/table.js';
 import { closeModal, debounce, esc, fmtDateTime, setActions, setContent, showModal, toast } from '../core/ui.js';
 import { listRecentAuditEntries } from '../data/audit.js';
@@ -471,10 +472,18 @@ export let _admLogsCache=[], _admLogsFilterQ='';
 // the full value: the "Expand details" toggle below (applies to every row), or
 // clicking a single Details cell to expand just that one.
 export let _admLogsWrapDetails=false;
-export function _admLogsDetailsStyle(expanded){
-  return expanded
-    ? 'font-size:11px;color:var(--muted);max-width:420px;white-space:pre-wrap;word-break:break-word;cursor:pointer'
-    : 'font-size:11px;color:var(--muted);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer';
+// v1.83.7: an entry is shown in plain words (core/logText.js) — a title for
+// the action, one summary line, and on expanding every value with its label
+// and each step of an analysis with its time in seconds.
+export function _admLogDetailsHTML(l){
+  const x=logDescribe(l);
+  const items=x.items.filter(i=>i.key!=='stage_ms');
+  return `<div class="log-sum${x.error?' log-err':''}">${esc(x.summary)}</div>
+    <div class="log-full">
+      ${items.length?`<dl class="log-dl">${items.map(i=>`<dt>${esc(i.label)}</dt><dd${i.key==='error'?' class="log-err"':''}>${esc(i.value)}</dd>`).join('')}</dl>`:''}
+      ${x.steps.length?`<div class="log-steps-h">Steps</div><table class="log-steps">${x.steps.map(st=>
+        `<tr><td>${esc(st.label)}</td><td class="log-sec">${esc(st.sec)}</td></tr>`).join('')}</table>`:''}
+    </div>`;
 }
 export async function renderAdminLogsSection(){
   const body=document.getElementById('adm-logs-body');
@@ -502,14 +511,14 @@ export function _renderAdminLogsTable(){
       </div>
       <button class="btn btn-ghost" id="btn-adm-logs-refresh" style="white-space:nowrap">🔄 Refresh</button>
       <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);white-space:nowrap;cursor:pointer"
-             title="Show the full Details value on every row instead of one truncated line. You can also click any single Details cell to expand just that row.">
+             title="Show every detail of every row — each value with its label, and the time of each step in seconds. You can also click a single row's Details to open just that one.">
         <input type="checkbox" id="adm-logs-wrap" ${_admLogsWrapDetails?'checked':''} style="width:auto">
         Expand details
       </label>
       <span class="count-badge" id="adm-logs-count"></span>
     </div>
     <div class="table-wrap" style="max-height:60vh"><table>
-      <thead><tr><th>Timestamp</th><th>User</th><th>Action</th><th>Details</th><th style="width:60px">Result</th></tr></thead>
+      <thead><tr><th>Time</th><th>User</th><th>What happened</th><th>Details</th><th style="width:60px">Result</th></tr></thead>
       <tbody id="adm-logs-tbody"></tbody>
     </table></div>`;
   const searchInp=document.getElementById('adm-logs-search');
@@ -530,27 +539,21 @@ export function _admLogsFilterRows(){
   const rows=_admLogsCache.filter(l=>{
     if(!_admLogsFilterQ.trim()) return true;
     const detailsStr=typeof l.details==='object'?JSON.stringify(l.details):String(l.details||'');
-    return predicate([l.user,l.action,detailsStr,l.success?'success':'failed'].map(v=>String(v||'')).join(' | ').toLowerCase());
+    // the words shown, and the stored codes too (a search for "price_check" still works)
+    return predicate([l.user,l.viaUser,l.action,logSearchText(l),detailsStr,l.success?'success':'failed'].map(v=>String(v||'')).join(' | ').toLowerCase());
   });
   tbody.innerHTML=rows.map(l=>{
-    const detailsStr = typeof l.details==='object' ? JSON.stringify(l.details,null,_admLogsWrapDetails?1:0) : String(l.details||'');
+    const sys=l.user==='SYSTEM';
     return `<tr>
         <td style="white-space:nowrap;font-size:11px;color:var(--muted)">${fmtDateTime(l.timestamp)}</td>
-        <td style="font-size:12px">${esc(l.user||'')}</td>
-        <td style="font-size:12px;font-family:monospace">${esc(l.action||'')}</td>
-        <td class="adm-log-details" data-expanded="${_admLogsWrapDetails?'1':'0'}"
-            style="${_admLogsDetailsStyle(_admLogsWrapDetails)}"
-            title="Click to expand / collapse">${esc(detailsStr)}</td>
-        <td style="text-align:center">${l.success?'<span style="color:var(--ok)">✓</span>':'<span style="color:var(--bad)">✗</span>'}</td>
+        <td style="font-size:12px">${sys?`System${l.viaUser?`<div class="log-code" title="The app did this on its own, during this user's work">for ${esc(l.viaUser)}</div>`:''}`:esc(l.user||'')}</td>
+        <td style="font-size:12px">${esc(logTitle(l.action))}<div class="log-code">${esc(l.action||'')}</div></td>
+        <td class="adm-log-details${_admLogsWrapDetails?' is-open':''}" title="Click to show or hide every detail">${_admLogDetailsHTML(l)}</td>
+        <td style="text-align:center">${l.success?'<span style="color:var(--ok)" title="Worked">✓</span>':'<span style="color:var(--bad)" title="Did not work">✗</span>'}</td>
       </tr>`;
   }).join('');
-  // Per-row expand: lets the user open one long payload without switching the
-  // whole table to multi-line mode.
-  tbody.querySelectorAll('.adm-log-details').forEach(td=>td.addEventListener('click',()=>{
-    const expanded = td.dataset.expanded==='1';
-    td.dataset.expanded = expanded?'0':'1';
-    td.setAttribute('style',_admLogsDetailsStyle(!expanded));
-  }));
+  // Per-row open/close: one entry in full without opening every row.
+  tbody.querySelectorAll('.adm-log-details').forEach(td=>td.addEventListener('click',()=>td.classList.toggle('is-open')));
   if(countEl) countEl.textContent=`${rows.length} of ${_admLogsCache.length} (most recent 500)`;
 }
 

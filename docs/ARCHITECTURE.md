@@ -305,3 +305,14 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
 - **לא נשמר ב-Database:** `_sdDbPatch`/`_sdDbNewDoc`/`saveBOMToPartStock` לא כותבים `item` (נבדק).
 - פרומפטים: טבלה (טקסט/תמונה) — ITEM בדיוק כפי שמודפס, מספר הבלון בשרטוט, בלי מספור מחדש/השלמה; תוויות — `item` = מספר הבלון, נקרא בדיוק, אף פעם לא ממציאים.
 - בדיקות: `sd-labor-harness.js` (Item בטבלה, מיון, ייבוא, לא נשמר ב-DB), `xl-export-harness.js`, `app-logic.test.js` (פרומפטים).
+
+## v1.83.7 — יומן מערכת במילים, זמנים בשניות
+- **`core/logText.js`** (חדש, פונקציות טהורות): `logDescribe(entry)` → `{title, code, summary, items:[{key,label,value}], steps:[{key,label,sec,ms}], error}`; `logTitle(action)`; `logSec(ms)` (שניות תמיד; מעל דקה גם דקות בסוגריים); `logSearchText(entry)`.
+  - `LOG_ACTIONS` — כותרת לכל קוד פעולה (כולל user_created/updated/deleted של השרת); קוד לא מוכר → מילים מהקוד.
+  - `LOG_LABELS` / `LOG_ACTION_LABELS` — שם לכל שדה (ושם ייחודי לפי פעולה, למשל count → "Parts added to the desk"); `LOG_VALUES` — ערכים קודיים במילים (mode/how/to/on/reason/phase); `LOG_STAGES` — שמות השלבים של SD/RFQ/C&S; `LOG_HIDDEN` — provider/storage וכו' לא מוצגים.
+  - כל `ms` / `*_ms` → שניות; true/false → Yes/No; screen → שם המסך; רשימת חלקים → מק"טים.
+- **נשמר כמו קודם** (ms, קודים) — Statistics ממצע את אותם שדות ורשומות ישנות ממשיכות להשתוות. רק התצוגה השתנתה.
+- Admin › Logs: עמודות Time / User / What happened / Details / Result. User = "System — for …" לפעולות אוטומטיות. What happened = כותרת + הקוד באפור. Details = שורת סיכום; לחיצה (או Expand details) פותחת רשימת ערכים + Steps עם שניות. החיפוש מחפש גם במילים המוצגות וגם בקודים.
+- Statistics: `_statFmtMs` מציג שניות תמיד.
+- הערה: קבועים במודול חייבים להיות ניתנים לחילוץ ע"י `tests/extract.js` — בלי `new Set(...)` ובלי מפתח `db` לא מצוטט.
+- בדיקות: 19 ב-`app-logic.test.js` (כולל הדוגמה של דימה מהלוג).

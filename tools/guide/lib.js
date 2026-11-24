@@ -60,7 +60,8 @@ function auditJS(){
     if(day%3===0){ const f=['DEMO-100-01.pdf','DEMO-220-03.pdf','DEMO-310-02.pdf'][day%9/3|0];
       const dw=f.replace(/\.pdf$/,'');
       add(day,10,users[1],'drawing_bom_search',{drawing:dw,filename:f,provider:'anthropic',mode:'vision',rowsFound:6+day%5,ms:21000+day*400});
-      add(day,10,users[1],'sales_desk_add_from_drawing',{drawing:dw,count:6+day%5});
+      add(day,10,users[1],'sales_desk_add_from_drawing',{drawing:dw,count:6+day%5,files:1,priced:5+day%3,ms:52000+day*300,
+        stage_ms:{read:20320+day*40,title:3658,process:7367,notes:3180,tools:6024,desk:3,db:9466,price:2785}});
       add(day,11,users[1],'price_check',{drawing:dw,checked:8,found:7,failed:0,ms:9000+day*150});
       add(day,12,users[1],'sales_desk_export',{rows:8}); }
     if(day===4) add(day,10,users[1],'drawing_bom_search',{filename:'scan-blurry.jpg',mode:'vision'},false);

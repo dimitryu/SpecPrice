@@ -1210,9 +1210,9 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('stat: a pending serverTimestamp is skipped, not dated 1970', logDate({timestamp:null}), null);
   t('stat: details of a string-detail row read as empty', details({details:'text'}), {});
   t('stat: a missing row reads as empty', details(null), {});
-  t('stat: sub-second timings read in ms', fmtMs(450), '450 ms');
+  t('stat: sub-second timings in seconds too (v1.83.7)', fmtMs(450), '0.5 s');
   t('stat: seconds', fmtMs(4500), '4.5 s');
-  t('stat: minutes', fmtMs(125000), '2m 5s');
+  t('stat: long runs stay in seconds', fmtMs(125000), '125 s');
   t('stat: no measurement shows a dash', fmtMs(null), '—');
   t('stat: percentages carry one decimal', fmtPct(33.333), '33.3%');
   t('stat: no percentage shows a dash', fmtPct(null), '—');
@@ -2689,6 +2689,34 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   const src=G('isReadOnlyUser').toString();
   ok('read-only: viewer always, a role marked read_only, never the admin', /'viewer'/.test(src) && /read_only===true/.test(src) && /PROTECTED_ROLE\)\s*return false/.test(src));
 }
+// ─────────────────────────────────────────── v1.83.7: logs in plain words, times in seconds
+{
+  const D=G('logDescribe'), sec=G('logSec'), T=G('logTitle'), ST=G('logSearchText');
+  const e={action:'sales_desk_add_from_drawing', user:'dana@x', success:true,
+    details:{drawing:'70299220', count:8, ms:53397.199999928474,
+      stage_ms:{notes:3180, read:20320, desk:3, db:9466, process:7367, title:3658, tools:6024, price:2785}, files:1, priced:6}};
+  const x=D(e);
+  t('log: a title instead of the code', x.title, 'Drawing analysed and added to Sales Desk');
+  t('log: one summary line, time in seconds', x.summary, '8 parts added from 1 drawing · 6 priced · 53.4 s');
+  ok('log: every step by name, in seconds', x.steps.length===8 && x.steps.find(s=>s.key==='read').label==='Reading the parts list (BOM)' && x.steps.find(s=>s.key==='read').sec==='20.3 s');
+  ok('log: a 3 ms step reads 0.0 s', x.steps.find(s=>s.key==='desk').sec==='0.0 s');
+  ok('log: labelled values', x.items.some(i=>i.label==='Parts added to the desk' && i.value==='8') && x.items.some(i=>i.label==='Total time' && i.value==='53.4 s') && x.items.some(i=>i.label==='Parts priced' && i.value==='6'));
+  ok('log: no raw milliseconds anywhere', !/\d{4,}/.test(JSON.stringify([x.summary, x.items.filter(i=>i.key!=='drawing').map(i=>i.value), x.steps.map(s=>s.sec)])));
+  t('sec: under 10 s', sec(3180), '3.2 s');
+  t('sec: over a minute adds minutes', sec(378535), '379 s (6 min 19 s)');
+  t('sec: not a number', sec('x'), '');
+  t('log: unknown action → words', T('some_new_thing'), 'Some new thing');
+  t('log: booleans read yes / no', D({action:'drawing_title_block', details:{found:true, ms:1200}}).items.find(i=>i.key==='found').value, 'Yes');
+  t('log: codes read as what they mean', D({action:'drawing_bom_search', details:{mode:'callouts', rowsFound:8, ms:9000}}).summary, '8 rows read from the part labels on the drawing · 9.0 s');
+  t('log: screens by their names', D({action:'screen_open', details:{screen:'part-stock'}}).summary, 'Database');
+  t('log: an error leads the summary', D({action:'drawing_bom_search', success:false, details:{error:'Rate limit', ms:1500}}).summary, 'Error: Rate limit · 1.5 s');
+  t('log: a text detail stays as written', D({action:'ai_key_test', details:'Connected — the key works'}).summary, 'Connected — the key works');
+  t('log: provider is not shown', D({action:'drawing_notes_search', details:{provider:'anthropic', notesFound:4}}).items.map(i=>i.key), ['notesFound']);
+  t('log: deleted parts listed by part number', D({action:'database_delete_parts', details:{count:2, items:[{part_number:'A1'},{part_number:'B2'}], to:'recycle_bin'}}).items.find(i=>i.key==='items').value, 'A1, B2');
+  t('log: price check summary', D({action:'price_check', details:{screen:'Sales Desk', checked:9, found:6, failed:0, stopped:false, ms:2785}}).summary, '9 parts checked on Sales Desk · 6 found · 2.8 s');
+  ok('log: search finds the words shown and the code', /Reading the parts list/.test(ST(e)) && /sales_desk_add_from_drawing/.test(ST(e)));
+}
+
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);
 if(fail){ failures.forEach(f=>console.log('  ✗ '+f+'\n')); process.exit(1); }
