@@ -4,6 +4,7 @@ import { _csPrompt } from '../ai/cutstrip.js';
 import { _cableProcessPrompt, _notesPrompt } from '../ai/process.js';
 import { _crimpToolPrompt } from '../ai/tooling.js';
 import { logAudit } from '../core/audit.js';
+import { bindCollapseControls, collapseControlsHTML, makePanelsCollapsible } from '../core/collapse.js';
 import { auth, sendPasswordResetEmail } from '../core/firebase.js';
 import { icon } from '../core/icons.js';
 import { ADMIN_AUTO_VIEWS, PROTECTED_ROLE, PROTECTED_VIEWS, ROLES_META_DOC, SEED_ROLE_VIEWS, _isRoleDocId, _mergedRoleKeys, roleOptions } from '../core/roles.js';
@@ -22,7 +23,7 @@ import { _CS_SOURCE_LANG } from './cutstrip/i18n.js';
 // "Settings" nav item. showSettingsModal() below remains a lightweight modal used
 // only as a contextual prompt when a task needs an AI key that isn't configured yet.
 export function renderSettingsPage(){
-  setActions('');
+  setActions(collapseControlsHTML());
   setContent(`
     <div class="settings-panel" style="padding:20px 22px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Sales Desk</h3>
@@ -68,6 +69,8 @@ export function renderSettingsPage(){
 
   renderSettingsLogoSection();
   renderSettingsUsersSection();
+  makePanelsCollapsible(document.getElementById('content'),'settings');
+  bindCollapseControls('settings');
   renderSettingsRolesSection();
 }
 

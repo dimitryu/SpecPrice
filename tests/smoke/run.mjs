@@ -71,6 +71,15 @@ for(const [view,re] of screens){
   if(SHOW===view) console.log(c.slice(0,1500)+'\nACTIONS: '+w.document.getElementById('topbar-actions').innerHTML.slice(0,500));
   ok(`screen "${view}" renders`, re.test(c+w.document.getElementById('topbar-actions').innerHTML) && errors.length===before);
 }
+// v1.83.8: Admin, Settings and Statistics fold their panels; Expand/Collapse all in the top bar
+for(const view of ['admin','settings','statistics']){
+  await route(view); for(let i=0;i<15;i++) await tick();
+  const d=w.document, n=d.querySelectorAll('#content .settings-panel[data-cp]').length;
+  d.getElementById('cp-collapse-all')?.click();
+  const shut=d.querySelectorAll('#content .settings-panel.is-collapsed').length;
+  d.getElementById('cp-expand-all')?.click();
+  ok(`${view}: every titled panel folds and opens`, n>=3 && shut===n && d.querySelectorAll('#content .settings-panel.is-collapsed').length===0);
+}
 // the Database screen and its live list come from data/parts.js
 await route('part-stock'); for(let i=0;i<10;i++) await tick();
 ok('database: the live part is listed', /P-1/.test(w.document.getElementById('content').innerHTML));

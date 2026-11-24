@@ -1,5 +1,6 @@
 import { S } from '../core/state.js';
 import { logAudit } from '../core/audit.js';
+import { bindCollapseControls, collapseControlsHTML, makePanelsCollapsible } from '../core/collapse.js';
 import { _isRoleDocId } from '../core/roles.js';
 import { esc, setActions, setContent, toast } from '../core/ui.js';
 import { listAuditEntriesBetween } from '../data/audit.js';
@@ -197,7 +198,7 @@ export function _statBlock(key, title, note, innerHTML, columns, rows){
 
 // ── The screen ──────────────────────────────────────────────────────────────
 export function renderStatisticsPage(){
-  setActions('');
+  setActions(collapseControlsHTML());
   if(!_statFrom) _statSetRangeDays(30);
   setContent(`
     <div class="stat-wrap">
@@ -232,6 +233,7 @@ export function renderStatisticsPage(){
     _statLoad();
   });
   document.getElementById('stat-export-all').addEventListener('click',()=>_statExportAll());
+  bindCollapseControls('statistics');
   _statLoad();
 }
 
@@ -270,6 +272,7 @@ export async function _statLoad(){
   }catch(e){ countErr=e.message; }
 
   host.innerHTML=_statRender(logs, logErr, parts, counts, countErr);
+  makePanelsCollapsible(host,'statistics');
   host.querySelectorAll('.stat-export').forEach(b=>
     b.addEventListener('click',()=>_statExportBlock(b.dataset.block)));
 }

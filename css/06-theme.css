@@ -328,3 +328,20 @@ details.sym-legend summary { color:var(--muted); }
 .log-steps { border-collapse:collapse; font-size:11.5px; }
 .log-steps td { padding:1px 12px 1px 0; border:0; background:transparent !important; }
 .log-steps .log-sec { font-family:var(--mono); font-variant-numeric:tabular-nums; text-align:end; }
+
+/* Collapsible panels (v1.83.8) — Admin, Settings, Statistics. The panel title
+   is the toggle; folded, only the title line (and a Statistics block's note
+   and Export) stays. Chevron points right when folded, down when open. */
+.cp-head .cp-toggle { all:unset; box-sizing:border-box; display:inline-flex; align-items:center; gap:6px;
+  cursor:pointer; font:inherit; color:inherit; border-radius:5px; transition:color 150ms; }
+h3.cp-head .cp-toggle { display:flex; width:100%; }
+.cp-head .cp-toggle:hover { color:var(--primary); }
+.cp-head .cp-toggle:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
+.cp-chev { display:inline-flex; color:var(--muted); transform:rotate(90deg); transition:transform 150ms, color 150ms; }
+.cp-head .cp-toggle:hover .cp-chev { color:var(--primary); }
+.settings-panel.is-collapsed .cp-chev { transform:none; }
+.settings-panel.is-collapsed > :not(.cp-head) { display:none !important; }
+.settings-panel.is-collapsed > h3.cp-head { margin-bottom:0 !important; }
+.settings-panel.is-collapsed > .stat-block-head { margin-bottom:0; }
+@media (prefers-reduced-motion: reduce){ .cp-chev, .cp-head .cp-toggle { transition:none; } }
+.settings-panel.is-collapsed { padding-top:12px !important; padding-bottom:12px !important; }

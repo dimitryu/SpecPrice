@@ -1,6 +1,7 @@
 import { S } from '../core/state.js';
 import { _aiSetProxy } from '../ai/client.js';
 import { logAudit } from '../core/audit.js';
+import { bindCollapseControls, collapseControlsHTML, makePanelsCollapsible } from '../core/collapse.js';
 import { auth } from '../core/firebase.js';
 import { logDescribe, logSearchText, logTitle } from '../core/logText.js';
 import { parseBoolQuery, wireSearchClear } from '../core/table.js';
@@ -19,7 +20,7 @@ import { _SUPPORT_ICON_SVG, _SUPPORT_ROW_BG, _SUPPORT_STATUSES, _SUPPORT_STATUS_
 // same way as Settings (see route()). Reached via the "🛡️ Admin" Home button.
 // ══════════════════════════════════════════════════════════════════════════════
 export function renderAdminPage(){
-  setActions('');
+  setActions(collapseControlsHTML());
   setContent(`
     <div class="settings-panel" style="padding:20px 22px;">
       <h3 style="font-size:14px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">🔑 AI API Keys</h3>
@@ -113,6 +114,8 @@ export function renderAdminPage(){
   renderAdminTicketsSection();
   renderAdminBinSection();
   renderAdminLogsSection();
+  makePanelsCollapsible(document.getElementById('content'),'admin');
+  bindCollapseControls('admin');
   renderAdminPromptsSection();
 }
 

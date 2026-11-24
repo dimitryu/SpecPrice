@@ -316,3 +316,11 @@ cd tests && node extract.js && node app-logic.test.js   # ועוד ה-harnesses
 - Statistics: `_statFmtMs` מציג שניות תמיד.
 - הערה: קבועים במודול חייבים להיות ניתנים לחילוץ ע"י `tests/extract.js` — בלי `new Set(...)` ובלי מפתח `db` לא מצוטט.
 - בדיקות: 19 ב-`app-logic.test.js` (כולל הדוגמה של דימה מהלוג).
+
+## v1.83.8 — Collapsible panels on Admin, Settings and Statistics
+- New `web/js/core/collapse.js`: `makePanelsCollapsible(root, screen)` finds every `.settings-panel` whose first heading is an `<h3>` or a Statistics `.stat-block-title`, moves the title into a `<button class="cp-toggle" aria-expanded>` with a chevron, and marks the heading `.cp-head`. Panels without a title (the Statistics date bar, an error box) are left alone. Each panel gets a key from its title (`data-cp`, e.g. `ai-api-keys`; a repeated title gets `-2`). Calling it again only re-applies the remembered state.
+- Folded = `.settings-panel.is-collapsed`; CSS (06-theme.css) hides every child except `.cp-head`, so section code and ids are untouched. A Statistics block keeps its note and Export while folded.
+- `setAllPanels(root, screen, open)` and the top-bar `Expand all` / `Collapse all` (`collapseControlsHTML()` + `bindCollapseControls(screen)`), which act on the panels on screen at click time, so a Statistics redraw needs no re-wiring.
+- State is per screen (`admin` / `settings` / `statistics`) in localStorage `sp.collapsed.<screen>` — this browser only, every access in try/catch; blocked storage = all open.
+- Wiring: `renderAdminPage`, `renderSettingsPage` and `renderStatisticsPage` put the controls in `setActions(...)`; `_statLoad` calls `makePanelsCollapsible(host,'statistics')` after each redraw.
+- Tests: `tests/collapse-harness.js` (32) + smoke checks on the three screens. Guide: new section in chapter 11 with `46a-admin-collapsed`, short notes in chapters 8 and 10.

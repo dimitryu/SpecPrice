@@ -83,6 +83,12 @@ const INIT=`window.__DB['companies/c1/cut_strip_specs']=(()=>{const o=${specs}; 
     await L.mark(page,[{sel:'#adm-logs-body input',idx:0},{sel:'#adm-logs-body tbody tr td:nth-child(3)',idx:Math.max(0,r),pad:1},{sel:'#adm-logs-body tbody td.adm-log-details',idx:Math.max(0,r),pad:1,at:'right'}]); }
   await L.shot(page,'49-admin-logs',P);
   P=await L.panel(page,'#adm-prompts-body'); await L.shot(page,'49b-admin-prompts',P);
+  // v1.83.8: every section folds to its title; Expand all / Collapse all in the top bar
+  await page.evaluate(()=>window.scrollTo(0,0)); await page.click('#cp-collapse-all'); await page.click('.cp-toggle >> nth=0');
+  await page.mouse.move(5,790); await page.evaluate(()=>window.scrollTo(0,0)); await page.waitForTimeout(300);
+  await L.mark(page,['#cp-expand-all','#cp-collapse-all',{sel:'.cp-toggle',idx:1,pad:3}]);
+  await L.shot(page,'46a-admin-collapsed',{x:0,y:0,width:1100,height:800});
+  await page.click('#cp-expand-all');
   console.log('errors',errs);
   await b.close();
 
