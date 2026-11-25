@@ -83,6 +83,7 @@ export function renderAdminPage(){
         <button class="btn" id="btn-adm-test-dist">🧪 Test Connection</button>
       </div>
       <div id="adm-dist-test" style="margin-top:12px"></div>
+      ${_admSupplierLimitsHTML()}
     </div>
 
     <div class="settings-panel" style="padding:20px 22px;margin-top:20px;">
@@ -198,6 +199,35 @@ export async function renderAdminAiKeySection(){
   });
 
   refreshStatus();
+}
+
+// ── What each supplier's key allows (v1.83.9) ─────────────────────────────────
+// One key per supplier serves every user, so these are the company's limits.
+// Mouser and Online Components publish theirs on their API pages; DigiKey's
+// per-minute limit is in its API FAQ and 1,000 a day is its standard plan;
+// element14 publishes no numbers (a "courtesy usage allowance") — 2 a second
+// and 1,000 a day are what is reported for a basic key.
+export const SUPPLIER_LIMITS=[
+  {name:'Mouser', minute:'30', day:'1,000', results:'50', perPart:'1–2', how:'Part number first; a keyword search only if it is not found.',
+   reached:'Too many calls — wait a minute. Daily limit — the next day.', source:'mouser.com/api-search'},
+  {name:'DigiKey', minute:'120', day:'1,000', dayNote:'standard key', results:'—', perPart:'1–2', how:'Part number first; a keyword search only if it is not found. Plus a sign-in about every 10 minutes.',
+   reached:'Per minute — wait a minute. Daily limit — the next day.', source:'developer.digikey.com (FAQ)'},
+  {name:'Online Components', minute:'100', day:'100,000', results:'50', perPart:'1', how:'One search per part.',
+   reached:'Wait a minute.', source:'onlinecomponents.com/en/gettingstarted'},
+  {name:'Farnell (element14)', minute:'2', minuteNote:'a second', day:'1,000', dayNote:'basic key', results:'—', perPart:'1', how:'One search per part. The app sends at most 2 a second and retries when told to slow down.',
+   reached:'Per second — the app waits and retries. Daily limit — the next day.', source:'not published by element14 (“courtesy usage allowance”)'},
+];
+export function _admSupplierLimitsHTML(){
+  return `<div class="adm-limits" style="margin-top:18px">
+    <div style="font-size:12px;font-weight:700;color:var(--blue-dark);margin-bottom:4px">Usage limits of each supplier's key</div>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:8px">One key per supplier is shared by every user of the app, so these limits are for the whole company. When a limit is reached that supplier stops answering until it resets: Check Price says so under the results, and the problem is saved in System Logs below.</p>
+    <div class="table-wrap"><table class="adm-limits-tbl" style="font-size:11.5px">
+      <thead><tr><th>Supplier</th><th title="Calls a minute (Farnell: a second)">Calls a minute</th><th>Calls a day</th><th>Results per search</th><th>Calls per part checked</th><th>When the limit is reached</th></tr></thead>
+      <tbody>${SUPPLIER_LIMITS.map(l=>`<tr><td><strong>${esc(l.name)}</strong></td><td><span class="num">${esc(l.minute)}</span>${l.minuteNote?` <span class="adm-lim-note">${esc(l.minuteNote)}</span>`:''}</td><td><span class="num">${esc(l.day)}</span>${l.dayNote?` <span class="adm-lim-note">${esc(l.dayNote)}</span>`:''}</td><td class="num">${esc(l.results)}</td>
+        <td><span class="num">${esc(l.perPart)}</span> <span class="adm-lim-note">— ${esc(l.how)}</span></td><td>${esc(l.reached)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <p style="font-size:11px;color:var(--muted);margin-top:6px">Example: a drawing with 60 parts uses about 60–120 Mouser calls of its 1,000 a day. An adhesive row (ml) also searches each supplier once for its bottle sizes. Sources: ${SUPPLIER_LIMITS.map(l=>`${esc(l.name)} — ${esc(l.source)}`).join('; ')}. A higher limit is arranged with the supplier.</p>
+  </div>`;
 }
 
 // ── Distributor API credentials (Mouser / DigiKey) ───────────────────────────
@@ -317,7 +347,15 @@ export async function renderAdminDistributorApiSection(){
            <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Test part: ${esc(r.pn)}</div>
            ${line('Mouser',r.mouser)}${line('DigiKey',r.digikey)}${r.onlinecomp?line('Online Components',r.onlinecomp):''}${r.farnell?line('Farnell',r.farnell):''}
          </div>`;
-      logAudit('distributor_api_test',`mouser=${r.mouser.ok} digikey=${r.digikey.ok} onlinecomp=${!!(r.onlinecomp&&r.onlinecomp.ok)} farnell=${!!(r.farnell&&r.farnell.ok)}`,r.mouser.ok||r.digikey.ok||!!(r.onlinecomp&&r.onlinecomp.ok)||!!(r.farnell&&r.farnell.ok));
+      // v1.83.9: what each supplier answered, and a failed entry when any
+      // supplier that has a key did not work.
+      const _names={mouser:'Mouser',digikey:'DigiKey',onlinecomp:'Online Components',farnell:'Farnell'};
+      const det={pn:r.pn}, bad=[];
+      for(const k of Object.keys(_names)){ const v=r[k]; if(!v) continue;
+        det[k]=v.skipped?'Not configured':(v.ok?'OK — ':'')+v.message;
+        if(!v.ok && !v.skipped) bad.push(`${_names[k]}: ${v.message}`); }
+      if(bad.length) det.error=bad.join(' · ');
+      logAudit('distributor_api_test',det,!bad.length);
     }catch(e){
       testEl.innerHTML=`<span style="color:var(--red);font-size:11px">${esc(e.message)}</span>`;
     }finally{ testBtn.disabled=false; testBtn.textContent='🧪 Test Connection'; }

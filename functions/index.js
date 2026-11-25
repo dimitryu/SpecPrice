@@ -372,8 +372,17 @@ const numFrom = v => {
  * written with different punctuation is invisible to it. The keyword pass casts
  * a wider net and our own matchPart() does the deciding — which keeps the
  * safety property that we never quote a neighbouring part's price. */
+// A fetch that names the supplier when it fails: AbortSignal.timeout throws
+// "The operation was aborted due to timeout", which on its own does not say
+// which supplier went quiet.
+async function vendorFetch(vendor, url, init) {
+  try { return await fetch(url, init); }
+  catch (e) {
+    throw new Error(`${vendor}: ` + (e && e.name === 'TimeoutError' ? 'no answer within 20 s (timed out) — try again shortly' : 'network error — could not reach the server'));
+  }
+}
 async function mouserPost(path, apiKey, body) {
-  const resp = await fetch(
+  const resp = await vendorFetch('Mouser', 
     `https://api.mouser.com/api/v1/${path}?apiKey=${encodeURIComponent(apiKey)}`,
     {
       method: 'POST',
@@ -382,7 +391,7 @@ async function mouserPost(path, apiKey, body) {
       signal: AbortSignal.timeout(20000),
     }
   );
-  if (resp.status === 429) throw new Error('Mouser rate limit reached (HTTP 429) — try again shortly');
+  if (resp.status === 429) throw new Error('Mouser: too many calls (limit 30 a minute, 1,000 a day) — try again shortly');
   if (resp.status === 401 || resp.status === 403) throw new Error(`Mouser auth failed (HTTP ${resp.status}) — check the API key`);
   if (!resp.ok) throw new Error(`Mouser HTTP ${resp.status}`);
   const data = await resp.json();
@@ -447,10 +456,18 @@ async function lookupMouser(pn, qty, apiKey, desc) {
 // ── DigiKey: OAuth2 client-credentials, then a keyword search ─────────────
 // The access token is valid for ~10 minutes; cache it in module scope so a
 // warm instance reuses it across parts instead of re-authenticating each time.
+// DigiKey answers 429 for two different limits: a burst (more than 120 calls
+// a minute) and the daily allowance. The body says which.
+async function digikeyLimitError(resp) {
+  let t = '';
+  try { t = await resp.text(); } catch { /* keep generic */ }
+  if (/daily/i.test(t)) return new Error('DigiKey daily call limit reached (1,000 a day on a standard key) — try again tomorrow');
+  return new Error('DigiKey: too many calls per minute (limit 120) — try again in a minute');
+}
 let _dkToken = null, _dkTokenExp = 0;
 async function digikeyToken(clientId, clientSecret) {
   if (_dkToken && Date.now() < _dkTokenExp - 60000) return _dkToken;
-  const resp = await fetch('https://api.digikey.com/v1/oauth2/token', {
+  const resp = await vendorFetch('DigiKey', 'https://api.digikey.com/v1/oauth2/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -602,22 +619,22 @@ async function lookupDigiKey(pn, qty, clientId, clientSecret, desc) {
       // a real problem the user needs to see rather than have masked by the
       // fallback silently returning nothing.
       if (resp.status === 401 || resp.status === 403) throw new Error(`DigiKey auth failed (HTTP ${resp.status}) — check credentials/API access`);
-      if (resp.status === 429) throw new Error('DigiKey rate limit reached (HTTP 429) — try again shortly');
+      if (resp.status === 429) throw await digikeyLimitError(resp);
     }
   } catch (e) {
-    if (/auth failed|rate limit/.test(e.message)) throw e;
+    if (/auth failed|limit/.test(e.message)) throw e;
     // Network hiccup on the precise path: fall through and try the search.
   }
 
   // ── 2. Keyword search fallback ──
-  const resp = await fetch('https://api.digikey.com/products/v4/search/keyword', {
+  const resp = await vendorFetch('DigiKey', 'https://api.digikey.com/products/v4/search/keyword', {
     method: 'POST',
     headers,
     body: JSON.stringify({ Keywords: pn, Limit: 50, Offset: 0 }),
     signal: AbortSignal.timeout(20000),
   });
   if (!resp.ok) {
-    if (resp.status === 429) throw new Error('DigiKey rate limit reached (HTTP 429) — try again shortly');
+    if (resp.status === 429) throw await digikeyLimitError(resp);
     throw new Error(`DigiKey HTTP ${resp.status}`);
   }
   const data = await resp.json();
@@ -669,9 +686,9 @@ async function lookupOnlineComp(pn, qty, apiKey, apiName, desc) {
   const url = `${OC_BASE}/${encodeURIComponent(apiName || OC_DEFAULT_API_NAME)}/${encodeURIComponent(pn)}/false/false/50/${encodeURIComponent(apiKey)}`;
   let resp;
   try { resp = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(20000) }); }
-  catch (e) { throw new Error('Online Components: ' + (e.name === 'TimeoutError' ? 'timed out' : 'network error')); }
+  catch (e) { throw new Error('Online Components: ' + (e.name === 'TimeoutError' ? 'no answer within 20 s (timed out)' : 'network error')); }
   if (resp.status === 401 || resp.status === 403) throw new Error(`Online Components auth failed (HTTP ${resp.status}) — check the API key and API name`);
-  if (resp.status === 429) throw new Error('Online Components rate limit reached (HTTP 429) — try again shortly');
+  if (resp.status === 429) throw new Error('Online Components: too many calls (limit 100 a minute) — try again shortly');
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`Online Components HTTP ${resp.status}`);
   const data = await resp.json().catch(() => null);
@@ -742,29 +759,66 @@ function readFarnellPart(p, qty, exact, store) {
     moq: parseInt(p.translatedMinimumOrderQuality, 10) || 0,
   };
 }
+/* Why element14 answered 403. Its API gateway (Mashery) gives the reason in
+ * an X-Mashery-Error-Code header and in a short non-JSON body such as
+ * "<h1>Developer Over Qps</h1>"; a JSON body carries it in error.message.
+ * Before v1.83.9 only the JSON form was read, so a burst of Check Price calls
+ * ("over QPS", 2 calls a second on a basic key) was reported as a bad key. */
+function farnellReason(status, header, text, errMsg) {
+  const all = `${header || ''} ${errMsg || ''} ${String(text || '').slice(0, 400)}`;
+  if (/OVER_QPS|Over\s*Qps/i.test(all)) return 'qps';
+  if (/OVER_RATE|Over\s*Rate/i.test(all)) return 'daily';
+  if (/INACTIVE|Inactive/i.test(all)) return 'inactive';
+  if (/NOT_AUTHORIZED|Not\s*Authorized|UNAUTHORIZED|Invalid\s*(api\s*)?key/i.test(all)) return 'key';
+  if (/Access\s*Denied|Reference\s*#|akamai/i.test(all)) return 'blocked';
+  if (status === 429) return 'qps';
+  return '';
+}
+const FARNELL_REASON_TEXT = {
+  daily: 'Farnell daily call limit reached — try again tomorrow',
+  inactive: 'Farnell: the API key is not active — open partner.element14.com and check that the key is approved and active for the Product Search API',
+  key: 'Farnell: the API key was not accepted — check that it was copied in full (24 characters) and that it is for the Product Search API',
+  blocked: 'Farnell: their firewall blocked the request ("Access Denied") — not a key problem; try again later',
+  qps: 'Farnell: too many calls per second (a basic key allows 2) — the part was skipped; check it again',
+};
+// A basic element14 key allows 2 calls a second. Calls from this server
+// instance go out at least FARNELL_GAP_MS apart; a Check Price still runs
+// several parts at once, so an "over QPS" answer is also retried after a pause.
+const FARNELL_GAP_MS = 550;
+let _farnellNext = 0;
+async function _farnellPace() {
+  const now = Date.now();
+  const at = Math.max(now, _farnellNext);
+  _farnellNext = at + FARNELL_GAP_MS;
+  if (at > now) await new Promise(r => setTimeout(r, at - now));
+}
 async function _farnellFetch(url) {
-  // Default keys allow a couple of calls per second; a Check Price runs
-  // several parts at once, so an "over QPS" answer is retried after a pause.
   for (let attempt = 0; ; attempt++) {
+    await _farnellPace();
     let resp;
     try { resp = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(20000) }); }
-    catch (e) { throw new Error('Farnell: ' + (e.name === 'TimeoutError' ? 'timed out' : 'network error')); }
+    catch (e) { throw new Error('Farnell: ' + (e.name === 'TimeoutError' ? 'no answer within 20 s (timed out)' : 'network error')); }
+    let text = '';
+    try { text = await resp.text(); } catch { /* status below */ }
     let data = null;
-    try { data = await resp.json(); } catch { /* status below */ }
+    try { data = text ? JSON.parse(text) : null; } catch { /* not JSON — a gateway page */ }
     const errMsg = data && data.error ? String(data.error.message || '') : '';
     const fault = data && data.Fault ? String((data.Fault.Reason && data.Fault.Reason.Text) || data.Fault.faultstring || '') : '';
-    if ((resp.status === 403 || resp.status === 429) && /QPS|rate|over/i.test(errMsg) && !/Over Rate/i.test(errMsg) && attempt < 3) {
-      await new Promise(r => setTimeout(r, 700 * (attempt + 1)));
-      continue;
+    const header = resp.headers && typeof resp.headers.get === 'function' ? (resp.headers.get('x-mashery-error-code') || '') : '';
+    if (resp.status === 401 || resp.status === 403 || resp.status === 429) {
+      const why = farnellReason(resp.status, header, text, errMsg);
+      if (why === 'qps' && attempt < 3) { await new Promise(r => setTimeout(r, 800 * (attempt + 1))); continue; }
+      if (FARNELL_REASON_TEXT[why]) throw new Error(FARNELL_REASON_TEXT[why]);
+      throw new Error(`Farnell refused the request (HTTP ${resp.status}${errMsg ? ': ' + errMsg : ''}) — check the API key in Admin and that it is active at partner.element14.com`);
     }
-    if (/Over Rate/i.test(errMsg)) throw new Error('Farnell daily call limit reached — try again tomorrow');
-    if (resp.status === 401 || resp.status === 403) throw new Error(`Farnell auth failed (HTTP ${resp.status}${errMsg ? ': ' + errMsg : ''}) — check the API key`);
+    if (/Over\s*Rate/i.test(errMsg)) throw new Error(FARNELL_REASON_TEXT.daily);
     if (resp.status === 404) return null;
     if (!resp.ok) {
       // "Manufacturer Part Number is not valid" (200004) just means: no such part.
       if (/not valid|200004|200001/i.test(errMsg + ' ' + fault)) return null;
       throw new Error(`Farnell HTTP ${resp.status}${errMsg ? ': ' + errMsg : ''}`);
     }
+    if (!data) throw new Error('Farnell: the answer was not readable (not JSON)');
     return data;
   }
 }
@@ -849,7 +903,7 @@ async function bottleOffersFor(vendor, family, need, creds) {
   }
   if (vendor === 'digikey') {
     const token = await digikeyToken(creds.digikey_client_id, creds.digikey_client_secret);
-    const resp = await fetch('https://api.digikey.com/products/v4/search/keyword', {
+    const resp = await vendorFetch('DigiKey', 'https://api.digikey.com/products/v4/search/keyword', {
       method: 'POST', headers: digikeyHeaders(token, creds.digikey_client_id),
       body: JSON.stringify({ Keywords: family, Limit: 50, Offset: 0 }), signal: AbortSignal.timeout(20000) });
     if (!resp.ok) throw new Error(`DigiKey HTTP ${resp.status}`);
@@ -865,7 +919,7 @@ async function bottleOffersFor(vendor, family, need, creds) {
     const url = `${OC_BASE}/${encodeURIComponent(creds.onlinecomp_api_name || OC_DEFAULT_API_NAME)}/${encodeURIComponent(family)}/false/false/50/${encodeURIComponent(creds.onlinecomp_api_key)}`;
     let resp;
     try { resp = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(20000) }); }
-    catch (e) { throw new Error('Online Components: network error'); }
+    catch (e) { throw new Error('Online Components: ' + (e.name === 'TimeoutError' ? 'no answer within 20 s (timed out)' : 'network error')); }
     if (resp.status === 404) return [];
     if (!resp.ok) throw new Error(`Online Components HTTP ${resp.status}`);
     const data = await resp.json().catch(() => null);

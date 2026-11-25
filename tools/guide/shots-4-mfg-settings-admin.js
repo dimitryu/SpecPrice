@@ -65,6 +65,8 @@ const INIT=`window.__DB['companies/c1/cut_strip_specs']=(()=>{const o=${specs}; 
   await L.mark(page,['#adm-dist-status','#adm-mouser-key','#btn-adm-save-dist','#btn-adm-test-dist']);
   await page.evaluate(()=>{ const f=document.getElementById('btn-support-fab'); if(f) f.style.visibility='hidden'; });
   await L.shot(page,'47-admin-dist',P);
+  // v1.83.9: what each supplier's key allows
+  await page.evaluate(()=>document.querySelector('.adm-limits').scrollIntoView({block:'center'})); await page.waitForTimeout(300); await L.shot(page,'47b-admin-limits','.adm-limits');
   await page.evaluate(()=>{ const f=document.getElementById('btn-support-fab'); if(f) f.style.visibility=''; });
   P=await L.panel(page,'#adm-tickets-body');
   await L.mark(page,[{sel:'#adm-tickets-body select',idx:0},{sel:'#adm-tickets-body select',idx:1},{sel:'#adm-tickets-body tbody tr',idx:2,pad:1},{sel:'#adm-tickets-body tbody select',idx:0},{sel:'#adm-tickets-body tbody button',idx:0}]);
@@ -82,6 +84,15 @@ const INIT=`window.__DB['companies/c1/cut_strip_specs']=(()=>{const o=${specs}; 
     await page.waitForTimeout(200);
     await L.mark(page,[{sel:'#adm-logs-body input',idx:0},{sel:'#adm-logs-body tbody tr td:nth-child(3)',idx:Math.max(0,r),pad:1},{sel:'#adm-logs-body tbody td.adm-log-details',idx:Math.max(0,r),pad:1,at:'right'}]); }
   await L.shot(page,'49-admin-logs',P);
+  // v1.83.9: a supplier that answered with an error is its own failed entry
+  { P=await L.panel(page,'#adm-logs-body'); await L.unmark(page);
+    await page.fill('#adm-logs-body input >> nth=0','Supplier problem'); await page.waitForTimeout(500);
+    await page.evaluate(()=>{ const td=document.querySelector('#adm-logs-body tbody td.adm-log-details'); if(td) td.classList.add('is-open');
+      const w=document.querySelector('#adm-logs-body .table-wrap'); if(w) w.scrollTop=0; });
+    await page.waitForTimeout(200);
+    await L.mark(page,[{sel:'#adm-logs-body tbody tr td:nth-child(3)',idx:0,pad:1},{sel:'#adm-logs-body tbody td.adm-log-details',idx:0,pad:1,at:'right'}]);
+    await L.shot(page,'49d-admin-supplier-error',P);
+    await L.unmark(page); await page.fill('#adm-logs-body input >> nth=0',''); await page.waitForTimeout(300); }
   P=await L.panel(page,'#adm-prompts-body'); await L.shot(page,'49b-admin-prompts',P);
   // v1.83.8: every section folds to its title; Expand all / Collapse all in the top bar
   await page.evaluate(()=>window.scrollTo(0,0)); await page.click('#cp-collapse-all'); await page.click('.cp-toggle >> nth=0');

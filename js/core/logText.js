@@ -49,6 +49,7 @@ export const LOG_ACTIONS={
   role_saved:'Role saved', role_deleted:'Role deleted', roles_seeded:'Default roles created',
   ai_keys_updated:'AI key saved', ai_key_test:'AI key tested',
   distributor_api_keys_updated:'Supplier API keys saved', distributor_api_test:'Supplier API keys tested',
+  supplier_api_error:'Supplier problem while checking prices',
   support_ticket_submitted:'Support request sent', ticket_replied:'Admin replied to a support request',
   ticket_user_replied:'User replied to a support request', ticket_status_changed:'Support request status changed',
   recycle_bin_restore:'Restored from the Recycle Bin', recycle_bin_purge:'Deleted permanently from the Recycle Bin',
@@ -102,6 +103,8 @@ export const LOG_ACTION_LABELS={
   drawing_title_block:{found:'Drawing #, title or revision found'},
   crimp_tool_search:{found:'Tools found'},
   price_check:{found:'Found at a supplier', failed:'Lookups that failed'},
+  supplier_api_error:{suppliers:'Supplier', error:'What the supplier answered', errors:'All the problems', checked:'Parts checked'},
+  distributor_api_test:{pn:'Test part', mouser:'Mouser', digikey:'DigiKey', onlinecomp:'Online Components', farnell:'Farnell'},
   database_delete_parts:{count:'Parts', items:'Parts', to:'Moved to'}, database_restore_parts:{count:'Parts', items:'Parts'},
   database_purge_parts:{count:'Parts', items:'Parts'},
   priority_import:{updated:'Prices updated', created:'New parts'}, tools_catalog_import:{updated:'Parts updated', created:'New parts'},
@@ -172,6 +175,7 @@ export const _logN=(v,one,many)=>`${v} ${Number(v)===1?one:many}`;
 function _summary(action, d, o){
   const t=d.ms!=null && typeof d.ms==='number' ? logSec(d.ms) : '';
   const tail=t ? ` · ${t}` : '';
+  if(action==='supplier_api_error') return `${d.error||((d.suppliers||'Supplier')+': error')}${Array.isArray(d.errors)&&d.errors.length>1?` (+${d.errors.length-1} more)`:''}`;
   if(o.error) return `Error: ${o.error}${tail}`;
   switch(action){
     case 'sales_desk_add_from_drawing':

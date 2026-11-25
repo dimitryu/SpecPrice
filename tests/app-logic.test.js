@@ -2716,6 +2716,24 @@ const G=k=>{ if(typeof M[k]==='undefined') throw new Error('missing export: '+k)
   t('log: price check summary', D({action:'price_check', details:{screen:'Sales Desk', checked:9, found:6, failed:0, stopped:false, ms:2785}}).summary, '9 parts checked on Sales Desk · 6 found · 2.8 s');
   ok('log: search finds the words shown and the code', /Reading the parts list/.test(ST(e)) && /sales_desk_add_from_drawing/.test(ST(e)));
 }
+// ─────────────────────────────────────────── v1.83.9: supplier errors in plain words, logged
+{
+  const E=G('_supplierErrText'), O=G('_supplierOf'), D=G('logDescribe');
+  t('supplier: bare timeout from an old server gets a name', E('The operation was aborted due to timeout'), 'Mouser or DigiKey: no answer within 20 s (timed out) — try again shortly');
+  ok('supplier: old Farnell 403 explained', /key may be wrong or not active, or too many calls per second/.test(E('Farnell auth failed (HTTP 403) — check the API key')));
+  t('supplier: other messages kept', E('Mouser: no answer within 20 s (timed out) — try again shortly'), 'Mouser: no answer within 20 s (timed out) — try again shortly');
+  t('supplier: named from the message', [O('Farnell: x'),O('DigiKey daily call limit'),O('Online Components: y'),O('Mouser or DigiKey: z'),O('?')].join('|'), 'Farnell|DigiKey|Online Components|Mouser or DigiKey|Supplier');
+  const x=D({action:'supplier_api_error', success:false, details:{screen:'Sales Desk', suppliers:'Farnell', error:'Farnell: the API key is not active (12 parts)', errors:['Farnell: the API key is not active (12 parts)'], checked:12}});
+  t('supplier log: title', x.title, 'Supplier problem while checking prices');
+  t('supplier log: summary is what the supplier answered', x.summary, 'Farnell: the API key is not active (12 parts)');
+  ok('supplier log: labelled items', x.items.some(i=>i.label==='What the supplier answered') && x.items.some(i=>i.label==='Supplier' && i.value==='Farnell'));
+  t('supplier log: several problems counted', D({action:'supplier_api_error',success:false,details:{suppliers:'Farnell, Mouser',error:'Farnell: a (2 parts)',errors:['Farnell: a (2 parts)','Mouser: b (1 part)']}}).summary, 'Farnell: a (2 parts) (+1 more)');
+  const y=D({action:'distributor_api_test', success:false, details:{pn:'1-794610-2', mouser:'OK — Found — $0.1 @ qty 1', farnell:'Farnell refused the request (HTTP 403)', error:'Farnell: Farnell refused the request (HTTP 403)'}});
+  ok('test log: each supplier labelled', y.items.some(i=>i.label==='Farnell') && y.items.some(i=>i.label==='Test part'));
+  ok('test log: failure shown as error', /^Error: Farnell/.test(y.summary));
+  const src=require('fs').readFileSync(__dirname+'/../web/js/features/priceCheck.js','utf8');
+  ok('price check: supplier problems logged as a failed entry', /logSystemAudit\('supplier_api_error'[\s\S]{0,300}\}, false\)/.test(src) && /no \(api key\|credentials\) configured/.test(src));
+}
 
 // ─────────────────────────────────────────── report
 console.log(`\n  ${pass} passed, ${fail} failed  (${pass+fail} assertions)\n`);

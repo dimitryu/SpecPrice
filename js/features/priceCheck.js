@@ -17,6 +17,24 @@ import { _sdApplyUnits, _sdDirtyRows, _sdDwgKey, _sdDwgUnits, _sdMarkCleanExcept
 // HTTP 429s that would make the whole run slower, not faster.
 export const PRICE_CHECK_CONCURRENCY = 5;
 
+// A supplier error in words a user can act on. A server from before v1.83.9
+// sends a bare "The operation was aborted due to timeout" without the
+// supplier's name; it was Mouser or DigiKey (the other two name themselves).
+export function _supplierErrText(m){
+  const s=String(m||'').trim();
+  if(/^The operation was aborted due to timeout/i.test(s)) return 'Mouser or DigiKey: no answer within 20 s (timed out) — try again shortly';
+  if(/^Farnell auth failed \(HTTP 403\)/i.test(s)) return 'Farnell refused the request (HTTP 403) — the key may be wrong or not active, or too many calls per second (a basic key allows 2)';
+  return s;
+}
+const _logParts=n=>`${n} ${n===1?'part':'parts'}`;
+// Which supplier a message is about, from the name it starts with.
+export function _supplierOf(m){
+  const s=String(m||'');
+  if(/^Mouser or DigiKey/i.test(s)) return 'Mouser or DigiKey';
+  for(const [re,name] of [[/^Mouser/i,'Mouser'],[/^DigiKey/i,'DigiKey'],[/^Online Components/i,'Online Components'],[/^Farnell/i,'Farnell']]) if(re.test(s)) return name;
+  return 'Supplier';
+}
+
 // Asked every time Check Price runs, pre-filled with the quantity used last, so
 // the number is a deliberate answer rather than a setting someone has to
 // remember to revisit. One field per drawing: each drawing is a different
@@ -194,6 +212,8 @@ export async function runFCCheckModal(items, mode, opts={}){
   // Distinct API-side problems (bad credentials, vendor outage), collected so
   // the run summary names each once instead of repeating it per part.
   const apiErrors=new Set();
+  const apiErrCount=new Map();   // message → parts it happened on
+  const addApiErr=m=>{ const t=_supplierErrText(m); if(!t) return; apiErrors.add(t); apiErrCount.set(t,(apiErrCount.get(t)||0)+1); };
 
   // Colour the three price cells against each other, same rule as the tables:
   // cheapest green, dearest red. Priority is included so the comparison the
@@ -260,7 +280,7 @@ export async function runFCCheckModal(items, mode, opts={}){
           if(candidates.length===1) throw e;
           continue;
         }
-        for(const m of (c.errors||[])) apiErrors.add(m);
+        for(const m of (c.errors||[])) addApiErr(m);
         const price = (c.best && c.best.price>0) ? c.best.price : 0;
         compared.push({pn:cpn, price, found:!!c.best});
         const cand={res:c, pn:cpn, price, listed:!!c.best};
@@ -300,7 +320,7 @@ export async function runFCCheckModal(items, mode, opts={}){
           try{ found=await lookupBottleOffers(_bottleFamily, need); }
           catch(e){ found={offers:{}, errors:[e.message]}; }
         }
-        for(const m of (found.errors||[])) apiErrors.add(m);
+        for(const m of (found.errors||[])) addApiErr(m);
         const pool={};
         for(const v of ['mouser','digikey','onlinecomp','farnell']){
           const list=[...(found.offers[v]||[])];
@@ -608,7 +628,7 @@ export async function runFCCheckModal(items, mode, opts={}){
     if(apiErrors.size){
       const note=document.createElement('div');
       note.style.cssText='margin-top:6px;font-size:11px;color:#92400e';
-      note.textContent='Distributor API: '+[...apiErrors].slice(0,3).join(' · ');
+      note.textContent='Supplier problem: '+[...apiErrors].slice(0,3).join(' · ')+' — saved in Admin › System Logs';
       stEl.parentElement?.appendChild(note);
     }
   }
@@ -625,6 +645,18 @@ export async function runFCCheckModal(items, mode, opts={}){
     checked: done, found, failed: failures, stopped, ms: Date.now()-_fcT0,
     ...(failures?{error:lastError}:{})
   }, failures!==total || total===0);
+  // v1.83.9: a supplier that answered with an error is logged on its own, as
+  // a failed entry, so Admin › System Logs shows it even when other suppliers
+  // found the prices. "No key configured" is a setup choice, not an error.
+  const _supErr=[...apiErrors].filter(m=>!/no (api key|credentials) configured/i.test(m));
+  if(_supErr.length){
+    const list=_supErr.slice(0,8).map(m=>`${m} (${_logParts(apiErrCount.get(m)||1)})`);
+    logSystemAudit('supplier_api_error',{
+      screen: mode==='parts'?'Database':'Sales Desk',
+      suppliers:[...new Set(_supErr.map(_supplierOf))].join(', '),
+      error:list[0], ...(list.length>1?{errors:list}:{}), checked:done
+    }, false);
+  }
   setLogDrawing([]);
   return {done, total, found, failures, lastError, apiErrors:[...apiErrors]};
 }

@@ -66,9 +66,11 @@ let upstreamReplyDefault = { status: 200, body: '{"content":[{"type":"text","tex
 global.fetch = async (url, init) => {
   upstreamCalls.push({ url, init });
   const upstreamReply = typeof upstreamReplyAt === 'function' ? (upstreamReplyAt(url, upstreamCalls.length) || upstreamReplyDefault) : upstreamReplyDefault;
+  if (upstreamReply.throw) { const e = new Error(upstreamReply.throw === 'TimeoutError' ? 'The operation was aborted due to timeout' : 'fetch failed'); e.name = upstreamReply.throw; throw e; }
+  const H = upstreamReply.headers || {};
   return {
     ok: upstreamReply.status < 300, status: upstreamReply.status,
-    headers: { get: () => 'application/json' },
+    headers: { get: n => (String(n).toLowerCase() in H) ? H[String(n).toLowerCase()] : (/mashery/i.test(n) ? null : 'application/json') },
     text: async () => upstreamReply.body,
     json: async () => JSON.parse(upstreamReply.body),
   };
@@ -252,7 +254,26 @@ function call(fn, { method = 'POST', origin = 'https://dimitryu.github.io', toke
   ok(r.json.farnell && r.json.farnell.price === 0.31, 'Farnell: 5 pieces — the single pieces win over a whole pack of 100');
   upstreamReplyAt = url => /element14/.test(url) ? { status: 403, body: '{"error":{"code":403,"message":"Developer Inactive"}}' } : null;
   r = await call(fns.priceLookup, { method: 'GET', token: 'tUser', query: { pn: '39-00-0047', qty: '1' } });
-  ok(!r.json.farnell && r.json.errors.some(e => /Farnell auth failed/.test(e)) && !r.json.errors.join(' ').includes('fa-secret-key-4321'), 'Farnell: a bad key is reported without the key');
+  ok(!r.json.farnell && r.json.errors.some(e => /Farnell: the API key is not active/.test(e)) && !r.json.errors.join(' ').includes('fa-secret-key-4321'), 'Farnell: an inactive key is named as such, without the key');
+  // v1.83.9: the gateway's reason comes in a header and a non-JSON body
+  let faN = 0;
+  upstreamReplyAt = url => { if (!/element14/.test(url)) return null; faN++;
+    return faN === 1 ? { status: 403, body: '<h1>Developer Over Qps</h1>', headers: { 'x-mashery-error-code': 'ERR_403_DEVELOPER_OVER_QPS' } } : { status: 200, body: FA_BODY }; };
+  r = await call(fns.priceLookup, { method: 'GET', token: 'tUser', query: { pn: '39-00-0047', qty: '100' } });
+  ok(faN === 2 && r.json.farnell && !r.json.errors.some(e => /Farnell/.test(e)), 'Farnell: "over QPS" in a non-JSON body is retried, not called a bad key');
+  const faCase = async (reply, re, name) => { upstreamReplyAt = url => /element14/.test(url) ? reply : null;
+    r = await call(fns.priceLookup, { method: 'GET', token: 'tUser', query: { pn: '39-00-0047', qty: '1' } });
+    ok(!r.json.farnell && r.json.errors.some(e => re.test(e)) && !r.json.errors.join(' ').includes('fa-secret-key-4321'), name); };
+  await faCase({ status: 403, body: '', headers: { 'x-mashery-error-code': 'ERR_403_DEVELOPER_OVER_RATE' } }, /Farnell daily call limit/, 'Farnell: daily limit from the header');
+  await faCase({ status: 403, body: '<h1>Developer Inactive</h1>' }, /not active/, 'Farnell: inactive key from the body');
+  await faCase({ status: 403, body: '', headers: { 'x-mashery-error-code': 'ERR_403_NOT_AUTHORIZED' } }, /not accepted/, 'Farnell: key not accepted');
+  await faCase({ status: 403, body: '<HTML><HEAD><TITLE>Access Denied</TITLE></HEAD><BODY>Reference #18.abc</BODY></HTML>' }, /firewall blocked/, 'Farnell: firewall "Access Denied" is not called a key problem');
+  await faCase({ status: 403, body: '' }, /Farnell refused the request \(HTTP 403\)/, 'Farnell: an unexplained 403 says so, with what to check');
+  await faCase({ throw: 'TimeoutError' }, /Farnell: no answer within 20 s/, 'Farnell: timeout named');
+  // every supplier names itself when it does not answer
+  upstreamReplyAt = url => /mouser\.com/.test(url) ? { throw: 'TimeoutError' } : null;
+  r = await call(fns.priceLookup, { method: 'GET', token: 'tUser', query: { pn: '39-00-0047', qty: '1' } });
+  ok(r.json.errors.some(e => /^Mouser: no answer within 20 s/.test(e)) && !r.json.errors.some(e => /^The operation was aborted/.test(e)), 'Mouser: a timeout names the supplier');
   upstreamReplyAt = url => /element14/.test(url) ? { status: 200, body: JSON.stringify({ manufacturerPartNumberSearchReturn: { numberOfResults: 1, products: [
     { sku: '7', displayName: 'CABLE 14AWG', unitOfMeasure: 'METER', unitOfMeasureCode: 'M', packSize: 1, translatedManufacturerPartNumber: 'WL-14-3C', brandName: 'W', prices: [{ from: 1, cost: 2.5 }] }] } }) } : null;
   r = await call(fns.priceLookup, { method: 'GET', token: 'tUser', query: { pn: 'WL-14-3C', qty: '1' } });

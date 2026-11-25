@@ -345,3 +345,11 @@ h3.cp-head .cp-toggle { display:flex; width:100%; }
 .settings-panel.is-collapsed > .stat-block-head { margin-bottom:0; }
 @media (prefers-reduced-motion: reduce){ .cp-chev, .cp-head .cp-toggle { transition:none; } }
 .settings-panel.is-collapsed { padding-top:12px !important; padding-bottom:12px !important; }
+
+/* Supplier API limits in Admin (v1.83.9) */
+.adm-limits-tbl .num { font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.adm-limits-tbl td { vertical-align:top; white-space:normal; }
+.adm-limits-tbl thead th { position:static; cursor:default; white-space:normal; }
+.adm-limits-tbl .adm-lim-note { color:var(--muted); }
+.adm-limits-tbl tbody tr:hover { background:inherit !important; }
+.adm-limits-tbl td:first-child { white-space:nowrap; }

@@ -50,7 +50,7 @@ function partsJS(){
 function auditJS(){
   const users=['dana.cohen@demo-co.com','avi.levi@demo-co.com','noa.mizrahi@demo-co.com'];
   const out=[]; let n=0;
-  const add=(day,h,user,action,details,ok=true)=>out.push(`'a${++n}':{user:'${user}',action:'${action}',success:${ok},details:${JSON.stringify(details)},timestamp:${ts(day,h,(n*7)%60)}}`);
+  const add=(day,h,user,action,details,ok=true,via='')=>out.push(`'a${++n}':{user:'${user}',${via?`viaUser:'${via}',`:''}action:'${action}',success:${ok},details:${JSON.stringify(details)},timestamp:${ts(day,h,(n*7)%60)}}`);
   for(let day=0;day<28;day++){
     if(day%7===5||day%7===6) continue;
     users.forEach((u,i)=>{ if((day+i)%4!==3) add(day,7+i,u,'login',''); });
@@ -65,6 +65,8 @@ function auditJS(){
       add(day,11,users[1],'price_check',{drawing:dw,checked:8,found:7,failed:0,ms:9000+day*150});
       add(day,12,users[1],'sales_desk_export',{rows:8}); }
     if(day===4) add(day,10,users[1],'drawing_bom_search',{filename:'scan-blurry.jpg',mode:'vision'},false);
+    if(day===1){ const m='Farnell: the API key is not active — open partner.element14.com and check that the key is approved and active for the Product Search API (8 parts)';
+      add(day,11,'SYSTEM','supplier_api_error',{screen:'Sales Desk',suppliers:'Farnell',error:m,checked:8},false,users[1]); }
   }
   return '{'+out.join(',')+'}';
 }
